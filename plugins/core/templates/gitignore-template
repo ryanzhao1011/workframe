@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+.AppleDouble/
+._*
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code 个人本地覆盖（不进 git）
+.claude/settings.local.json
+
+# Workframe 运行时状态（本地派生，每端独立产生；不进 git）
+# 详见 core 插件 reference/project-architecture.md §Git 策略
+#
+# 注意这里必须是 `/*` + `!` 的成对写法，不能简写成 `.claude/workframe-state/`：
+# git 不会重新纳入被排除父目录下的文件，父目录整个被忽略时下面那行 `!` 会被静默无视。
+# memory-index.json 是记忆的 sidecar（provenance / protected / created_at），
+# 无法从记忆正文重建，属于事实源而非派生状态，必须进 git。
+.claude/workframe-state/*
+!.claude/workframe-state/memory-index.json
+
+# 日志（Librarian 快照、SubagentStop hook 输出）
+logs/
+
+# 临时产物（screenshot skill 输出 / .tmp 等；不进 git）
+# 详见 skill: document-norms §6.1 / screenshot §9
+tmp/
+.tmp/
+
+# 敏感数据（按需启用，删除注释生效）
+# .env
+# .env.local
+# secrets/
+# *.key
+# *.pem
+# contracts/*.pdf      # 合同类敏感文件
+# crm/*.yaml           # 客户 / 线索类敏感数据

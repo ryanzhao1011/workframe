@@ -1,0 +1,9 @@
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# bin/ 下的 POSIX 入口一律 LF。CRLF 结尾的 shebang 在 mac/Linux 上报
+# `bad interpreter: no such file or directory`——报错信息完全不提 CRLF，是最难自查的
+# 一类故障。用**目录通配**而不是逐文件枚举：枚举必然漏掉将来新增的入口，而漏掉的那个
+# 在 Windows 上永远测不出来。gitattributes 后行覆盖前行，故 .cmd 需在此后重新声明。
+plugins/core/bin/* text eol=lf
+plugins/core/bin/*.cmd text eol=crlf

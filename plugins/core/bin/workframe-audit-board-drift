@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""
+audit 只读 drift 检查入口 — 不写入任何文件，仅打印 board.yaml summary vs tasks 的差异。
+
+通过 Claude Code plugin bin/ 机制自动加入 Bash tool 的 PATH（不依赖 ${CLAUDE_PLUGIN_ROOT}
+在 agent Bash 上下文是否可用）。
+
+用法（audit skill 调用）：
+    workframe-audit-board-drift
+
+输出（纯文本，audit skill 解析其中的 drift: 行）：
+    actual: total=N, counts={pending:..,...}, unknown=[..]
+    summary: total=M, counts={pending:..,...}
+    drift: <empty | field1=summary→actual, ...>
+
+特殊状态：
+    board_not_found       → 单行 "status: board_not_found"，exit 0
+    summary_block_not_found → 单行 "status: summary_block_not_found"，exit 0
+
+退出码：
+    0 - 正常输出（无论是否有 drift）
+    1 - 内部异常（解析错误等）
+"""
+import os
+import sys
+from pathlib import Path
+
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
+BOARD_FILE = PROJECT_DIR / "projects" / "board.yaml"
+
+
+def main():
+    if not BOARD_FILE.exists():
+        print("status: board_not_found")
+        sys.exit(0)
+
+    try:
+        from recompute_board_summary import (  # noqa: E402
+            count_task_statuses,
+            parse_summary_counts,
+        )
+    except Exception as e:
+        print(f"status: error\nreason: import_failed: {type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        text = BOARD_FILE.read_text(encoding="utf-8-sig")
+    except Exception as e:
+        print(f"status: error\nreason: read_failed: {type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        actual_total, actual_counts, unknown, n_entries = count_task_statuses(text)
+        summary_total, summary_counts = parse_summary_counts(text)
+    except Exception as e:
+        print(f"status: error\nreason: parse_failed: {type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if summary_total is None:
+        print("status: summary_block_not_found")
+        sys.exit(0)
+
+    print(f"actual: total={actual_total}, counts={actual_counts}, unknown={sorted(unknown)}")
+    print(f"summary: total={summary_total}, counts={summary_counts}")
+    # 与 recompute / SessionStart drift check 同口径：有任务条目却一条 status 都没解析出来时，
+    # drift 数字是拿 0 跟 summary 比出来的，不可信——先说清楚，别让人照着它去"修"看板
+    if n_entries and actual_total == 0:
+        print(f"note: 看到 {n_entries} 个任务条目但 status 一条都没解析出来，"
+              f"下面的 drift 不可信；先检查 tasks 块格式（同 recompute 的 tasks_unparsed）")
+
+    drift_parts = []
+    if summary_total != actual_total:
+        drift_parts.append(f"total={summary_total}->{actual_total}")
+    for key in sorted(actual_counts):
+        if summary_counts.get(key) != actual_counts[key]:
+            drift_parts.append(f"{key}={summary_counts.get(key)}->{actual_counts[key]}")
+
+    if drift_parts:
+        print(f"drift: {', '.join(drift_parts)}")
+    else:
+        print("drift: empty")
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

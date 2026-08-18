@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""
+Consumer-project runtime health check (workframe-doctor).
+
+Claude Code plugin bin/ should put this command on the Bash PATH. If it is not
+on PATH in your shell, run the script directly:
+    python <plugin>/scripts/workframe_doctor.py
+
+Usage:
+    workframe-doctor            # full report
+    workframe-doctor --json     # machine-readable
+    workframe-doctor --list     # maintenance-item catalog + thresholds
+"""
+
+import sys
+from pathlib import Path
+
+
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from workframe_doctor import main  # noqa: E402
+
+
+if __name__ == "__main__":
+    sys.exit(main())

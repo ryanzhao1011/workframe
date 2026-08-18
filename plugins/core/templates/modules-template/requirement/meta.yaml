@@ -1,0 +1,11 @@
+slug: "{{REQ_SLUG}}"
+title: "{{REQ_TITLE}}"
+status: planning                        # planning | active | done | dropped
+owner: {{OWNER_ROLE}}
+module: "{{MODULE_PATH}}"               # 二段式 basic/sub
+created_at: "{{TODAY}}"
+updated_at: "{{TODAY}}"
+aliases: []                             # 别名（避免 req_slug 改名时引用断裂）
+related_specs: []                       # 跨模块技术方案 path
+related_issues: []                      # issues 文件名
+notes: ""

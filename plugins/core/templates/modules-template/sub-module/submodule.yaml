@@ -1,0 +1,41 @@
+# 子模块 schema（由 module-init 创建；PostToolUse hook 监听本文件改动重建索引）
+# name 字段：路径段名 + 展示名同源（v0.3.x 起合并原 slug + display_name）
+# 允许中文 / 英文 / 数字 / 短横线 / 下划线；不能含路径分隔符 / Windows 禁字符 / 空格（含中间）
+parent_module: "{{BASIC_NAME}}"
+name: "{{SUB_NAME}}"
+status: active                          # planning | active | done | dropped
+# ↑ 这是 **yaml 实体**的词表，与同目录 overview.md 的 markdown status（planning/draft/
+#   in_progress/...）是两套独立枚举，见 document-norms §2.2。出厂值不同不是笔误：
+#   yaml 讲模块生命周期（在用），overview 讲文档成熟度（刚建的空骨架）。
+owner: {{OWNER_ROLE}}
+created_at: "{{TODAY}}"
+
+# 技术栈（数组对象，支持 monorepo / 跨技术栈；stack 取值见 reference/module-architecture.md §6.3）
+tech_stack: []
+# 示例：
+# - path: miniprogram/pages/profile/edit/**
+#   stack: wechat-miniprogram
+# - path: cloudfunctions/profile/**
+#   stack: wechat-cloudfunction
+
+# 反向桥梁：项目根相对路径（不是小程序根/app 根相对！）
+# PostToolUse hook 据此重建 code-paths-index.json 段
+code_paths: []
+# 示例：
+# - miniprogram/pages/profile/edit/**
+# - miniprogram/components/avatar-cropper/**
+# - cloudfunctions/profile/get/**
+
+# 跨模块依赖（仅声明，不强校验）
+api_dependencies: []
+# 示例：
+# - module: payment/checkout
+#   api: createOrder
+
+# current-state 同步状态
+last_synced_at: null                    # 由 code-to-doc 写入
+sync_method: manual                     # auto | manual | dev-paste
+
+# 关联资产
+related_tasks: []                       # board.yaml 任务 ID
+related_issues: []                      # issues 文件名（不含 .yaml）

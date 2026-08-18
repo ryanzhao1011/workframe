@@ -1,0 +1,12 @@
+# Workframe 私有 sidecar — 非 Claude Code 官方文件
+# 用途：登记 system 类 skill 名单，供 workframe 内部工具识别（librarian 冻结/晋升、validate.py 检查、audit 报告）
+# 不影响 Claude Code 的 skill 加载行为；CC 官方 skill frontmatter 不含 category 字段
+system_skills:
+  - librarian              # 记忆整理员（内部调用，user-invocable: false）
+  - self-iteration         # 自迭代（内部调用，user-invocable: false）
+  - session-digest         # 会话摘要生成（hook 调用）
+  - audit                  # /core:audit 维护活动审计
+  - rollback               # /core:rollback 回滚自动变更
+  - memory-log             # /core:memory-log 记忆活动流水
+  - maintenance-review     # /core:maintenance-review dormant 唤醒入口
+  - onboard                # /core:onboard 一次性可选配置引导（默认 skip）

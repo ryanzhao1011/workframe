@@ -1,0 +1,42 @@
+# Workframe board.yaml — 项目任务看板
+# 由 task-management skill / 主 Claude / agent wrap-up 维护
+# summary 块由 SessionEnd hook 调用 recompute_board_summary.py 自动重算
+# 不要手工编辑 summary 字段（会被下次重算覆盖）；编辑 tasks[] 即可
+
+summary:
+  total: 0
+  pending: 0
+  in_progress: 0
+  pending_qa: 0
+  completed: 0
+  blocked: 0
+  cancelled: 0
+  last_updated: null
+
+# tasks 数组示例（首次创建为空；字段顺序与 task-management/SKILL.md schema 对齐）。
+# 序列项缩进两种写法都合法、都能被 recompute_board_summary 正确计数：
+# 下面这种与 `tasks:` 同级的零缩进写法，以及 SKILL.md schema 里那种缩进两格的写法。
+# - id: TASK-001
+#   title: "示例任务"
+#   status: pending          # pending | in_progress | pending_qa | completed | blocked | cancelled
+#   priority: P1             # P0 | P1 | P2
+#   assigned_to: dev         # pm | dev | qa | prompt-eng | <project-role>
+#   tags: []
+#   depends_on: []
+#   notes: ""                # 关联 Issue ID 写在此处，如 "see BUG-001"
+#   # ── 生命周期字段：到那个状态才出现，出现即必填（task-management §生命周期字段）──
+#   completed_at: ""         # 流转到 completed 时填
+#   actual_output: ""        # completed 时补，实际交付了什么（区别于 notes）
+#   blocked_reason: ""       # 流转到 blocked 时必填
+#   cancelled_at: ""         # 流转到 cancelled 时填
+#   cancel_reason: ""        # cancelled 时必填
+#   created_at: "<YYYY-MM-DD>"
+#   updated_at: "<YYYY-MM-DD>"   # 每次改 status 必须同步更新（task-management schema）
+#   # ---- modules/ 体系字段（叠加而非替换；迁移入库前的存量任务可留空）----
+#   # module: profile/edit          # ★ 二段式 basic/sub 必填
+#   # req_slug: avatar-cropper      # 挂需求就填，且与下一行同进同出
+#   # sub_req_slug: main            # 与 req_slug 同进同出；main 也要显式写
+#   #                               # （缺省按 main 解释仅对**存量**条目成立）
+#   # affected_modules: []          # 可选，横切任务用二段式数组
+#   # 尚未迁入 modules/ 的存量任务：module 字段可单值或留空（迁移入库时补二段式）
+tasks: []

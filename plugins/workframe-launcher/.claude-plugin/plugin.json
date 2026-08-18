@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "workframe-launcher",
+  "displayName": "Workframe Launcher",
+  "version": "1.0.0",
+  "description": "Workframe launcher: the one command that starts everything. Creates a new Workframe project or onboards an existing one — asks about your product, proposes a module structure, scaffolds it, subscribes the project to the core plugin, and verifies the install. Install this once per machine; it installs core into each project for you.",
+  "author": {
+    "name": "Zhao Jiahao"
+  },
+  "homepage": "https://github.com/ryanzhao1011/workframe",
+  "repository": "https://github.com/ryanzhao1011/workframe",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "claude-code-plugin",
+    "product-management",
+    "prd",
+    "agents",
+    "skills",
+    "hooks",
+    "project-memory",
+    "chinese"
+  ]
+}

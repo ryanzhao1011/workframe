@@ -1,0 +1,46 @@
+{
+  "schema_version": "1",
+  "description": "workframe 推荐但不强求的 Claude Code 环境变量集合。/core:onboard skill 消费此文件呈现给用户，所有项目默认动作为 skip。",
+  "recommended_env_vars": [
+    {
+      "id": "agent-teams",
+      "env_name": "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+      "value": "1",
+      "default_action": "skip",
+      "min_cli_version": "2.1.32",
+      "category": "experimental",
+      "description_zh": "Agent Teams 是 Claude Code 实验功能。workframe 不依赖它。启用后可能改善部分多代理续聊体验，但会改变 Claude Code 的代理协作能力范围。",
+      "description_en": "Agent Teams is an experimental Claude Code feature. workframe does not depend on it. Enabling may improve some multi-agent continuation experiences but will change the agent collaboration capability scope of Claude Code.",
+      "official_doc": "https://code.claude.com/docs/zh-CN/agent-teams",
+      "scopes": [
+        {
+          "id": "local",
+          "label_zh": "最小范围启用",
+          "label_en": "minimal scope",
+          "path": ".claude/settings.local.json",
+          "needs_confirm": false,
+          "gitignore_check": true,
+          "note_zh": "仅本项目本机，不进 git"
+        },
+        {
+          "id": "user",
+          "label_zh": "当前用户全局",
+          "label_en": "user global",
+          "path": "~/.claude/settings.json",
+          "needs_confirm": true,
+          "gitignore_check": false,
+          "note_zh": "影响所有项目"
+        },
+        {
+          "id": "team",
+          "label_zh": "团队共享",
+          "label_en": "team shared",
+          "path": ".claude/settings.json",
+          "needs_confirm": true,
+          "gitignore_check": false,
+          "note_zh": "进 git，需团队同意"
+        }
+      ]
+    }
+  ]
+}

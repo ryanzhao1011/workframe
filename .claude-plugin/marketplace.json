@@ -1,0 +1,54 @@
+{
+  "name": "workframe",
+  "owner": {
+    "name": "Zhao Jiahao"
+  },
+  "metadata": {
+    "description": "Workframe: a product-work system for Claude Code. Install workframe-launcher to create or onboard projects; each project gets the core plugin with 4 agents, 36 skills, hooks and rules.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "workframe-launcher",
+      "displayName": "Workframe Launcher",
+      "source": "./plugins/workframe-launcher",
+      "description": "Workframe launcher: the one command that starts everything. Creates a new Workframe project or onboards an existing one — asks about your product, proposes a module structure, scaffolds it, subscribes the project to the core plugin, and verifies the install. Install this once per machine; it installs core into each project for you.",
+      "version": "1.0.0",
+      "homepage": "https://github.com/ryanzhao1011/workframe",
+      "repository": "https://github.com/ryanzhao1011/workframe",
+      "license": "MIT",
+      "keywords": [
+        "claude-code",
+        "claude-code-plugin",
+        "product-management",
+        "prd",
+        "agents",
+        "skills",
+        "hooks",
+        "project-memory",
+        "chinese"
+      ]
+    },
+    {
+      "name": "core",
+      "displayName": "Workframe Core",
+      "source": "./plugins/core",
+      "description": "Workframe core plugin: 4 baseline agents (PM / Dev / QA / Prompt-Eng), 36 skills (13 domain + 8 system/maintenance + 8 docs/publishing + 7 modules-system), an 11-stage hook pipeline, 4 auto-loaded rules, and the modules/ documentation system that keeps requirements and code in sync.",
+      "version": "1.0.0",
+      "homepage": "https://github.com/ryanzhao1011/workframe",
+      "repository": "https://github.com/ryanzhao1011/workframe",
+      "license": "MIT",
+      "keywords": [
+        "claude-code",
+        "claude-code-plugin",
+        "product-management",
+        "prd",
+        "agents",
+        "skills",
+        "hooks",
+        "project-memory",
+        "chinese"
+      ]
+    }
+  ]
+}

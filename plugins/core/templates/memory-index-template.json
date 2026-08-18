@@ -1,0 +1,5 @@
+{
+  "__schema__": "workframe.memory-index.v2",
+  "__doc__": "Sidecar for all <role>/MEMORY.md and shared/MEMORY.md. Key = '<scope>:<YYYY-MM-DD>:<first 20 chars>'. Entry fields: scope / created_at / provenance (enum: user-decree | user-confirmed | inferred | external — source classification, never numeric scoring) / protected / source. Maintained by librarian; human readable MEMORY.md stays clean.",
+  "entries": {}
+}

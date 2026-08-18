@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code runtime state (per-project, not for repo)
+.heartbeat-state.json
+.claude/workframe-state/
+
+# Test artifacts
+/examples/**/node_modules
+/examples/**/dist
+
+# Dummy projects created during validation (not committed)
+workframe-test-dummy/
+
+# Claude Code 本地权限覆盖（每机独立，不入库）
+.claude/settings.local.json
+
+# 维护者本机私有补充（含私仓路径与未发布状态，不随仓库分发）
+CLAUDE.local.md
+
+# Obsidian 工作区 UI 状态（本地，不入库）
+.obsidian/
+
+# 维护者私有笔记，已剥离为独立仓，不随框架分发
+dev-docs/

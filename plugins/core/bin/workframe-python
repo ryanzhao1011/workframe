@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Workframe python launcher
+#
+# Hook 命令统一通过这个 launcher 调度 Python 解释器，避免在 hooks.json 里写死
+# `python` — 一些 Linux 发行版（Ubuntu 22.04+/Fedora 等）默认只有 `python3`，
+# 没有 `python` 软链接。
+#
+# 选择顺序：python -> python3
+# 每个候选必须先通过 sys.version_info[0] == 3 探测才执行，否则 fallback。
+# 这是为了避免：
+#   - 旧 macOS / 部分 Linux 上 `python` 是 Python 2.7 的环境
+#   - Windows 上 `python` 是 Microsoft Store alias / 坏路径的环境（在 git bash 下）
+#
+# 都缺时打印 stderr 提示并 exit 0，避免阻塞 Claude 会话（基础环境缺失场景下，
+# 强行 exit 1 会让每次 SessionStart/UserPromptSubmit 都被噪音淹没；用户能看到
+# 提示信息，自行修复 Python 安装）。
+
+PROBE='import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)'
+
+if command -v python >/dev/null 2>&1 && python -c "$PROBE" >/dev/null 2>&1; then
+    exec python "$@"
+fi
+
+if command -v python3 >/dev/null 2>&1 && python3 -c "$PROBE" >/dev/null 2>&1; then
+    exec python3 "$@"
+fi
+
+echo "[workframe-python] ERROR: no Python 3 interpreter found in PATH." >&2
+echo "[workframe-python]        Tried 'python' and 'python3'; each must satisfy sys.version_info[0] == 3." >&2
+echo "[workframe-python]        Hook skipped to avoid blocking the session." >&2
+exit 0

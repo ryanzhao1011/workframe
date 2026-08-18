@@ -1,0 +1,431 @@
+{
+ "__schema_version__": "workframe.event-schema.v2",
+ "__doc__": "Event registry for .claude/workframe-state/events.jsonl. Single source of truth for event type names, reliability tiers, producers, and consumers. Workframe-private — not a Claude Code official file. TS FORMAT (binding on every producer): UTC with second precision — datetime.now(timezone.utc).isoformat(timespec='seconds'), e.g. 2026-08-16T07:24:04+00:00. Consumers sort and window-filter events by raw string comparison, so a single file must not mix timezones or precisions; on 2026-08-16 four variants coexisted (local/UTC x sec/microsec) with the same event type appearing in three of them, which silently mis-orders anything compared as text.",
+ "reliability_tiers": {
+  "hook_deterministic": "Produced by Python hook scripts (SessionStart / Stop / SubagentStop / SessionEnd). Capture is guaranteed by the Claude Code runtime as long as the hook is registered and not externally killed. Safe to use as core triggering logic and state transitions.",
+  "protocol_expected": "Produced by an explicit agent-facing protocol or core rule instruction — for example agent-protocols.md Step 1 or correction-detection.md. Useful signal but NOT guaranteed: the model may skip the write (under context pressure), duplicate it (re-running the protocol), or misattribute it. Use as corroborating signal, not single-source-of-truth.",
+  "model_mediated": "Produced by a skill body or an agent reasoning step (no protocol-level enforcement). Capture depends entirely on Claude following the relevant SKILL.md instruction. Use only for audit / corroboration; do NOT base core triggering logic on these counts.",
+  "removed_v0_2_1": "Event name was defined in v0.2.0 but cannot be reliably captured (e.g., rules have no trigger callback). Removed from producers and triggering logic; schema stub retained only for historical compatibility."
+ },
+ "events": {
+  "skill_used": {
+   "reliability": "protocol_expected",
+   "producer": "agent wrap-up protocol (Step 1 of agent-protocols.md, executed by the model)",
+   "consumers": [
+    "librarian (skill-metrics.yaml)",
+    "audit",
+    "self-iteration",
+    "check-iteration-trigger.py (per-session activity cap)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'skill_used'",
+    "skill": "skill name string, required",
+    "role": "agent role string, required",
+    "success": "boolean, required (true=delivered promised artifact / false=did not deliver, user rejected, blocked exit, voluntary abort)",
+    "session_id": "string, optional but strongly recommended — used by check-iteration-trigger.py to enforce per-session activity cap (3.0 per session). Source: $CLAUDE_CODE_SESSION_ID env var (injected into Bash subprocesses since CC 2.1.132, same value as hooks' stdin session_id) when available, else omit (script falls back to ts which silently disables the cap). Note: $CLAUDE_SESSION_ID (without CODE) was never a Bash env var — it is the SKILL.md content substitution syntax.",
+    "source": "string, optional — obsidian-* skills: 'cli' | 'fallback'",
+    "cli_available": "boolean, optional — obsidian-* skills: whether the Obsidian CLI was usable",
+    "fallback_used": "boolean, optional — obsidian-* skills: whether it degraded to Read/rg",
+    "operation": "string, optional — obsidian-* / doc-graph-health: sub-operation name"
+   },
+   "caveats": "Counts may be slightly off if a subagent skips wrap-up or counts a preloaded but unused skill. Corroborate with rollback_applied / proposal_applied for high-confidence skill activity. Without session_id, per-session cap silently devolves into per-event cap. The four optional extension fields are written by the obsidian-* skills and doc-graph-health; consumers must tolerate their absence and must not reject events that carry them."
+  },
+  "user_correction": {
+   "reliability": "protocol_expected",
+   "producer": "correction-detection rule writes immediately when it writes the [纠正] entry (role/shared MEMORY, or auto-memory when scope=main per 两套记忆分工契约); agent wrap-up must not emit a duplicate user_correction for the same correction",
+   "consumers": [
+    "check-iteration-trigger.py (problem weight 3.0)",
+    "librarian",
+    "memory-log"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'user_correction'",
+    "scope": "shared | <role> | main (main = 主 Claude 层纠正，落 auto-memory，无 sidecar)",
+    "role": "agent role string (if scope != shared); omitted when scope=main",
+    "entry_key": "string (memory-index sidecar key for the protected [纠正] entry); omitted when scope=main (auto-memory has no sidecar) and when the correction lands in a skill/rule file instead of MEMORY (sidecar only indexes MEMORY entries; put the target file path in summary)",
+    "summary": "short snapshot of the corrected fact, required so memory-log does not depend on current sidecar state",
+    "source": "literal '[纠正]'"
+   },
+   "caveats": "Depends on the model recognizing the correction signal AND following correction-detection.md. Misses possible if the agent silently incorporates the correction without ceremony."
+  },
+  "task_blocked": {
+   "reliability": "protocol_expected",
+   "producer": "Primary producer = test-case-design skill (QA-driven flow: test failure → SEC/BUG issue → status=blocked → skill appends event). Fallback producer = current agent wrap-up, restricted to non-QA / manual blocked transitions that did NOT go through test-case-design; fallback MUST dedup-check events.jsonl in current session for the same task_id before appending.",
+   "consumers": [
+    "check-iteration-trigger.py (problem weight 2.0)",
+    "audit",
+    "skill-metrics.yaml (blocks_count)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'task_blocked'",
+    "task_id": "string",
+    "role": "agent role string"
+   },
+   "caveats": "Producer policy is primary+fallback (NOT sole producer) — see agent-protocols.md §Step 1 task_blocked producer 策略. Without dedup, both test-case-design and wrap-up would append for the same QA-driven blocked transition, double-counting the 2.0 problem weight. Do NOT revert producer wording to 'qa agent wrap-up' alone (qa wrap-up alone misses skill-driven appends) nor to 'sole producer = test-case-design' (which contradicts the fallback path for non-QA / manual blocked transitions). Starvation record (2026-08 audit, G1#3): zero occurrences in 3+ months of consumer-project events — diagnosed as architectural starvation, NOT producer breakage (project QA loop idle; board history has zero blocked tasks). Mechanism and weight retained as-is; consumer pipeline verified by synthetic drill 2026-08-06. Doctor labels count==0 + producer-text-present as 'never-triggered (starved)', distinct from missing-producer 'broken promise'."
+  },
+  "session_ended": {
+   "reliability": "hook_deterministic",
+   "producer": "session-end-flush.py (SessionEnd hook)",
+   "consumers": [
+    "session-digest",
+    "audit"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'session_ended'",
+    "reason": "clear | resume | logout | prompt_input_exit | bypass_permissions_disabled | other — stdin 解析失败时回退 other（不得自造 unknown 等枚举外值）"
+   },
+   "caveats": "Will NOT fire if Claude Code is forcibly terminated (window closed, SIGKILL, OS shutdown). For those cases the next SessionStart's drift check serves as the recovery signal."
+  },
+  "summary_recomputed": {
+   "reliability": "hook_deterministic",
+   "producer": "recompute_board_summary.py (invoked by SessionEnd hook, or by user via plugin bin/ command for manual fallback)",
+   "consumers": [
+    "audit"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'summary_recomputed'",
+    "status": "ok | skipped | error",
+    "reason": "string, only when status=skipped or status=error (board_not_found | summary_block_not_found | unknown_statuses_in_tasks | tasks_unparsed | exception detail)",
+    "total": "integer, only when status=ok",
+    "counts": "object mapping status name to count, only when status=ok"
+   }
+  },
+  "skill_metrics_recomputed": {
+   "reliability": "hook_deterministic",
+   "producer": "recompute_skill_metrics.py (invoked by SessionEnd hook, or by user via plugin bin/ command for manual fallback)",
+   "consumers": [
+    "audit",
+    "self-iteration (reads skill-metrics.yaml output)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'skill_metrics_recomputed'",
+    "status": "ok | error",
+    "reason": "string, only when status=error",
+    "window_days": "integer, only when status=ok",
+    "events_read": "integer, only when status=ok",
+    "events_counted": "integer, only when status=ok",
+    "skills_count": "integer, only when status=ok"
+   },
+   "purpose": "Deterministic refresh marker for .claude/workframe-state/skill-metrics.yaml. The file is derived from events.jsonl and can be regenerated."
+  },
+  "summary_drift_repaired": {
+   "reliability": "hook_deterministic",
+   "producer": "session-start-prep.py (SessionStart drift check, v0.2.2+)",
+   "consumers": [
+    "audit (drift history display)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'summary_drift_repaired'",
+    "drift_fields": "object mapping field name to {summary, actual} pair (e.g., {pending: {summary: 5, actual: 7}})",
+    "repair_status": "ok | skipped | error (status returned from recompute call)",
+    "likely_cause": "string (e.g., 'SessionEnd hook skipped or timed out in previous session')"
+   },
+   "purpose": "C+ drift check 自动修复事件——SessionStart 检测到 summary vs tasks 不一致时触发；让 audit 能追溯 drift 频率，间接判断 SessionEnd 是否经常超时"
+  },
+  "summary_drift_repair_skipped": {
+   "reliability": "hook_deterministic",
+   "producer": "session-start-prep.py (SessionStart drift check, v0.2.2+)",
+   "consumers": [
+    "audit (alerts user)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'summary_drift_repair_skipped'",
+    "reason": "unknown_statuses_in_tasks | tasks_unparsed | summary_block_not_found | recompute_failed | read_failed | import_failed | parse_failed — 裸枚举值，不拼接详情",
+    "detail": "string, optional — 异常类型与消息（截断 100 字）；详情放这里，保证 reason 可被等值匹配的消费方命中",
+    "unknown_statuses": "list of unknown status values (only when reason=unknown_statuses_in_tasks)",
+    "drift_fields": "object mapping field name to {summary, actual} pair (when applicable)"
+   },
+   "purpose": "C+ 第一保护条件——drift check 发现 tasks 含未知 status（如 'completd' 拼写错误）时不自动修复，让用户自己检查；audit 会展示这条事件提示用户处理"
+  },
+  "memory_promoted": {
+   "reliability": "model_mediated",
+   "producer": "Two paths (both in use): (1) maintenance_workorder.py --commit writes it in code while processing manifest.promotions, together with the sidecar entry — deterministic; (2) librarian step 3 writes it after the model updates MEMORY.md and the sidecar. Only (2) was registered originally. Note the `reliability` tier stays `model_mediated` (the weaker of the two): which path fires is not knowable in advance, and the field is a fixed enum consumed by workframe_doctor's ACTIVE_TIERS filter — putting free text like \"mixed\" there silently drops this event type out of the producer reconciliation check.",
+   "consumers": [
+    "memory-log",
+    "audit",
+    "workframe_doctor.py check_notes_backlog (per-role last-promoted timestamp for staleness)",
+    "check-iteration-trigger.py (global last-promoted timestamp for notes staleness)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'memory_promoted'",
+    "scope": "shared | <role>",
+    "role": "agent role string (if scope != shared)",
+    "entry_key": "string (memory-index sidecar key)",
+    "summary": "short snapshot of the promoted MEMORY entry, required so memory-log can render history without reparsing MEMORY.md",
+    "source": "notes.md | shared/notes.md | manual backfill",
+    "protected": "boolean copied from memory-index entry after promotion",
+    "provenance": "string enum 'user-decree'|'user-confirmed'|'inferred'|'external' copied from memory-index entry after promotion (source classification, never numeric scoring)"
+   }
+  },
+  "memory_decayed": {
+   "reliability": "model_mediated",
+   "producer": "librarian step 3 user-confirmed decay/capacity cleanup; must be appended before deleting the memory-index sidecar entry",
+   "consumers": [
+    "memory-log",
+    "audit"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'memory_decayed'",
+    "scope": "shared | <role>",
+    "role": "agent role string (if scope != shared)",
+    "entry_key": "string (memory-index sidecar key)",
+    "summary": "short snapshot of the decayed MEMORY entry captured before sidecar deletion",
+    "source": "source copied from memory-index entry before deletion",
+    "age_days": "integer computed from created_at before deletion",
+    "provenance": "string enum 'user-decree'|'user-confirmed'|'inferred'|'external' copied from memory-index entry before deletion"
+   },
+   "caveats": "Starvation record (2026-08 audit, G1#3): zero occurrences ever - upstream maintenance-review idle + capacity threshold never approached + decay criteria referencing the dead access_count field. Diagnosed as architectural starvation, NOT producer breakage; mechanism retained. Criteria fixed 2026-08-06 (G2#10): access_count dropped, and numeric confidence scoring replaced by the provenance source-classification enum - decay candidates are now external (any age) or inferred older than 180 days, always user-confirmed before execution."
+  },
+  "proposal_applied": {
+   "reliability": "model_mediated",
+   "producer": "self-iteration stage 5 (model executes)",
+   "consumers": [
+    "audit",
+    "self-iteration stage 1b verify loop"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'proposal_applied'",
+    "proposal_id": "string, required",
+    "change_target": "file path string",
+    "applied_option": "A | B | C"
+   }
+  },
+  "proposal_verified": {
+   "reliability": "model_mediated",
+   "producer": "self-iteration stage 1b (model executes)",
+   "consumers": [
+    "audit",
+    "recompute_skill_metrics.py (signal_met=false increments proposal_failures_count)",
+    "self-iteration stage 2 reflection"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'proposal_verified'",
+    "proposal_id": "string, required",
+    "signal_met": "boolean, required"
+   }
+  },
+  "proposal_failed": {
+   "reliability": "model_mediated",
+   "producer": "self-iteration stage 1b (emitted alongside proposal_verified signal_met=false)",
+   "consumers": [
+    "audit",
+    "self-iteration stage 2 reflection"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'proposal_failed'",
+    "proposal_id": "string, required"
+   }
+  },
+  "rollback_applied": {
+   "reliability": "model_mediated",
+   "producer": "rollback skill (user-invocable, model executes)",
+   "consumers": [
+    "audit",
+    "memory-log (if memory rollback)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'rollback_applied'",
+    "target": "file path string",
+    "source": "backup path string"
+   }
+  },
+  "pending_maintenance_dismissed": {
+   "reliability": "model_mediated",
+   "producer": "All four callers now write through code — maintenance_workorder.py: `--commit` (manifest close_pm) and `--close-pm <PM-ID>... [--reason <text>]` (invoked by maintenance-review mode A, self-iteration when closing trigger entries with reason=self_iteration_no_proposal, and librarian after clearing a memory_backlog). Before 2026-08-16 the latter three told the model to hand-edit activity-state.json, which bypassed the file lock / atomic replace / three-way merge; the tier stays model_mediated (the WEAKEST link) because whether the model remembers to RUN the command is still model-dependent — but once run, the write itself is code-guaranteed.",
+   "consumers": [
+    "audit (dismissal trail)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'pending_maintenance_dismissed'",
+    "pm_id": "PM-YYYYMMDD-NNN string, required",
+    "at": "ISO-8601 string, required (close timestamp)",
+    "reason": "string, optional — free-form closure reason, passed through by `--close-pm ... --reason <text>`; self-iteration writes the fixed token self_iteration_no_proposal, the other paths usually omit it. NOT an enum: the only consumer (audit) prints it in the dismissal trail, it is never aggregated by value. Do not copy session_ended's whitelist discipline here — that field IS bucketed by value, this one is not."
+   }
+  },
+  "maintenance_review_completed": {
+   "reliability": "model_mediated",
+   "producer": "maintenance-review skill mode B: full wake-up review (user-invocable, model executes)",
+   "consumers": [
+    "audit (review history)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'maintenance_review_completed'"
+   }
+  },
+  "rule_triggered": {
+   "reliability": "removed_v0_2_1",
+   "producer": "none — rules are CLAUDE.md-style instructions injected to context; CC does not emit a trigger callback and agent wrap-up cannot reliably attribute follow-up actions to a specific rule",
+   "consumers": [
+    "(deprecated) check-iteration-trigger.py idle_rules / skill-metrics.rules[]"
+   ],
+   "fields": {},
+   "deprecation_note": "Defined in v0.2.0 event templates; confirmed in v8.2.1 review as impossible to deterministically capture. Removed from trigger logic and weight table. librarian keeps rules[] as schema stub with zero values for structural compatibility."
+  },
+  "modules_index_rebuilt": {
+   "reliability": "hook_deterministic",
+   "producer": "check-stale-modules.py rebuild_full_index() — fallback 全量重建（损坏检测 / migrate-to-modules / 手动 `python check-stale-modules.py rebuild-index`）",
+   "consumers": [
+    "audit (modules index health)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'modules_index_rebuilt'",
+    "trigger": "fallback | manual | migration",
+    "buckets": "int, number of prefix buckets after rebuild"
+   }
+  },
+  "modules_index_segment_rebuilt": {
+   "reliability": "hook_deterministic",
+   "producer": "check-stale-modules.py PostToolUse on **/submodule.yaml — 增量重建该子模块的索引段",
+   "consumers": [
+    "audit",
+    "code-to-doc (downstream)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'modules_index_segment_rebuilt'",
+    "submodule": "two-segment slug, e.g. 'profile/edit'",
+    "duration_ms": "int, performance budget ≤100ms"
+   }
+  },
+  "modules_index_lookup_slow": {
+   "reliability": "hook_deterministic",
+   "producer": "check-stale-modules.py PostToolUse — 单次 lookup 超过 PERFORMANCE_BUDGET_MS (100ms) 时报警",
+   "consumers": [
+    "audit (perf regression signal)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'modules_index_lookup_slow'",
+    "file": "project-relative path that triggered slow lookup",
+    "duration_ms": "int, > PERFORMANCE_BUDGET_MS"
+   }
+  },
+  "modules_index_rebuild_skipped_lock_timeout": {
+   "reliability": "hook_deterministic",
+   "producer": "check-stale-modules.py — submodule.yaml index rebuild 拿不到文件锁（5s 超时）",
+   "consumers": [
+    "audit (concurrency contention signal)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'modules_index_rebuild_skipped_lock_timeout'",
+    "submodule": "two-segment slug"
+   }
+  },
+  "modules_stale_write_skipped_lock_timeout": {
+   "reliability": "hook_deterministic",
+   "producer": "check-stale-modules.py — stale-modules.yaml 写入拿不到文件锁（5s 超时）",
+   "consumers": [
+    "audit (concurrency contention signal)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'modules_stale_write_skipped_lock_timeout'",
+    "submodule": "two-segment slug",
+    "file": "project-relative path that triggered the stale mark"
+   }
+  },
+  "modules_check_stale_error": {
+   "reliability": "hook_deterministic",
+   "producer": "check-stale-modules.py — process_postool_use() 顶层异常捕获（防止 hook 崩溃影响主流程）",
+   "consumers": [
+    "audit (error trail)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'modules_check_stale_error'",
+    "error": "string, type+message truncated to 200 chars"
+   }
+  },
+  "turn_failed": {
+   "reliability": "hook_deterministic",
+   "producer": "log-stop-failure.py (StopFailure hook, CC 2.1.78+) — turn 因 API 错误（rate limit / auth 等）终止时记录",
+   "consumers": [
+    "audit (SessionEnd 链路可能缺状态的旁证)",
+    "session-digest (best-effort 参考)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'turn_failed'",
+    "session_id": "string, optional (hook stdin 提供时写入)",
+    "detail": "string, optional, error message truncated to 200 chars"
+   },
+   "caveats": "CC 对 StopFailure stdin 的错误字段名未硬承诺，detail 缺失属正常；事件仅作审计旁证，不参与 check-iteration-trigger 加权。"
+  },
+  "config_changed": {
+   "reliability": "hook_deterministic",
+   "producer": "log-config-change.py (ConfigChange hook, CC 2.1.49+) — 会话内配置文件（settings / rules / agents 等）变更时记录",
+   "consumers": [
+    "audit (受保护资产运行时审计面，配合 auto-update.md 受保护资产清单)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'config_changed'",
+    "session_id": "string, optional",
+    "files": "string[], optional, 变更文件列表（最多 10 个；CC stdin 字段名多候选防御提取）"
+   },
+   "caveats": "纯审计不阻塞；CC 对 ConfigChange stdin 的文件字段名未硬承诺，files 缺失属正常。"
+  },
+  "memory_migrated": {
+   "reliability": "model_mediated",
+   "producer": "librarian step 3 writes it when relocating an entry between memory scopes (main-led 记忆分流改造 batch 5: auto-memory -> role/shared MEMORY.md). A dedicated type rather than reusing memory_promoted: promotion means notes.md -> MEMORY.md within one scope after D/U/R/A review, while migration moves an already-qualified entry across scopes. Conflating them would pollute the notes-staleness signal that consumers derive from memory_promoted.",
+   "consumers": [
+    "memory-log",
+    "audit",
+    "assert_three_ledgers.py check A (accepted as promotion evidence)",
+    "assert_three_ledgers.py check D (entry_key must exist in sidecar)"
+   ],
+   "not_consumed_by": [
+    "workframe_doctor.py check_notes_backlog — deliberate: migration does not consume notes backlog, so notes staleness must keep counting from the last real memory_promoted. Ruled 2026-08-15; do not 'fix' this by adding it.",
+    "check-iteration-trigger.py — same reason (global last-promoted timestamp)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'memory_migrated'",
+    "scope": "shared | <role> — the destination scope the entry moved INTO",
+    "role": "agent role string (if scope != shared)",
+    "entry_key": "string (memory-index sidecar key created at destination)",
+    "summary": "short snapshot of the migrated entry, required so memory-log can render history without reparsing MEMORY.md",
+    "source": "auto-memory | <role>/MEMORY.md | shared/MEMORY.md — where it came FROM",
+    "from_ref": "original filename or entry identifier at the source, for traceability",
+    "protected": "boolean copied from memory-index entry after migration",
+    "provenance": "string enum 'user-decree'|'user-confirmed'|'inferred'|'external' carried over from the source entry (never re-derived — migration must not silently downgrade a user-decree entry)"
+   }
+  },
+  "skill_invoked": {
+   "reliability": "hook_deterministic",
+   "producer": "scripts/log-skill-invoked.py, wired to two entries: UserPromptExpansion (user types /skill-name; the command expands into a prompt WITHOUT going through the Skill tool) and PostToolUse matcher:Skill (model invokes the Skill tool). The first entry is the important one — direct slash-command typing is the most common way skills get used. Field extraction is multi-candidate by design (command / command_name / prompt / user_prompt / expanded_prompt): CC makes no hard promise about the UserPromptExpansion stdin schema, and betting on a single key means this entry fails 100% silently if the key is named differently — no events at all, while every consumer concludes 'nobody uses skills'.",
+   "consumers": [
+    "workframe_doctor.py check_events_parse (近 30 天调起数，与 skill_used 并列展示、不相加)",
+    "audit (可读；当前 SKILL 输出模板未单列该行，展示与否由该 skill 自行决定)"
+   ],
+   "relationship_to_skill_used": "COEXIST, NEVER SUM. skill_invoked answers 'was it invoked' (code-guaranteed); skill_used answers 'was it used and did it deliver' (model-written, carries the success self-assessment). One invocation produces both — adding them double-counts.",
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'skill_invoked'",
+    "skill": "bare skill name — plugin prefix stripped (`/core:module-init` -> `module-init`), leading slash stripped, first token only. MUST stay in the same namespace as `skill_used.skill` (which agent wrap-up writes bare): if one side keeps the `core:` prefix, any consumer aggregating by skill name counts one skill as two. Event is skipped entirely when the value does not look like a skill name — better no record than a flood of prompt text masquerading as skill names.",
+    "entry": "command_expansion | skill_tool — which of the two entries fired",
+    "session_id": "from hook stdin, omitted when unavailable",
+    "agent_type": "present only when fired inside a subagent (pending spike verification)",
+    "plugin": "optional — the stripped plugin prefix (e.g. `core`), present only when the invocation carried one. Kept as a separate field so `skill` stays comparable with skill_used."
+   }
+  }
+ }
+}

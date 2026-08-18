@@ -1,0 +1,20 @@
+# Workframe skill-metrics — 汇总视图，由 recompute_skill_metrics.py 从 events.jsonl 重算生成
+# 非 Claude Code 官方文件。self-iteration 日常决策读这里；需要审计/追因时读 events.jsonl
+# 不要手工编辑；手工编辑会在下次脚本重算时被覆盖
+
+generated_at: null          # ISO-8601，由 recompute_skill_metrics.py 写入
+window_days: 30             # 默认统计窗口
+
+skills: {}                  # 例如：
+                            # librarian:
+                            #   invocations: 8
+                            #   successes: 7
+                            #   last_used: "2026-04-30"
+
+skills_by_role: {}          # 例如：{main: 12, pm: 3}——skill_used 按 role 的分布，供 main-led 观测
+
+rules: {}                   # schema 占位（v0.2.1 起）：rule_triggered 无 deterministic producer，始终为空；见 event-schema.json reliability=removed_v0_2_1
+
+corrections_count: 0        # 近 window_days 内 user_correction 事件数
+blocks_count: 0             # 近 window_days 内 task_blocked 事件数
+proposal_failures_count: 0  # 近 window_days 内 proposal_verified 且 signal_met=false 的事件数

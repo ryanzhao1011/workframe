@@ -1,0 +1,27 @@
+{
+  "__schema__": "workframe.activity-state.v1",
+  "__doc__": "Maintained by session-start-prep.py + session-end-flush.py + check-iteration-trigger.py + user-prompt-inject.py + maintenance_workorder.py (all writes go through _state_io's lock/atomic-replace/three-way-merge). heartbeat-check.py and memory-ask.py READ it only. Drives dormant/wake-up detection, memory decay gating, pending_maintenance state, summary drift repair history. recent_drift_repairs (v0.2.2): ISO timestamps of recent SessionStart drift repairs in last 30d, used by C+ drift check to detect SessionEnd timeout patterns. DEPRECATED: weighted_events_since_last_iteration is kept for backward compatibility only — check-iteration-trigger.py recomputes weights in real time from events.jsonl and does not read or update this field.",
+  "__pending_maintenance_schema__": {
+    "__doc__": "Field contract for each pending_maintenance entry. Written by check-iteration-trigger.py upsert_pending(); GC'd by session-start-prep.py after status=closed + closed_at older than 7d. Kept here (not in prose docs) so the contract ships with the plugin and stays machine-checkable.",
+    "id": "PM-<YYYYMMDD>-<seq>",
+    "kind": "signal category, e.g. problem_threshold / cadence_timeout / memory_backlog",
+    "severity": "info | warn",
+    "source": "producer script name",
+    "created_at": "ISO-8601",
+    "dedup_key": "stable identity WITHOUT a time component — a time-bearing key piles up synonymous entries while the condition stays unresolved",
+    "status": "open | closed",
+    "closed_at": "ISO-8601 or null",
+    "details": "human-readable description"
+  },
+  "session_counter": 0,
+  "last_session_at": null,
+  "active_sessions_30": 0,
+  "weighted_events_since_last_iteration": 0.0,
+  "dormant": false,
+  "wake_up_pending": false,
+  "dormant_profile": "normal",
+  "last_digest_at": null,
+  "last_prompt_injected_session_id": null,
+  "pending_maintenance": [],
+  "recent_drift_repairs": []
+}

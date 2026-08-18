@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""
+Maintenance batch session launcher (workframe-maintenance).
+
+Runs `claude -p --maintenance` in the current project: the Setup hook
+(matcher=maintenance, see scripts/maintenance_workorder.py) aggregates all
+pending maintenance work into a workorder file first, then the model executes
+the workorder in print mode (L1 + record-keeping only; L2 stays queued).
+
+Usage:
+    workframe-maintenance                 # run with defaults
+    workframe-maintenance --model haiku   # extra args pass through to claude
+
+Two-phase run (2026-08-06 live-test findings):
+  1. judge  — `claude -p --maintenance --permission-mode acceptEdits --add-dir <plugin>`:
+     Setup hook aggregates the workorder; the model does content work
+     (agent-memory writes are allowed) and writes its bookkeeping requests to
+     logs/maintenance-commit.json. Headless sessions CANNOT write
+     .claude/workframe-state/** (Claude Code sensitive-file gate; Edit() allow
+     rules do not override it), and the Skill tool does not inject skill bodies
+     in -p, so the workorder tells the model to Read librarian SKILL.md directly
+     (hence --add-dir for the plugin directory).
+  2. commit — `maintenance_workorder.py --commit` applies the manifest in code:
+     sidecar entries, events, PM closures, workorder ticks.
+"""
+
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+
+PROMPT = (
+    "读 .claude/workframe-state/maintenance-workorder.md 维护工单，"
+    "先读「执行规约」再逐项执行（记账诉求写 manifest，勿直接写 workframe-state），"
+    "最后输出执行摘要。"
+)
+
+
+def main():
+    exe = shutil.which("claude")
+    if not exe:
+        print("[workframe-maintenance] ERROR: `claude` CLI not found in PATH.", file=sys.stderr)
+        return 1
+    cmd = [exe, "-p", "--maintenance", "--permission-mode", "acceptEdits",
+           "--add-dir", str(PLUGIN_ROOT)]
+    cmd += sys.argv[1:]
+    cmd.append(PROMPT)
+    rc = subprocess.run(cmd).returncode
+    commit_rc = subprocess.run(
+        [sys.executable, str(PLUGIN_ROOT / "scripts" / "maintenance_workorder.py"), "--commit"]
+    ).returncode
+    return rc or commit_rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

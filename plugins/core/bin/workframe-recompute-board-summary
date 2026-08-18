@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""
+board summary 手工兜底入口 — 调用 plugins/core/scripts/recompute_board_summary.py
+
+通过 Claude Code plugin bin/ 机制自动加入 Bash tool 的 PATH（不依赖 ${CLAUDE_PLUGIN_ROOT}
+在 agent Bash 上下文是否可用）。
+
+用法（在 Claude Code 项目内任意位置）：
+    workframe-recompute-board-summary
+
+返回 JSON：
+    {"status": "ok", "total": ..., "counts": {...}}
+    {"status": "skipped", "reason": "board_not_found | summary_block_not_found"}
+    {"status": "error", "reason": "<exception message>"}
+
+跨平台说明：
+    - Linux / macOS / git bash: 直接执行（依赖 shebang 找 python3）
+    - Windows cmd / powershell: 调用同目录下的 .cmd 包装文件（自动 dispatch）
+"""
+import sys
+from pathlib import Path
+
+# bin/ 与 scripts/ 是 plugin root 下的兄弟目录
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from recompute_board_summary import main  # noqa: E402
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,28 @@
+# CI 质量闸：三平台跑 tools/validate.py（含内嵌单测），与本地纪律同一事实源。
+# validate.py 纯标准库、零第三方依赖，因此不需要任何 pip install 步骤。
+# PYTHONUTF8=1：Windows runner 的 stdout 是管道（默认 cp1252），validate 输出含 ✓/✗ 等
+# 非 ASCII 字符，不设会 UnicodeEncodeError——这不是装饰，是 Windows 通过的前提。
+name: validate
+
+on:
+  push:
+    branches: ["main", "master", "feat/**", "fix/**", "chore/**", "docs/**", "refactor/**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run validate (single quality gate)
+        run: python tools/validate.py
