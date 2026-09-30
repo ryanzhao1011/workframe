@@ -1,11 +1,6 @@
 ---
 name: material-intake
-description: 存量资料的盘点、分流与结构推荐。扫描给定路径产出资料台账（形态 × 数量 × 覆盖率），按资料形态判定每一批的去向（migrate-to-modules / requirement-archiving / code-to-doc / 手动放置），并从资料聚类推荐 basic/sub 模块树。只出计划不做搬运，重型执行交给对应 skill。
-when_to_use: |
-  接入存量项目、需要先摸清「手上这些资料该怎么进来」时；
-  项目内后续又攒了一批新资料（导出的文档、历史需求包、别人给的目录）需要判定去向时；
-  拿不准某批资料该走 migrate-to-modules 还是 requirement-archiving 时。
-  不适用：单篇新文档写作（走 prd-writer）、已确定去向的批量搬运（直接调对应执行 skill）。
+description: '存量资料的盘点、分流与结构推荐。扫描给定路径产出资料台账（形态 × 数量 × 覆盖率），按资料形态判定每一批的去向（migrate-to-modules / requirement-archiving / code-to-doc / 手动放置），并从资料聚类推荐 basic/sub 模块树。只出计划不做搬运，重型执行交给对应 skill。用于接入存量项目要先摸清「手上这些资料该怎么进来」时、项目内后续又攒了一批新资料需要判定去向时、拿不准某批资料该走 migrate-to-modules 还是 requirement-archiving 时。不适用：单篇新文档写作（走 prd-writer）、已确定去向的批量搬运（直接调对应执行 skill）。'
 user-invocable: true
 allowed-tools: [Read, Write, Glob, Grep, Bash, AskUserQuestion]
 ---

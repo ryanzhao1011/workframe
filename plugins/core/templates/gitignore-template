@@ -29,15 +29,24 @@ $RECYCLE.BIN/
 # Claude Code 个人本地覆盖（不进 git）
 .claude/settings.local.json
 
+# 项目 skills 的真实源在 .agents/skills/（两扇门共读）；新建项目的 .claude/skills 只是指向它的
+# junction / symlink。不忽略它：Windows 上 git 把 junction 当目录，会把同一份文件再登记一次，clone 出来的
+# .claude/skills 就成了第二份真实拷贝；macOS / Linux 上它是一个链接对象，会被 git add -A 带进提交。
+# 所以链接形态的项目必须忽略它，而真目录形态（已装项目，本就进 git）不能忽略。
+# 这一行**不带尾斜杠**：带尾斜杠的写法只匹配目录，在 macOS / Linux 上盖不住符号链接。
+# project_scaffold 落盘本模板时按项目形态定：链接形态紧接本段写一行 `.claude/skills`，真目录形态不写
+# （本段说明两种形态都保留；看到本段下面没有那一行，说明这个项目的 .claude/skills 是真目录）。
+.claude/skills
+
 # Workframe 运行时状态（本地派生，每端独立产生；不进 git）
 # 详见 core 插件 reference/project-architecture.md §Git 策略
 #
-# 注意这里必须是 `/*` + `!` 的成对写法，不能简写成 `.claude/workframe-state/`：
+# 注意这里必须是 `/*` + `!` 的成对写法，不能简写成 `.workframe/state/`：
 # git 不会重新纳入被排除父目录下的文件，父目录整个被忽略时下面那行 `!` 会被静默无视。
 # memory-index.json 是记忆的 sidecar（provenance / protected / created_at），
 # 无法从记忆正文重建，属于事实源而非派生状态，必须进 git。
-.claude/workframe-state/*
-!.claude/workframe-state/memory-index.json
+.workframe/state/*
+!.workframe/state/memory-index.json
 
 # 日志（Librarian 快照、SubagentStop hook 输出）
 logs/

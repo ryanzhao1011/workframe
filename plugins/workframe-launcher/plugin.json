@@ -1,0 +1,26 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "workframe-launcher",
+  "version": "1.1.0",
+  "description": "Workframe 启动器：一条命令开启全部流程。新建 Workframe 项目或接入已有项目——问清你的产品、提出模块结构、生成骨架、把项目订阅到 core 插件，并验证装机结果。每台机器装一次，它会替你把 core 装进每个项目。",
+  "author": {
+    "name": "Zhao Jiahao"
+  },
+  "homepage": "https://github.com/ryanzhao1011/workframe",
+  "repository": "https://github.com/ryanzhao1011/workframe",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "claude-code-plugin",
+    "product-management",
+    "prd",
+    "agents",
+    "skills",
+    "hooks",
+    "project-memory",
+    "chinese"
+  ],
+  "extensions": {
+    "com.openai": {}
+  }
+}

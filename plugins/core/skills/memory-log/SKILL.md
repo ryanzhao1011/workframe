@@ -1,10 +1,6 @@
 ---
 name: memory-log
-description: 查看记忆层活动流水（promotion / migration / decay / correction / memory rollback）——从 events.jsonl 重组时间线，并用 memory-index sidecar 补充每条的当前状态。只读，不改记忆。
-when_to_use: |
-  用户问「记忆里最近变了什么 / 这条是什么时候记的 / 为什么这条没了 / 它怎么跑到别的域去了 / 谁改的记忆」时；
-  排查记忆条目异常（该在的不在、该降级的还在）时；回滚记忆前先看变更历史时。
-  边界：要执行整理提升 → librarian；要回滚 → rollback。
+description: '查看记忆层活动流水（promotion / migration / decay / correction / memory rollback）——从 events.jsonl 重组时间线，并用 memory-index sidecar 补充每条的当前状态。只读，不改记忆。用于排查记忆条目异常（该在的不在、该降级的还在）、回滚记忆前先看变更历史。典型触发：「记忆里最近变了什么 / 这条是什么时候记的 / 为什么这条没了 / 它怎么跑到别的域去了 / 谁改的记忆」。边界：要执行整理提升 → librarian；要回滚 → rollback。'
 user-invocable: true
 disable-model-invocation: true
 effort: low
@@ -28,13 +24,13 @@ allowed-tools: [Read, Glob, Grep, Bash]
 
 ## 执行步骤
 
-1. Read `.claude/workframe-state/events.jsonl`，逐行 JSON 解析；跳过 `__schema__` 描述行和 malformed 行。
+1. Read `.workframe/state/events.jsonl`，逐行 JSON 解析；跳过 `__schema__` 描述行和 malformed 行。
 2. 按窗口过滤事件：
    - `type ∈ {memory_promoted, memory_decayed, user_correction, memory_migrated}`
-   - `rollback_applied` 仅在 `target` 或 `source` 指向 `.claude/agent-memory/` 或 `.claude/workframe-state/memory-index.json` 时纳入。
-3. Read `.claude/workframe-state/memory-index.json` 拿当前 sidecar 元数据；若文件不存在，按空索引 `{entries:{}}` 处理，并在输出中提示 `memory-index.json 不存在，仅展示事件快照，当前状态元数据（protected / provenance）不可用。`。
+   - `rollback_applied` 仅在 `target` 或 `source` 指向角色记忆目录（路径含 `agent-memory/` 段）或记忆 sidecar（路径以 `memory-index.json` 结尾）时纳入。
+3. Read `.workframe/state/memory-index.json` 拿当前 sidecar 元数据；若文件不存在，按空索引 `{entries:{}}` 处理，并在输出中提示 `memory-index.json 不存在，仅展示事件快照，当前状态元数据（protected / provenance）不可用。`。
 4. 展示时优先使用事件自带快照字段：`summary` / `entry_key` / `source` / `age_days` / `provenance`（events 是只追加历史层，早期事件可能带旧的数字型 `confidence` 快照字段——按原样展示，不换算、不回写）。sidecar 只用于补充当前仍存在条目的 `protected` / `provenance` 等当前状态，不作为历史事实唯一来源。
-5. 按时间倒序 + scope 分组输出。`scope` 优先取事件字段；memory rollback 可从路径 `.claude/agent-memory/<scope>/...` 推断，无法推断时归入 `unknown/`。
+5. 按时间倒序 + scope 分组输出。`scope` 优先取事件字段；memory rollback 可从路径里的 `agent-memory/<scope>/` 段推断，无法推断时归入 `unknown/`。
 
 ## 输出格式
 
@@ -42,7 +38,7 @@ allowed-tools: [Read, Glob, Grep, Bash]
 ## 📔 记忆层活动（近 <N> 天）
 
 ### shared/
-- 2026-04-20 [promoted] "研发任务签发仅由 qa 执行" (entry=shared:2026-04-20:研发任务签发仅由qa执行, source=notes.md, protected=true)
+- 2026-04-20 [promoted] "发版前必须跑脱敏终检" (entry=shared:2026-04-20:发版前必须跑脱敏终检, source=notes.md, protected=true)
 
 ### pm/
 - 2026-04-22 [decayed] "旧的 baseline 路径" (entry=pm:2026-02-16:旧的baseline路径, age_days=65, provenance=external)

@@ -2,20 +2,24 @@
 
 记忆与数据管理主链路的全链路真实验证资产。首跑 2026-08-07（沙盒 wf-g7-sandbox，
 真实 plugin 订阅 + 真实 `claude -p` 会话），首跑当时的 13 例全部通过；开源后兼作回归集。
-现共 14 例——X4 随 main-led 改造于 2026-08-16 新增，尚未跑过真实会话，复跑时一并覆盖。
+现共 15 例——X4 随 main-led 改造于 2026-08-16 新增，尚未跑过真实会话，复跑时一并覆盖；
+J11 于 2026-08-27 新增（补 librarian 关信号后的抑制闭环），**落盘时已按其前置与断言实跑 7/7**。
 
 ## 验收判据（四项，全部机器可查）
 
 1. **文件级证据核验**——不信模型口头汇报，每条用例断言落到文件/字段
 2. **事件流 schema 合规**——events.jsonl 可解析率 100%（doctor `events_parse`）
-3. **doctor 全绿**——8 项检查 0 非绿（`workframe_doctor.py --json`）
+3. **doctor 全绿**——`workframe_doctor.py --json --group runtime` 的**全部检查** 0 非绿
+   （**不带 `--group` 会把 install 与 runtime 两组都跑一遍**。本用例集验的是运行态
+   数据健康，故限定 runtime 组。**这里有意不写项数**——项数随 doctor 增删检查而变，
+   写死就会变成假话；要看当前项数跑 `workframe_doctor.py --list`）
 4. **三账对齐**——sidecar↔MEMORY↔events 四向互查（`scripts/assert_three_ledgers.py`）
 
 ## 沙盒重建步骤（复跑前置）
 
 1. `python <core>/scripts/project_scaffold.py --project <沙盒绝对路径> --create-missing`（scaffold）
-2. 种子数据：从一个已有 workframe 项目复制 `agent-memory/*/{MEMORY,notes}.md`、
-   `workframe-state/{memory-index.json,events.jsonl(tail -200)}`、`projects/board.yaml`、
+2. 种子数据：从一个已有 workframe 项目复制 `.workframe/agent-memory/*/{MEMORY,notes}.md`、
+   `.workframe/state/{memory-index.json,events.jsonl(tail -200)}`、`projects/board.yaml`、
    `projects/proposals/applied/*.yaml`；`activity-state.json` 重置 `session_counter: 10`。
    **复制前先脱敏**——记忆正文与 events 常年积着业务细节（客户名、未公开数据、内部口径），
    沙盒本身是一次性的，但顺手提交一次就永久进了 git 历史
@@ -33,7 +37,7 @@
 | J4 | librarian 开场卡消费 | 真实会话 --resume | cases/J4-librarian-consume.md |
 | J5 | maintenance 两阶段（judge → --commit） | 真实 --maintenance 会话 + 代码 | cases/J5-maintenance-two-phase.md |
 | J6 | doctor 造脏/撤脏双向 | 脚本 | cases/J6-doctor-dirty.md |
-| J7 | 自迭代 baseline 代码派生 | 真实 SessionStart | cases/J7-baseline-derive.md |
+| J7 | 自迭代 baseline 代码派生（A/B 两 fixture——断言 2 是兜底信号，与 1/3 互斥） | 真实 **Stop** 或脚本直调 | cases/J7-baseline-derive.md |
 | J8 | subagent 记忆注入三态 | 真实会话双探针 | cases/J8-subagent-inject.md |
 | J9 | 跨会话状态流转 | 多会话累积 + 读账 | cases/J9-cross-session.md |
 | J10 | 三账对齐终查 | 脚本 | cases/J10-three-ledgers.md |
@@ -41,6 +45,7 @@
 | X2 | maintenance flag 撞车双向 | 脚本直调 | cases/X2-flag-collision.md |
 | X3 | dormant 全链静默 | 脚本直调 | cases/X3-dormant-silence.md |
 | X4 | step2 与 step5 同事实不双写（main-led 直做） | 真实会话 | cases/X4-step2-step5-no-double-write.md |
+| J11 | librarian 关 memory_backlog 后的抑制闭环（关→静默→GC→重开） | 脚本直调 | cases/J11-backlog-suppression.md |
 
 人工目检（不可机器断言，单列）：M1 开场卡 AskUserQuestion 交互渲染样式；
 M2 judge 会话 acceptEdits 真实交互表现。宿主项目日常会话顺带看一眼即可。
@@ -49,8 +54,15 @@ M2 judge 会话 acceptEdits 真实交互表现。宿主项目日常会话顺带�
 
 复跑断言时区分「链路缺陷」与「headless 伪影」，以下三条属后者（交互会话中不存在）：
 
-1. `.claude/workframe-state/**` 敏感文件闸硬拒（Edit 工具层 denied）——模型正确行为是
-   停下报告 + 留幂等补账脚本，断言应检查「报告了被拦项」而非「写入成功」
+1. 需要批准的 Bash 命令一律被拒（`-p` 会话没有人能批准）——`acceptEdits` 只自动放行文件编辑、
+   `mkdir` / `cp` 等少数文件系统命令，以及任何模式都放行的内置只读命令集（`ls` / `cat` / `grep` /
+   只读 `git` 一类），`python …` 与 `workframe-event` 这类代码通道（如 librarian 第 6 步的
+   `--close-pm`、事件写入命令、指标重算）不在内。模型正确行为是把没跑成的记账整理成清单如实输出
+   （SKILL 给了命令的原样附上），不绕过代码通道去手改它负责的文件；断言应检查「报告了未执行项」
+   而非「执行成功」。
+   运行态目录 `.workframe/state/` 下的 Edit / Write **不受此限**：它不在 CC 受保护路径内，`acceptEdits`
+   直接放行，交互与 headless 一致——沙盒按新布局建时（scaffold 默认），那里的写入被拒是链路缺陷
+   而非伪影（运行态仍在 `.claude/` 下的旧布局沙盒里，这类写入仍会被拒）
 2. Skill 工具不注入正文——依赖 SKILL.md 的用例须在 prompt/工单里写明 Read 兜底路径
 3. hook 脚本直调必须喂 stdin payload（如 `echo '{"source":"startup"}' | python memory-ask.py`），
    否则 `json.load(sys.stdin)` 阻塞挂起

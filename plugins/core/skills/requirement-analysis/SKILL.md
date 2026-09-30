@@ -1,10 +1,6 @@
 ---
 name: requirement-analysis
-description: 结构化需求澄清与优先级评估：判断需求形态（Full PRD / One-Pager / Quick Brief）、6 问澄清、RICE + MoSCoW 评估；Full PRD 移交 prd-writer，中小需求输出轻量需求摘要
-when_to_use: |
-  用于把模糊需求 / 业务想法澄清到"可以决定做不做、做多大、先做哪个"时调用。
-  典型触发："分析需求 X" / "对齐范围" / "这个需求值不值得做" / "RICE 评估" / "优先级排序"。
-  不用于：正式 PRD 写作（用 prd-writer，章节结构读项目 PRD 框架 .claude/skills/prd-style/）/ 用户反馈分析（用 user-feedback-analysis）/ 竞品调研（用 competitive-analysis）/ 拆解为子任务（用 feature-breakdown）。
+description: '结构化需求澄清与优先级评估：判断需求形态（Full PRD / One-Pager / Quick Brief）、6 问澄清、RICE + MoSCoW 评估；Full PRD 移交 prd-writer，中小需求输出轻量需求摘要。用于把模糊需求 / 业务想法澄清到"可以决定做不做、做多大、先做哪个"。典型触发："分析需求 X" / "对齐范围" / "这个需求值不值得做" / "RICE 评估" / "优先级排序"。不用于：正式 PRD 写作（用 prd-writer，章节结构读项目 PRD 框架 .claude/skills/prd-style/）/ 用户反馈分析（用 user-feedback-analysis）/ 竞品调研（用 competitive-analysis）/ 拆解为子任务（用 feature-breakdown）。'
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Glob, Grep]
 ---

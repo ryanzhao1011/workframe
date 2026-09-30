@@ -9,5 +9,9 @@
 - 断言（脏态）：三项被**对应**检查项抓获、零误归——
   `sidecar_health` WARN 定位到 key 与非法值 / `events_parse` ERROR 定位到行号 /
   `auto_memory` WARN 报字符数与预算并引用治理口径
-- 断言（撤脏后）：8 项检查 0 非绿
+- 断言（撤脏后）：**runtime 组全部检查** 0 非绿
+  ——造脏的三件都落在 runtime 组，故断言限定该组：跑 `--group runtime`，或跑上面那条
+  不带 `--group` 的命令后只看 runtime 组那几行（**不带 `--group` 会把 install 与
+  runtime 两组都跑一遍**）。**这里有意不写项数**——项数随 doctor 增删检查而变，写死
+  就会变成假话；要看当前项数跑 `workframe_doctor.py --list`
 - 实测 2026-08-07：✅ 双向全过（脏态三抓三中、撤后全绿）

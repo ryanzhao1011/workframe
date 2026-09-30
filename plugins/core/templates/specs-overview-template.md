@@ -2,7 +2,7 @@
 type: overview
 status: planning
 owner_role: pm
-updated: {{NOW_ISO}}
+updated: "{{NOW_ISO}}"
 # 注：specs 层不参与 modules/ 索引，故不设 overview_level / auto_sections
 # （document-norms §2.4 的 overview_level 枚举只覆盖 modules/ 五层）
 module: ""
@@ -51,5 +51,6 @@ projects/specs/
 
 - 任务看板：`projects/board.yaml`
 - 问题记录：`projects/issues/`（扁平结构 + YAML 内 area/module 字段表达归属）
-- 变更日志：`projects/changelog.md`
+- 变更日志：`projects/changelog.md`（librarian / self-iteration / rollback 机器追加）
+- 开发账本：`projects/dev-log.md`（每轮收口手写一条；收口检查 `[ledger]` 项读它）
 - 自迭代提案：`projects/proposals/{pending,applied,rejected}/`

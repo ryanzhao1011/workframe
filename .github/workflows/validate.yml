@@ -1,12 +1,23 @@
-# CI 质量闸：三平台跑 tools/validate.py（含内嵌单测），与本地纪律同一事实源。
-# validate.py 纯标准库、零第三方依赖，因此不需要任何 pip install 步骤。
+# CI 质量闸：跑 tools/validate.py（含内嵌单测），与本地纪律同一事实源。
+#
+# 平台分层（表达式在下方 matrix）：推 dev 只跑 Linux，其余情形跑三平台。三平台里 Linux
+# 最严格（文件名区分大小写、POSIX 路径与编码），而 Windows 在维护者本机天天在跑——日常
+# 缺的正是 Linux 那一侧；私有远端的 Actions 按分钟计费且有倍率（Windows ×2 / macOS ×10），
+# 每次推开发分支都跑满三平台等于把额度烧在重复覆盖上。
+#
+# 依赖：validate.py 自身只用标准库，但它以子进程跑 tools/test_module_close_check.py，
+# 该测试的 [yaml-parse] 组需要 PyYAML——缺库时那一组会被前置守卫整组拦下并报红（「没跑」
+# 不等于「通过」），所以这里必须装。钉死版本而不用 `>=`：那一组断言的是 PyYAML 的异常类
+# 与属性面（ReaderError 没有 problem_mark、.character 可能是 int 也可能是 str），浮动版本
+# 会造出「只在 CI 红、本机复现不出来」的故障。升级口径同下方 actions：人工核版驱动。
+#
 # PYTHONUTF8=1：Windows runner 的 stdout 是管道（默认 cp1252），validate 输出含 ✓/✗ 等
 # 非 ASCII 字符，不设会 UnicodeEncodeError——这不是装饰，是 Windows 通过的前提。
 name: validate
 
 on:
   push:
-    branches: ["main", "master", "feat/**", "fix/**", "chore/**", "docs/**", "refactor/**"]
+    branches: ["main", "master", "dev", "feat/**", "fix/**", "chore/**", "docs/**", "refactor/**"]
   pull_request:
   workflow_dispatch:
 
@@ -15,14 +26,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # 表达式只能内联在这里：`jobs.<id>.strategy` 拿得到的上下文只有 github / needs /
+        # vars / inputs——**没有 env**，所以抽不成具名变量，这是它读着密的原因。
+        # `A && B || C` 是 GitHub Actions 的三元写法，坑在「B 为假值时结果落到 C」；此处
+        # B 是非空字符串字面量、恒真，安全——换成可能为空的东西就会静默走错分支。
+        # `event_name == 'push'` 不能省：workflow_dispatch 也可以指到 dev，而手动触发要的
+        # 是三平台。四种情形：push+dev → 单 Linux；push+其余分支 / pull_request /
+        # workflow_dispatch → 三平台。
+        os: ${{ fromJSON((github.event_name == 'push' && github.ref_name == 'dev') && '["ubuntu-latest"]' || '["ubuntu-latest", "windows-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     env:
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # actions 钉 40 位 commit SHA 而非浮动 tag：tag 是可变引用，上游仓被攻破即可把
+      # 大版本 tag 重指到恶意 commit，我们的 CI 下次运行就会执行它。SHA 钉后不会自动升，
+      # 也不产生 Dependabot 安全告警——升级由维护者发版前人工核版驱动；末尾版本号注释是
+      # Dependabot 官方识别的格式，升级时 SHA 与注释同一行同批改（validate 有闸）。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
+      # 钉死版本的理由见文件头「依赖」段；升级与核版走发版前的人工核版工序。
+      - name: Install pinned test dependency
+        run: python -m pip install --disable-pip-version-check "pyyaml==6.0.3"
       - name: Run validate (single quality gate)
         run: python tools/validate.py

@@ -4,21 +4,27 @@
 
 ## 4 通用角色（来自 core plugin）
 
-| 角色 | 核心定位 | 绑定 skills（core 默认） |
-|---|---|---|
-| `pm` | 需求分析、功能拆解、PRD 撰写、验收标准、竞品调研 | requirement-analysis, prd-writer, acceptance-criteria（高频预载；功能拆解 / 竞品 / 指标 / 反馈分析 / 交互 demo 等其余能力按需经 Skill 调用） |
-| `dev` | 全栈工程师（前后端、数据库、部署、Bug 修复、技术方案） | technical-design, systematic-debugging |
-| `qa` | 测试用例设计、代码审查、Issue 管理、研发任务签发 | test-case-design, code-review |
-| `prompt-eng` | Prompt 设计优化、AI 策略、实验评估 | prompt-design, prompt-evaluation |
+| 角色 | 核心定位 |
+|---|---|
+| `pm` | 需求分析、功能拆解、PRD 撰写、验收标准、竞品调研 |
+| `dev` | 全栈工程师（前后端、数据库、部署、Bug 修复、技术方案） |
+| `qa` | 测试用例设计、代码审查、Issue 管理、研发任务签发 |
+| `prompt-eng` | Prompt 设计优化、AI 策略、实验评估 |
+
+**「哪个角色该调哪个 skill」没有按角色的映射表**：什么时候调哪个，由各 skill 自己的 description 经会话的 skill 清单告诉模型，对所有角色一样。唯一的固定植入是子 agent 必载片里那一句——建任务、改任务状态、流转到 `pending_qa`、签发或打回之前先调 skill `core:task-management`，因为看板流转与签发权限都在它里面，必须保证每个子 agent 都拿得到。
+
+**授权与触发是两套机制，别混**：能不能调由 agent `tools:` 白名单里的 `Skill` 决定（缺它一个 skill 都调不了），什么时候该调哪个由 skill 的 description 说。竞品调研、度量体系设计、用户反馈分析、交互 demo 等能力都按需经 `Skill` 工具调起。
 
 订阅 core plugin 后这 4 个角色自动可用，**不需要**在项目本地 `.claude/agents/` 下重复定义。
 看板维护、节奏把关、summary 手工兜底等项目管理工作**不设专职角色**——由主 Claude 直接承担（`task-management` skill + `workframe-recompute-board-summary` 命令）。
 
-**默认路由偏好**：`project_scaffold.py` 根据 `role_profile` 字段在生成的 `CLAUDE.md` 中渲染"路由偏好"段，决定 4 角色的默认优先级（如内容运营项目 prompt-eng 默认权重低）。这是**软提示，不禁用任何 core agent**——用户始终可 `@角色名` 直接调用。完整 3 profile 定义见 [`role-profile-catalog.md`](./role-profile-catalog.md)；profile 与 override 的关系：profile 不限制项目级 override 行为，用户随时可全量覆盖任何 core agent。
+**默认路由偏好**：`project_scaffold.py` 根据 `role_profile` 字段在生成的 `AGENTS.md` 中渲染"路由偏好"段，决定 4 角色的默认优先级（如内容运营项目 prompt-eng 默认权重低）。这是**软提示，不禁用任何 core agent**——用户始终可 `@角色名` 直接调用。完整 3 profile 定义见 [`role-profile-catalog.md`](./role-profile-catalog.md)；profile 与 override 的关系：profile 不限制项目级 override 行为，用户随时可放同名自定义版（与 `core:<role>` 并存，不是覆盖，见下文 §何时 override 现有角色）。
 
-**系统 skills 不绑 agent**：`librarian` / `self-iteration` / `session-digest` 为内部调用，由 hook 链路或 `/core:maintenance-review` 等命令触发；`audit` / `rollback` / `memory-log` / `maintenance-review` / `onboard` 为用户直接 `/core:<name>` 调用。它们**不 preload** 给任何 agent。
+**改不了的那几块（能力边界）**：通用角色表与路由规则、任务状态流转与签发权限、两套记忆分工由会话启动时的注入片投递，项目侧没有副本可改——override 一个角色文件改得了该角色自己的契约，改不了这几块。项目需要差异时只能在 `AGENTS.md` 里**补充**（新增项目级角色、写路由偏好或项目自有判据），不能覆盖注入片；两处说法冲突时模型按哪份做不可判，所以别在 `AGENTS.md` 里重写一份流转表或角色表。
 
-**HEARTBEAT / Librarian / self-iteration 的执行主体说明**：周期性维护由 hook 链路（`heartbeat-check.py` / `session-end-flush.py` 等）自动驱动，不由任何 agent 主动派发。HEARTBEAT 提醒以 stdout 注入主 Claude 上下文（不落报告全文文件），由主 Claude 直接处理；`.claude/workframe-state/heartbeat-state.json` 只保存周期标记防重复，不存报告内容。
+**系统 skills 不绑 agent**：`librarian` / `self-iteration` / `session-digest` 为内部调用，由 hook 链路或 `/core:maintenance-review` 等命令触发；`audit` / `rollback` / `memory-log` / `maintenance-review` / `onboard` 为用户直接 `/core:<name>` 调用。它们**不绑任何角色**。
+
+**HEARTBEAT / Librarian / self-iteration 的执行主体说明**：周期性维护由 hook 链路（`heartbeat-check.py` / `session-end-flush.py` 等）自动驱动，不由任何 agent 主动派发。HEARTBEAT 提醒以 stdout 注入主 Claude 上下文（不落报告全文文件），由主 Claude 直接处理；`.workframe/state/heartbeat-state.json` 只保存周期标记防重复，不存报告内容。
 
 ## 项目级扩展（override 或新增）
 
@@ -28,9 +34,14 @@
 - 给通用角色绑定项目特有 skill（如 @pm 绑 `feishu-publish` 等项目配备的发布 skill）
 - 调整通用角色的产出细节（如周报 / 分析报告落盘到项目自定义目录；PRD 章节结构本身改项目 `.claude/skills/prd-style/` 即可，无需 override agent）
 
-**做法**：在项目本地 `.claude/agents/<role>.md` 放同名文件，Claude Code 官方优先级规则会让项目版覆盖 plugin 版。
+**做法**：在项目本地 `.claude/agents/<role>.md` 放同名文件。**它与 plugin 版是并存、不是覆盖**（Claude Code 2.1.285 实测）：plugin 角色全名带命名空间 `core:<role>`，项目这份叫 `<role>`，两个名字不同，agent 列表里两个都在。
 
-**建议**：override 时基于 plugin 版全量复制后修改，避免遗漏 frontmatter 必填字段或 Step 3 状态流转规则。**不要重复 `agent-protocols.md` / `response-output.md` / `auto-update.md` 已定义的通用协议**——通用协议自动加载，override 文件只需写差异。
+- `@<role>` 或派 `<role>` → 项目这份；派 `core:<role>` → 仍是 plugin 版
+- 没点名、只描述任务时，主会话按两者的 description 挑一个，挑哪个是模型行为、不保证——要稳定，在项目 `AGENTS.md` 的项目级角色段写明这类活交给项目这份、不用 `core:<role>`
+- 两者收到的 `SubagentStart` 注入相同（必载片 ＋ 按去掉命名空间后的角色名取的角色记忆）
+- Codex 门的角色由 plugin `agents/*.md` 生成，不读项目 `.claude/agents/`；Codex 侧定制写 `.codex/roles/<role>.local.toml`
+
+**建议**：override 时基于 plugin 版全量复制后修改，避免遗漏 frontmatter 必填字段或 Step 3 状态流转规则。**不要重复必载片已定义的通用协议**——它由 `SubagentStart` 自动注入，override 文件只需写差异。
 
 ### 何时新增角色
 
@@ -38,7 +49,7 @@
 - 职责分工明显不同于通用角色（不只是"给 @dev 换个名字"）
 - core dev 是"全栈"定位，需要专业化分工时（前端独立 / DBA 独立 / DevOps 独立）可拆分为 `frontend-dev` / `backend-dev` / `devops` 等
 
-**做法**：在项目本地 `.claude/agents/<new-role>.md` 创建新文件。新增角色自动受 `agent-protocols.md` 约束，无需重复通用协议。
+**做法**：在项目本地 `.claude/agents/<new-role>.md` 创建新文件。新增角色自动受注入的通用协议约束，无需在文件里重复它。
 
 ## Agent 文件规范
 
@@ -61,24 +72,34 @@ tools:                                  # 必填，该角色允许用的工具�
   - Grep
   - Bash
   - AskUserQuestion
+  - Skill                               # 别删：tools 是白名单，缺它该角色一个 skill 都调不了
   # 按需加 WebSearch / WebFetch
 # model 字段留空，默认 inherit 主会话模型（开源兼容最佳实践）
 # 如需锁定模型：只用别名 `model: opus` / `sonnet` / `haiku`——**不要写完整 model ID**
-# （理由见本文 §编写约束 第 5 条：具体 ID 随模型换代失效，validate 会拦）
+# （理由见本文 §编写约束 第 5 条：具体 ID 随模型换代失效；validate 只拦 core 内置 agent，项目级自查）
 # 不写 memory 字段：官方注入目录键名带 plugin 前缀（core:pm → agent-memory/core-pm/），
 # 与框架 <role>/ 布局不符且维护指令与 D/U/R/A 冲突；角色记忆由 SubagentStart hook 注入（agent-protocols §1）
-skills:                                  # 可选，该角色绑定的 skill 名列表
+skills:                                  # 可选；见下方「这一格现在是什么状态」
   - skill-a
   - skill-b
 ---
 ```
+
+> **`skills:` 这一格现在是什么状态（别照着出厂 agent 反推）**：
+> **出厂 core agent 不写它** —— 那 4 个角色的 skill 触发由各 skill 的 description 驱动（外加子 agent 必载片固定植入的 `core:task-management` 那一句），`validate` 会拦住以常规写法（`skills:` 键）写回出厂 agent frontmatter 的预载；引号键、带 BOM 的文件这类少见写法目前拦不住。
+> **你若在用它，它做的是这件事**：列出的每个 skill，其**完整正文**会在 subagent 启动时装进上下文（Claude Code 官方口径）。**插件 skill 请写带插件前缀的全名**（如 `core:code-review`）：裸名与 Claude Code 内置 skill 同名时，装进来的是内置那个。**开启 agent teams 时，派发时起了名的 subagent 会成为队友，队友不应用 `skills:`**（官方口径），这一格对它不起作用。两条代价要一起知道：①**不管这次任务用不用得上，每次派发都整段占上下文预算**，列得越多越贵；②**插件内的 agent 改了 frontmatter，同一会话里不会立刻生效**——要 `/reload-plugins` 或重启会话，改完直接派发拿到的仍是旧定义，这时「没生效」看起来和「这个字段不起作用」一模一样；验证这类改动前先确认新定义真的加载了。
+> **项目级角色用不用它，由你按上面两条代价权衡**：不写时，该角色与出厂角色一样靠 skill 清单的 description 触发；某个 skill 必须每次都在场、且值得每次派发付全文的预算时，才写进来。
+>
+> **override 出厂角色、或新建任何角色，都绕不开必载片那一句**：子 agent 必载片按 `SubagentStart` 投给**每一个**子 agent，不看角色名，所以「动看板之前先调 `core:task-management`」对你的角色同样生效。你的角色若按设计不碰看板，这句不会被触发，不必另行处理。
+
+
 
 ### 正文结构
 
 ```markdown
 # <中文名> @<name>
 
-> 启动协议、协作边界、通用收尾协议（Step 0-3 通用骨架）见 workframe core rule: `agent-protocols`（项目内同步路径 `.claude/rules/workframe/core/agent-protocols.md`）。本文件只定义 @<name> 的角色特质。
+> 启动协议、协作边界、通用收尾协议由 `SubagentStart` 在本 agent 启动时**直接注入上下文**，不必也无处去读文件。本文件只定义 @<name> 的角色特质。
 
 ## 角色定位
 
@@ -93,7 +114,7 @@ skills:                                  # 可选，该角色绑定的 skill 名
 ## 特有写入边界（可选）
 
 - **可写**：<本角色允许写的具体路径>
-- **禁写**：<本角色独有的禁写约束；受保护资产清单见 auto-update.md 不重复>
+- **禁写**：<本角色独有的禁写约束；受保护资产清单在必载片里，不重复>
 
 ## 特有约束
 
@@ -101,12 +122,12 @@ skills:                                  # 可选，该角色绑定的 skill 名
 
 ## Step 3 扩展 — <角色名> 任务流转
 
-通用 Step 3 规则见 `agent-protocols.md`。@<name> 特有：
+通用 Step 3 规则见必载片 §Step 3 — 更新任务看板。@<name> 特有：
 
 - <本角色的状态流转规则，如 "dev 研发任务从 in_progress 只能流转到 pending_qa"、"qa 可签发 pending_qa → completed"、"pm 非研发任务可直接 completed">
 ```
 
-**agent body 不内联通用协议**：启动/收尾协议（`agent-protocols.md`）、响应正文优先（`response-output.md`）、受保护资产清单（`auto-update.md`）均由 core rules 自动加载，body 只写角色特质。
+**agent body 不内联通用协议**：启动 / 收尾协议、响应正文优先、受保护资产清单都由 `SubagentStart` 在 agent 启动时注入，body 只写角色特质。
 
 ## 任务状态流转约定
 
@@ -119,7 +140,7 @@ skills:                                  # 可选，该角色绑定的 skill 名
 | `pm` | `pending → in_progress → completed`（非研发任务） |
 | `dev` | 研发任务 `in_progress → pending_qa`（不能直接 completed）；非研发任务可直接 `completed` |
 | `prompt-eng` | Prompt 变更类任务同 dev（`in_progress → pending_qa`）；非研发类咨询可直接 `completed` |
-| `qa` | `pending_qa → completed` / `pending_qa → blocked`（唯一签发角色）；自身非研发任务可直接流转 |
+| `qa` | `pending_qa → completed` / `pending_qa → blocked`（**baseline 与自定义角色里唯一的签发角色**）；自身非研发任务可直接流转 |
 | 主 Claude | summary 手工兜底重算（常规自动重算由 SessionEnd hook 完成）；归档任务（用户确认后执行） |
 
 新增角色时应决定它属于哪个类别：
@@ -128,9 +149,11 @@ skills:                                  # 可选，该角色绑定的 skill 名
 - **"分析/咨询"类**（如 legal-advisor 输出建议）：可直接 completed
 - **"协调"类**（如 ceo）：直接更新 status
 
+归类后的操作者规则：走 `pending_qa` 类的自定义角色，其 `in_progress → pending_qa` 由该角色自己操作、签发仍仅 @qa；后两类可自行 `in_progress → completed`。在角色定义的 Step 3 段写明归类；完整操作者表见 skill: `task-management` §签发权限。
+
 ## 项目级路径与命名约定
 
-Core agent **不硬编码项目特定路径**（具体子目录结构、文件命名格式等），由各项目在 `CLAUDE.md` 自定义。常见可定制项：
+Core agent **不硬编码项目特定路径**（具体子目录结构、文件命名格式等），由各项目在 `AGENTS.md`（项目自有判据）自定义。常见可定制项：
 
 ### 需求文档目录结构
 
@@ -170,7 +193,7 @@ PRD 创作（产出本地 `prd.md` + HTML 原型 + 截图）由 core skill `prd-
 如需把 specs 单向发布到飞书 / Notion / Confluence 等外部系统，按以下步骤：
 
 1. 在项目 `.claude/skills/` 下新增**发布器**（命名规范 `<platform>-publish`，如 `feishu-publish` / `notion-publish`）；这类 skill **只负责本地 Markdown → 外部文档** 的单向同步，不参与 PRD 内容生成
-2. 在项目 `.claude/agents/<role>.md` override 中把发布器追加到 `skills:` 列表（如 @pm 挂 `feishu-publish`）
+2. 发布器靠自己的 `description` 被模型按需调起，一般不必额外绑定；确实要让某个角色每次启动就带着它时，在项目 `.claude/agents/<role>.md` override 的 frontmatter 里写 `skills:`（出厂 agent 没有这一格，是新增而不是追加；预载的代价见本文 §Frontmatter）
 3. 用户明确触发"发布到 X"才启动发布器；本地写完不会自动发布
 
 **Core plugin 的 agent 和 `prd-writer` 都不绑定任何外部文档系统**；`prd-writer` 的 S6（发布段）是可选发布的衔接点，由发布器接管。
@@ -192,13 +215,13 @@ PRD 创作（产出本地 `prd.md` + HTML 原型 + 截图）由 core skill `prd-
 
 ## 如何从 @dev 拆分专业工程角色
 
-需要更细粒度源码写入权限分配时，可在项目本地 `.claude/agents/` 新增 `frontend-dev` / `backend-dev` / `devops` 等替代 core `@dev`。本节只给原则和最小示例，完整 agent 结构沿用 §Agent 文件规范。
+需要更细粒度源码写入权限分配时，可在项目本地 `.claude/agents/` 新增 `frontend-dev` / `backend-dev` / `devops` 等分担 core `@dev`（全名 `core:dev`）的职责。本节只给原则和最小示例，完整 agent 结构沿用 §Agent 文件规范。
 
 ### 4 条原则
 
-1. **覆盖优先于并存**：项目本地同名文件直接覆盖 plugin 版；如必须与 core `@dev` 并存（如保留 core `@dev` 作为跨栈协调者），必须在项目 `CLAUDE.md` 路由规则段明确各角色负责的目录或文件类型，避免主 Claude 路由摇摆
-2. **签发权限沿用**：拆分角色的研发任务仍走 `pending_qa → completed`，仍由 @qa 签发；**不**给新角色额外加签发权
-3. **工程纪律一致**：拆分角色继承 workframe core rule: `agent-protocols` + `technical-design` skill 的 `engineering-discipline` reference 的工程原则，新 agent 文件不重复
+1. **拆分角色必然与 core `@dev` 并存，所以分工要写明**：项目文件无法让 plugin 角色消失——`core:dev` 始终在 agent 列表里，项目里同名的 `.claude/agents/dev.md` 也只是再添一个 `dev`、不覆盖它（见 §何时 override 现有角色）。因此必须在项目 `AGENTS.md` 的项目级角色段写明各角色负责的目录或文件类型（保留 core `@dev` 作为跨栈协调者时同样要写），避免主 Claude 路由摇摆（通用路由规则由注入片投递，这里是补充，不是覆盖）
+2. **签发权限沿用**：拆分角色的研发任务仍走 `pending_qa → completed`，仍由 @qa 签发；**不**给新角色额外加签发权。四段闸门的自签通道（必载片 §谁签发这次收口）**只对主 Claude 开，不对任何 agent 角色开**——给自定义角色写自签规则是越权
+3. **工程纪律一致**：拆分角色继承注入的通用协议 + `technical-design` skill 的 `engineering-discipline` reference 的工程原则，新 agent 文件不重复
 4. **写入边界互斥**：每个拆分角色的"特有写入边界"段必须列出本角色独占的目录 + 明确禁写其他拆分角色的目录，防止双向越权
 
 ### 最小示例 frontmatter
@@ -210,17 +233,17 @@ description: |
   前端工程师。负责 React / Vue 组件、页面布局、前端构建链。
   触发场景：前端编码、组件实现、UI 调试、前端构建配置。
   与 backend-dev 通过 API 契约对接；不修改后端代码。
-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
-skills: [technical-design, systematic-debugging]
+tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Skill]
+skills: [core:technical-design, core:systematic-debugging]
 ---
 ```
 
 `backend-dev` / `devops` 同结构，按职责改 description 和写入路径段。
 
-### 项目 CLAUDE.md 路由配套
+### 项目 AGENTS.md 路由配套
 
 ```markdown
-## 路由规则（项目专属）
+## 项目级角色
 - 前端代码（`web/`、`packages/ui/`）→ @frontend-dev
 - 后端代码（`api/`、`packages/server/`）→ @backend-dev
 - 部署 / CI / 容器化 / 监控 → @devops
@@ -230,32 +253,32 @@ skills: [technical-design, systematic-debugging]
 
 为保持 core agent 的开源可移植性 + 多项目可复用性，agent 文件**禁止**：
 
-1. **不内联通用协议**——启动协议 / 收尾协议 / 受保护资产清单 / 响应正文优先等由 rule 自动加载，agent body 不重复
-2. **不引用具体业务 skill 名**——核心职责段用业务术语描述（如"需求分析"），不写"用 X skill"。frontmatter `skills:` 列表 + skill description 让 Claude 自动匹配
-3. **不硬编码项目特定路径**——不写 `projects/specs/<模块>/<子模块>/<迭代>/`、`REQ-{序号}.md`、`board-archive-<YYYYMM>.yaml` 等占位符。框架契约根路径（`projects/specs/` / `projects/board.yaml` 等）可保留，子结构和命名格式由项目 `CLAUDE.md` / 对应 skill 决定
-4. **不使用派发式语言**——不写"通知 @qa 测试" / "请 @pm 评估"。改为响应文字标注 + 看板状态 / Issue tag 表达，由用户/主 Claude 调度（详见 `agent-protocols.md` §2 协作边界）
+1. **不内联通用协议**——启动协议 / 收尾协议 / 受保护资产清单 / 响应正文优先等由 `SubagentStart` hook 在 agent 启动时直接注入上下文，agent body 不重复
+2. **不在正文写「什么条件下调哪个 skill」**——核心职责段用业务术语描述（如"需求分析"），触发条件的唯一源是各 skill 自己的 description；正文另写一份就是第二个源，两者矛盾时模型按 description 判，正文那句只会误导读的人。正文**提到** skill 名不禁止，但要用「\`<name>\` skill」「skill: \`<name>\`」这类可识别形态，否则该 skill 改名 / 删除时闸不会响，而正文照旧把人指过去。**出厂 core agent 的 frontmatter 不写 `skills:`**（validate 会拦）；**项目级角色不受这一条约束**，理由见 §Frontmatter 那段关于这一格现状的说明
+3. **不硬编码项目特定路径**——不写 `projects/specs/<模块>/<子模块>/<迭代>/`、`REQ-{序号}.md`、`board-archive-<YYYYMM>.yaml` 等占位符。框架契约根路径（`projects/specs/` / `projects/board.yaml` 等）可保留，子结构和命名格式由项目 `AGENTS.md` / 对应 skill 决定
+4. **不使用派发式语言**——不写"通知 @qa 测试" / "请 @pm 评估"。改为响应文字标注 + 看板状态 / Issue tag 表达，由用户/主 Claude 调度（详见子 agent 必载片 §协作边界）
 5. **不硬编码具体 model ID**（如 `model: claude-opus-4-8`）——默认 `inherit` 主会话模型；锁定模型时使用别名 `opus` / `sonnet` / `haiku`
 
-`tools/validate.py` 自动校验上述约束，新增 / override agent 文件后跑 validate 即可发现违规。
+`tools/validate.py` 对 **core 内置 agent**（`plugins/core/agents/`）强制校验上述约束；项目级 `.claude/agents/` 下的新增 / override 文件**不在其扫描面内**（validate 是框架仓工具，不随插件分发）——项目级文件按本清单人工自查。
 
 ## 注意事项
 
-- 新增角色后，在 `.claude/agent-memory/<new-role>/` 下创建 `MEMORY.md` 和 `notes.md` 空骨架（否则 Librarian 第 1 步动态遍历时会找不到）
-- Agent 正文里的所有路径都是**项目内部相对路径**（`.claude/agent-memory/...`、`projects/...` 等），不要硬编码绝对路径
+- 新增角色后，在 `.workframe/agent-memory/<new-role>/` 下创建 `MEMORY.md` 和 `notes.md` 空骨架（否则 Librarian 第 1 步动态遍历时会找不到）
+- Agent 正文里的所有路径都是**项目内部相对路径**（`.workframe/agent-memory/...`、`projects/...` 等），不要硬编码绝对路径
 - 若项目要 override core 角色，建议在 override 正文顶部注明"基于 core plugin dev.md @ {framework_version} 扩展"（version 取 `.workframe-config.json.framework_version`）以便追溯
 
 ## 协议契约（手工新增 / 接入旧 agent 必读）
 
-**前提认知**：subagent 是独立 context window，body 是它的 system prompt，不接收完整的主 Claude system prompt。但官方 [sub-agents](https://code.claude.com/docs/en/sub-agents) §What loads at startup 已明确把 **project rules**（即 `.claude/rules/`）与 CLAUDE.md 层级一并列入 non-fork subagent 的初始 context。
+**前提认知**：subagent 是独立 context window，body 是它的 system prompt，不接收完整的主 Claude system prompt。框架的通用协议由 `SubagentStart` hook 在 agent 启动时**直接注入上下文**——不落项目文件，也不依赖 Claude Code 的任何资源加载层级。
 
-两条边界仍需注意：
+两条与 Claude Code 自身加载层级有关的边界仍需注意（项目另外还依赖 CLAUDE.md 或自己的 `.claude/rules/` 时会碰到）：
 
 - **内置 Explore / Plan 例外**：官方原文 "Explore and Plan are the only subagents that omit CLAUDE.md and git status"，且无 frontmatter 开关可改。项目级 named agent 不受此限。
-- **path-scoped rules（带 `paths:` frontmatter）的 subagent 行为，官方文档**没有明确保证****——其触发条件是"Claude 读到匹配文件时"，在 subagent 独立 context 中的表现未文档化。协议类 rule 不要加 `paths:`。
+- **path-scoped rules（带 `paths:` frontmatter）的 subagent 行为，官方文档**没有明确保证****——其触发条件是"Claude 读到匹配文件时"，在 subagent 独立 context 中的表现未文档化。项目自己往 `.claude/rules/` 放协议类内容时不要加 `paths:`。
 
 所以：**协议可达性本身已由 runtime 保证**，body 顶部的协议引用不再是功能必需，降为可读性与 reminder 用途（见下 §强烈建议）。
 
-另见 workframe core rule `agent-protocols`；事件可靠性分层的机器可读定义见 `.workframe-meta/event-schema.json`。
+另见启动时注入的通用协议片；事件可靠性分层的机器可读定义见 `.workframe-meta/event-schema.json`。
 
 ### 必备 1 项
 
@@ -268,6 +291,7 @@ description: ...
 tools:
   - Read
   - Write
+  - Skill
 # 不写 memory 字段——角色记忆由 SubagentStart hook 自动注入 shared/ 与 <role>/ 的 MEMORY.md（agent-protocols §1）
 ---
 ```
@@ -281,7 +305,7 @@ tools:
 ```markdown
 # 财务分析师 @finance
 
-> 启动协议、协作边界、通用收尾协议(Step 0-3 通用骨架)见 workframe core rule: `agent-protocols`（项目内同步路径 `.claude/rules/workframe/core/agent-protocols.md`）。本文件只定义 @finance 的角色特质。
+> 启动协议、协作边界、通用收尾协议由 `SubagentStart` 在本 agent 启动时**直接注入上下文**，不必也无处去读文件。本文件只定义 @finance 的角色特质。
 
 ## 角色定位
 ...
@@ -289,9 +313,9 @@ tools:
 
 价值（协议可达性已由 runtime 保证）：
 - **文档可读性**：让 agent.md 维护者 / 后来 reader 一眼知道协议来源
-- **模型 reminder**：rules 虽自动注入，但在 context 压力下 body 内重申协议存在有助于不跳过收尾步骤
+- **模型 reminder**：协议虽由 hook 自动注入，但在 context 压力下 body 内重申协议存在有助于不跳过收尾步骤
 
-**2. `.claude/agent-memory/<role>/` 目录预创建**
+**2. `.workframe/agent-memory/<role>/` 目录预创建**
 
 agent wrap-up Step 2 写入 `<role>/notes.md` 时，若目录不存在，Write 工具会自动 mkdir parents（实测过），所以**最终能 work**。但建议预创建空骨架的理由：
 - librarian 第 1 步用 Glob 扫所有 `agent-memory/*/`；目录不存在时 librarian 第一次扫不到该 role
@@ -301,4 +325,4 @@ baseline 4 个 core role（pm/dev/qa/prompt-eng）已由 scaffold 预创建；�
 
 ### 自动检测与修复（Phase 2 planned，尚未实现）
 
-检查方式：手工对照本节清单。用 `templates/agent-template.md` 创建项目级角色时**默认含必备 + 建议项**，无需手工补。
+检查方式：手工对照本节清单。用 `templates/agent-template.md` 创建项目级角色时，**必备项（不写 memory 字段）与建议项 1（body 协议引用行）已内置在模板里**；建议项 2 的记忆骨架是文件系统操作、markdown 模板无法承载——仍按上文 §注意事项手工创建 `.workframe/agent-memory/<new-role>/` 空骨架。

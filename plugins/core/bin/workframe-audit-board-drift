@@ -21,14 +21,17 @@ audit 只读 drift 检查入口 — 不写入任何文件，仅打印 board.yaml
     0 - 正常输出（无论是否有 drift）
     1 - 内部异常（解析错误等）
 """
-import os
 import sys
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
+from _harness import project_dir  # noqa: E402
+
+# 项目根经 `_harness` 取，不直读 `CLAUDE_PROJECT_DIR`：那是 CC 专属变量，Codex 门下
+# 一个都不存在，直读会静默退成 cwd——从子目录调用时算出的看板路径根本不指向本项目。
+PROJECT_DIR = project_dir()
 BOARD_FILE = PROJECT_DIR / "projects" / "board.yaml"
 
 

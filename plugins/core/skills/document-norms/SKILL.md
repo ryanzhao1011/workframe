@@ -1,16 +1,6 @@
 ---
 name: document-norms
-description: 写或改任何 markdown 文档（含评审报告 / 实施清单 / 问题清单 / 方案等交付物）时的规范来源——写作质量分级与交付前自查、文档该放哪（归属矩阵）、frontmatter 与 `updated` 时间戳规则（含何时不 bump）、拆分改名前后的查漏 SOP、overview 三段制与索引同步、链接与资源引用、反模式。分 §1-§11，可只读单章。
-when_to_use: |
-  按「正在做什么」对号入座，只读对应章节、不整篇加载：
-  1. 把分析 / 审查 / 调研结论落成正式文档，交付给研发、客户或其他角色前 → §11 写作纪律分级 + §11.4 交付前自查（最常漏，优先读）
-  2. 新建任何文档、或拿不准该放哪个目录 → §1 归属矩阵
-  3. 填 / 改 frontmatter、维护 `updated` 时间戳 → §2、§2.7
-  4. 拆分 / 合并 / 重命名 / 删除已有文档 → §8 修改前后查漏 SOP（防落空引用）
-  5. 建或改 overview、改完 status 要同步上级索引 → §3、§4
-  6. 放 demo / 截图 / 临时产物拿不准位置 → §6；写跨文档链接或 current-state 行级锚点 → §5
-  业务 skill（prd-writer / module-init / test-case-design / module-index-refresh / code-to-doc）
-  按前置依赖 `skill: document-norms §X` 只读对应章节。
+description: '写或改任何 markdown 文档（含评审报告 / 实施清单 / 问题清单 / 方案等交付物）时的规范来源——写作质量分级与交付前自查、文档该放哪（归属矩阵）、frontmatter 与 `updated` 时间戳规则（含何时不 bump）、拆分改名前后的查漏 SOP、overview 三段制与索引同步、链接与资源引用、反模式。分 §1-§11，可只读单章。按「正在做什么」对号入座：交付给研发 / 客户 / 其他角色前 → §11 写作纪律分级 + §11.4 交付前自查（最常漏，优先读）；新建文档或拿不准放哪个目录 → §1 归属矩阵；填改 frontmatter 与 `updated` → §2、§2.7；拆分 / 合并 / 重命名 / 删除已有文档 → §8 查漏 SOP（防落空引用）；建改 overview、status 同步上级索引 → §3、§4；demo / 截图 / 临时产物位置 → §6；跨文档链接或 current-state 行级锚点 → §5。业务 skill（prd-writer / module-init / test-case-design / module-index-refresh / code-to-doc）按前置依赖 `skill: document-norms §X` 只读对应章节。'
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Grep, Glob]
 ---
@@ -53,6 +43,8 @@ allowed-tools: [Read, Write, Edit, Grep, Glob]
 
 ## §1 完整文档归属矩阵
 
+**这一层是导航，不是事实源。** `modules/` 下的文档负责让人和模型定位「改这里会炸到哪」；具体事实各有自己的源——受影响的文件集在 `submodule.yaml` 的 `code_paths`，「这份文档基于哪份代码」在 `current-state/` frontmatter 的基准字段（五个落点与刷新口径见 reference: `module-architecture` §5.4，本章不重述），设计理由在 `<sub>/decisions/`。**文档描述与事实源冲突时一律以事实源为准**；下表只回答「每类内容放哪儿」。
+
 ### 1.1 modules/ 体系下治理资产层（projects/）归属
 
 | 内容类型 | 归属路径 | type | 创建 skill |
@@ -79,6 +71,7 @@ allowed-tools: [Read, Write, Edit, Grep, Glob]
 | 子模块调研 | `<sub>/research/<topic>.md` | `research` | 手动 |
 | 子模块杂项 | `<sub>/others/<name>.md` | `concept` | 手动 |
 | 跨模块技术方案 | `projects/specs/plans/<YYYY-MM-DD>-<plan-name>.md` | `plan` | 手动 |
+| **过程档**（执行计划 / 迁移手册 / 跨会话执行跟踪）| 项目根 `tmp/`——与 §6.1 是**同一个目录、不同受众**：那里管资源与中间产物，本行管过程档。**收口即删**，提炼归位按 必载片 §收口时的归位 | — | 手动 |
 | 跨模块设计规范 | `projects/specs/{design-system,api-conventions,compliance}/` | `concept` | 手动 |
 | **单模块**分析产物（指标 / 反馈 / 竞品）| `<sub>/research/{METRICS,FEEDBACK,COMP}-{序号}.md`（研究类归 research/，**不是 others/**——后者是杂项黑洞，见 §10 反模式）| `research` | 对应 PM skill |
 | 跨模块分析产物（指标体系 / 反馈分析 / 竞品分析）| `projects/specs/{METRICS,FEEDBACK,COMP}-{序号}.md` | `research` / `concept` | `product-metrics-design` / `user-feedback-analysis` / `competitive-analysis` |
@@ -113,6 +106,7 @@ allowed-tools: [Read, Write, Edit, Grep, Glob]
 - ❌ PRD 写到 `src/`、代码写到 `projects/`、交付物放 `projects/`
 - ❌ `_draft/` 永远草稿区（立项后必须改建目录）
 - ❌ `others/` 黑洞（≥5 份时拆出新目录）
+- ❌ 把执行计划 / 迁移手册 / 跨会话跟踪文档当 `plan` 落进 `specs/plans/` 长期保留（那一行是**跨模块技术方案**的位置；过程档存 `tmp/`，收口即删）
 
 ---
 
@@ -183,11 +177,18 @@ tags: []
 
 ```yaml
 generator: code-to-doc-skill | manual | dev-paste
-source_repo: https://gitlab.company.com/your-main-repo  # 跨仓时填
+source_repo: ""                                        # 本仓留空；项目内嵌套仓填其项目根相对路径；
+                                                       # 项目外仓填**可脱敏标识**（如 内部仓/项目名），
+                                                       # 别写内部 URL——它是仓的标识不是路径前缀，
+                                                       # 三态语义见 reference/module-architecture.md §4.1
 source_ref: abc123def | branch:main | tag:v2.3.1
-source_paths: [...]                                    # glob 数组，整体范围
+source_paths: [...]                                    # 行内数组；与 code_paths 在 source_repo 所指
+                                                       # 那个仓内的部分同指一组文件，坐标系为该仓相对
 source_exported_at: 2026-05-09T10:00:00                # 跨仓 export 时间
-verifier: dev-reviewer                                 # 谁核对过
+verifier: "抽验 12/34 条 file:line 全部可定位；不含 faithfulness 未逐条回代码"
+                                                       # 这次核对了哪几项、**不含**哪几项——不是核对人；
+                                                       # 随基准一起重写，不保留上一批的旧值，
+                                                       # 口径见 reference/module-architecture.md §5.4
 confidence: high | medium | low
 ```
 
@@ -261,7 +262,7 @@ ac_ref: AC-01                                  # 关联的验收标准 ID（编�
 updated: 2026-05-19T12:51:12+08:00
 ```
 
-框架默认时区 `+08:00`；跨时区项目在 `.claude/rules/local/` 声明覆盖。
+框架默认时区 `+08:00`；跨时区项目在项目自有判据（`AGENTS.md`）里声明覆盖。
 
 **时间戳粒度按场景区分**：
 
@@ -294,7 +295,7 @@ updated: 2026-05-19T12:51:12+08:00
 - 正文**纯链接化**（现有文字原样包 `[[wikilink|原文字]]`，展示文字与语义零变化）→ 视同元数据回填，不更新；但链接化同时新增/改写了句子 → 按正文改动实时 bump
 - 模糊时 → 倾向实时
 
-**反模式**：实时落盘文档写 `T00:00:00`（无法溯源）；归档批次写 `T00:00:00` 但不带时区；用无时区的本地时间。
+**反模式**：实时落盘文档写 `T00:00:00`（无法溯源）；归档批次写 `T00:00:00` 但不带时区；用无时区的本地时间；**凭上下文推移估写时间**（照上一个时间戳「合理递增」、按工作进度编时刻——时间戳是证据链的一部分，估值等于伪造，且极易写出未来时间；一律跑下方命令现取）。
 
 **取实时时间戳**：
 
@@ -401,6 +402,7 @@ overview_level: sub-module
 |---|---|---|
 | `module-init` 创建子模块 / 需求 | 该子模块所在路径所有上级 overview | skill 内显式调用 |
 | 修改 `submodule.yaml.status` / `meta.yaml.status` | 该子模块所在路径所有上级 overview | 手动调 `module-index-refresh` |
+| 修改 `submodule.yaml.last_synced_at` / **`last_synced_ref`** | 该子模块 `<sub>/overview.md` 的 `current-state-summary` 段（「最近同步」行的日期与基准 commit 括注均取自这两个字段）| 手动调 `module-index-refresh`；走 `code-to-doc` 时由它 Step 6 一并触发 |
 | **`code-to-doc` 完成 current-state/ 写入** | 该子模块 `<sub>/overview.md` 的 `current-state-summary` 段（基于 4 个 current-state 文件的 frontmatter + 首段提炼摘要）| `code-to-doc` skill 内显式调用 |
 | 大规模迁移 | 全量递归 | `migrate-to-modules` skill 内 |
 | 用户主动 | 全量或路径限定 | `/core:module-index-refresh` |
@@ -441,13 +443,13 @@ overview_level: sub-module
 
 frontmatter `related:` 数组中使用 wikilink 时必须整体加引号（YAML 语法约束），格式见 §2.1。示例性占位路径（如模板说明文字中的 `<新-req_slug>/overview`）用行内代码书写，**不要**包 `[[ ]]`——否则会被 Obsidian / 链接审计当成真实 wikilink 产生假信号。
 
-### 5.2 引用 framework skill / rule 的方式
+### 5.2 引用 framework skill 的方式
 
 不写物理路径；统一用 name + § anchor：
 
 | ❌ 旧 | ✅ 新 |
 |---|---|
-| "详见 `.claude/rules/workframe/core/document-structure.md`" | "详见 skill: `document-norms` §1" |
+| "详见 `.claude/skills/prd-style/SKILL.md`" | "详见 skill: `prd-style`" |
 | "见 `${CLAUDE_PLUGIN_ROOT}/skills/obsidian-doc-structure/SKILL.md`" | "见 skill: `obsidian-doc-structure`" |
 | "参考 `<插件根>/skills/document-norms/SKILL.md` §3" | "参考 skill: `document-norms` §3" |
 
@@ -480,12 +482,17 @@ current-state/ 下的 `architecture.md` / `api-surface.md` / `data-model.md` / `
 跨仓引用代码（如公司主代码仓库）必须 frontmatter 明确：
 
 ```yaml
-source_repo: https://gitlab.company.com/your-main-repo
+source_repo: 内部仓/项目名                     # **可脱敏标识**，不写内部 URL
 source_ref: tag:v2.3.1                        # 或 branch:main / commit:abc123
 source_exported_at: 2026-05-09T10:00:00
 ```
 
 正文 source path 仍写仓内相对路径（不写绝对 URL）；用户结合 frontmatter 的 source_repo + ref 可定位。
+
+`source_repo` **是仓的标识、不是路径前缀**，且内部仓 URL 本身可能敏感——项目外的仓一律填
+可脱敏标识。机器定位不到该仓时，覆盖率对账与基准精判会整条跳过并报 info（这是正确行为：
+本地没有那个仓的文件视野，硬对账只会报出「缺掉全部文件」的假红）。三态完整语义见
+`reference/module-architecture.md` §4.1。
 
 ---
 
@@ -501,7 +508,7 @@ source_exported_at: 2026-05-09T10:00:00
 | PRD / spec 配图 | 同子需求目录下 `assets/` 子目录 | 跟子需求走 |
 | 全局共享配图 | `projects/specs/{design-system,api-conventions,plans}/assets/` | 跨需求复用 |
 | 临时文件 | `<sub>/others/tmp/` 或项目根 `.tmp/` | `.gitignore` 排除 |
-| **项目根 `tmp/`** | 项目根 `tmp/`（骨架产物，`.gitignore` 必含此条，doctor 会查） | 跨模块的加工区：HTML demo 就地迭代、待归档资产暂存、脚本中间产物。**任务结束即清理**，不是长期存放点；要留下来的产物按上面几行迁到正式落点 |
+| **项目根 `tmp/`** | 项目根 `tmp/`（骨架产物，`.gitignore` 必含此条，doctor 会查） | 跨模块的加工区：HTML demo 就地迭代、待归档资产暂存、脚本中间产物。**任务结束即清理**，不是长期存放点；要留下来的产物按上面几行迁到正式落点。**过程档**（执行计划 / 迁移手册 / 跨会话执行跟踪）也放这个目录，归属口径在 §1.1——本行管资源与中间产物，那行管过程档 |
 | 截图临时区 | `tmp/screenshots/<task_id>/` | screenshot skill 默认输出；调用方自清（详见 §6.2） |
 
 ### 6.2 prototypes 子目录约定
@@ -543,7 +550,6 @@ prototypes/
 - frontmatter `updated` 时间刷新
 - broken link 修复
 - formatter / linter 自动整理
-- rules 同步（`sync-rules.py`）
 
 ### 7.2 实质性产出操作（计入 librarian / metrics 统计）
 
@@ -590,7 +596,7 @@ Step 1: 上级 overview 同步
 
 Step 2: 反向索引同步
   - 改 submodule.yaml.code_paths → PostToolUse 自动重建（无需手动）
-  - 损坏报警时手动跑 `python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/check-stale-modules.py" rebuild-index` 全量重建
+  - 损坏报警时手动跑 `python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" rebuild-index` 全量重建
 
 Step 3: L2 broken link 检查
   - 大改文件名/路径 → 调 `obsidian-link-audit` 全仓 broken-link 扫描
@@ -607,7 +613,7 @@ Step 4: frontmatter updated
 
 ```bash
 # Step 1：grep 全仓引用
-grep -rln "<file-or-keyword>" .claude/ projects/ company-context/ my-workspace/
+grep -rln "<file-or-keyword>" .claude/ .workframe/ projects/ company-context/ my-workspace/
 
 # Step 2：审查结果
 # - 0 引用 → 安全删除/重命名
@@ -660,6 +666,7 @@ CLI 不可用时全部 fallback 到 `Read` / `Grep` / `Edit` 直接操作，本 
 - ❌ 在新方案里保留顶层 `docs/` 目录
 - ❌ `_draft/` 滥用为永远草稿区（立项后必须改建目录）
 - ❌ `others/` 变成黑洞（≥5 份时拆出新目录）
+- ❌ 把执行计划 / 迁移手册 / 跨会话跟踪文档当 `plan` 落进 `specs/plans/` 长期保留（过程档存 `tmp/`，收口即删）
 
 ### 10.2 引用与路径反模式（完整口径见 §5）
 
@@ -690,7 +697,7 @@ CLI 不可用时全部 fallback 到 `Read` / `Grep` / `Edit` 直接操作，本 
 
 - ❌ 业务方整读 document-norms 全文（应只读对应 § anchor）
 - ❌ 业务 skill 不声明 `前置：document-norms §X §Y`（漏触发降低产出合规率）
-- ❌ 用 hook 校验 + 自动修复实现文档规范的"100% 触发"（设计决策保持极简：skill 提供规范，CLAUDE.md / 项目 `.claude/rules/local/` 提供触发指针，不做强校验与自动改写）
+- ❌ 用 hook 校验 + 自动修复实现文档规范的"100% 触发"（设计决策保持极简：skill 提供规范，必载注入片提供触发指针，不做强校验与自动改写）
 
 ### 10.7 删除/重命名反模式（完整口径见 §8.3）
 
@@ -702,7 +709,7 @@ CLI 不可用时全部 fallback 到 `Read` / `Grep` / `Edit` 直接操作，本 
 
 ## §11 写作质量与精简纪律分级
 
-> 纪律标准原文 = skill: `prd-writer` 的 `writing-guide.md`（精简表达 / 段落组织），单一来源不复制；本节管「哪类文档适用到什么程度」与交付前自查。项目可在 `.claude/rules/local/` 细化分级边界。
+> 纪律标准原文 = skill: `prd-writer` 的 `writing-guide.md`（精简表达 / 段落组织），单一来源不复制；本节管「哪类文档适用到什么程度」与交付前自查。项目可在自有判据（`AGENTS.md`）里细化分级边界。
 
 ### 11.1 分级适用矩阵
 

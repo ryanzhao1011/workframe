@@ -2,7 +2,7 @@
 type: prd
 status: draft
 owner_role: pm
-updated: {{NOW_ISO}}
+updated: "{{NOW_ISO}}"
 module: "{{MODULE_PATH}}"
 req_slug: "{{REQ_SLUG}}"
 sub_req_slug: "{{SUB_REQ_SLUG}}"
@@ -40,7 +40,7 @@ tags: []
 
 ## 三、需求路径（V1；无 UI 界面的需求删除本章）
 
-<!-- 平台枚举与命名见项目 `.claude/skills/prd-style/SKILL.md` §6 本项目补充口径。 -->
+<!-- 平台枚举与命名见项目 skills 目录下的 `prd-style/SKILL.md` §6 本项目补充口径；该目录按存在性解析，两个候选都要认：`.agents/skills/prd-style/SKILL.md`（新建项目的真实源，`.claude/skills` 只是链接）或 `.claude/skills/prd-style/SKILL.md`（已装项目的真目录）。 -->
 
 - {平台/系统} > {一级菜单} > {页面/弹窗} > {本次动作}
 - 权限控制：{需要（配置项与开放范围）/ 不需要（一句说明）}

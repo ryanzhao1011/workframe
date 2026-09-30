@@ -11,12 +11,12 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 
 ### 阶段 1：数据收集 + 已应用提案闭环验证
 
-**(a) 数据源收集**（主要在 `.claude/workframe-state/`（另含 `.claude/agent-memory/` 与 `projects/` 下若干路径，见下表） 下，由 hook / deterministic scripts / system skills 维护）：
-- `.claude/workframe-state/skill-metrics.yaml` — 技能/规则使用汇总（由 `recompute_skill_metrics.py` 从 events.jsonl 重算）
-- `.claude/workframe-state/events.jsonl` — 原始事件流（审计/追因时读，日常决策读 metrics 即可）
-- `.claude/workframe-state/activity-state.json` — 活跃度 + dormant 状态 + **`pending_maintenance`（status=open）**；若 `dormant=true` 或 `wake_up_pending=true` 则本次自迭代直接退出（除非由 `/core:maintenance-review` 显式触发）。`pending_maintenance` 里的 kind/details 是本次识别模式的重要线索，应与 notes/events 证据一起纳入阶段 2 分析。
-- `.claude/agent-memory/*/notes.md` — 各角色微反思
-- `.claude/agent-memory/shared/MEMORY.md` 和 `shared/notes.md` — 跨角色共识
+**(a) 数据源收集**（主要在 `.workframe/state/`（另含 `.workframe/agent-memory/` 与 `projects/` 下若干路径，见下表） 下，由 hook / deterministic scripts / system skills 维护）：
+- `.workframe/state/skill-metrics.yaml` — 技能/规则使用汇总（由 `recompute_skill_metrics.py` 从 events.jsonl 重算）
+- `.workframe/state/events.jsonl` — 原始事件流（审计/追因时读，日常决策读 metrics 即可）
+- `.workframe/state/activity-state.json` — 活跃度 + dormant 状态 + **`pending_maintenance`（status=open）**；若 `dormant=true` 或 `wake_up_pending=true` 则本次自迭代直接退出（除非由 `/core:maintenance-review` 显式触发）。`pending_maintenance` 里的 kind/details 是本次识别模式的重要线索，应与 notes/events 证据一起纳入阶段 2 分析。
+- `.workframe/agent-memory/*/notes.md` — 各角色微反思
+- `.workframe/agent-memory/shared/MEMORY.md` 和 `shared/notes.md` — 跨角色共识
 - `projects/changelog.md` — 历史操作日志
 - `projects/issues/` — 历史问题记录（若有结构化文件）
 
@@ -35,6 +35,9 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 - **未覆盖场景**：仅当 notes / changelog 中有明确的"用户重复手工处理"记录时方可使用；**不得无证据臆造"手工处理"场景**。
 - **技能低成功率**：近 30 天某 skill `success/invocations < 0.6`（来自 skill-metrics.yaml）。**仅供人工判读，不作自动触发信号**（`success` 为 agent 自评，实测从未产出 false，作触发条件永不满足）——用它时须结合 notes / user_correction 等独立证据，不得仅凭该比值提案。
 - **提案失败回路**：有 `proposal_failed` 事件的旧提案 → 反思当初假设，识别失败原因。
+
+> **跨门计数前必须先说数据来源**（v3 起）：读 `skill-metrics.yaml` 的 `harness_breakdown` 段，在任何按事件计数的判断之前写一行「cc N 条 / codex M 条 / unknown K 条 / unstamped L 条；跨门缺口 <cross_door_gaps.codex>；两侧皆无 <neither_door>（**后者不算跨门缺口**，混进去会把缺口数读大）；判 full 但投递未确立 <full_but_delivery_unverified.codex>（这类的零计数同样可能是结构性的——先怀疑投递、再怀疑模型）」。**照抄那一段，别在这里另记一份缺口清单**——清单一变，副本立刻成为假话。
+> 为什么这条压着模式识别：本阶段的四类信号全是**按事件计数**得出的，而一类事件为零可能是「真的没发生」，也可能是「那扇门根本产不出它」。`turn_failed` 在 Codex 侧恒为 0（无 `StopFailure` 对等 hook）⇒ `check-iteration-trigger.py` 的加权积分里**问题信号被系统性低估**；Codex 的 `PostToolUse` 对失败的工具调用不触发，两者同向叠加。这是已知的产品决策，**本 skill 只披露、不替代信号**——不得因为 codex 侧数小就断言「那边问题少」。
 
 > "规则盲区"不作信号：CC 没有 rule 触发回调，`rule_triggered` 事件不可 deterministic 捕获（见 `.workframe-meta/event-schema.json`）。如怀疑某条 rule 定义不当，改由人工 review / `/core:audit` 主观判断，不作为自迭代自动信号。
 
@@ -55,16 +58,18 @@ user_confirmed：用户显式确认过（如 [纠正] 标记 / 直接反馈）= 
 ```
 
 **处置阈值**：
-- `confidence < 0.5` → 只记 `.claude/agent-memory/shared/notes.md`，**不生成提案**
+- `confidence < 0.5` → 只记 `.workframe/agent-memory/shared/notes.md`，**不生成提案**
 - `0.5 ≤ confidence < 0.8` → 生成提案，进入阶段 3，需用户明确批准（L2 全部走这条）
 - `confidence ≥ 0.8` → 生成提案，建议用户快速确认后执行（L1 可走这条，L2 仍需明确批准）
-- **Core 文件变更**（`plugins/core/**`、本仓库 `.claude/rules/**` 以外的系统定义资产）一律 **L2 + eval 覆盖**，阈值不降级
+- **Core 文件变更**（`plugins/core/**`，以及项目侧 `AGENTS.md` / 项目 skills（`.claude/skills/**`、`.agents/skills/**`）这类系统定义资产）一律 **L2 + eval 覆盖**，阈值不降级
 
 ### 阶段 3：多候选提案生成
 
 每个通过阈值的模式生成**一份提案文件**，内含 **2-3 个候选方案**，按 `score = impact_int × confidence - risk_penalty` 降序排列：
 - `impact_int`：`low=1 / medium=2 / high=3`
 - `risk_penalty`：`low=0.25 / medium=0.5 / high=0.75`
+
+> **凑候选时先看一眼 `new_gate`**：这个模式能不能用一道机器闸（断言 / 校验 / hook）盖掉？能就把它列进候选——纪律要靠模型每次记得住才生效，闸不用。落点分层判据见 skill: `librarian` §2b。
 
 ```yaml
 # projects/proposals/pending/PROP-{YYYYMMDD}-{序号}.yaml
@@ -85,7 +90,7 @@ proposal:
   candidates:
     - option: "A"
       proposed_change:
-        type: "new_rule | update_rule | new_skill | update_skill | process_change"
+        type: "new_gate | new_rule | update_rule | new_skill | update_skill | process_change"
         targets: ["目标文件路径"]   # 数组；多文件 L2 变更时列出全部
         description: "具体改进措施"
       impact: "medium"          # low / medium / high
@@ -121,29 +126,35 @@ proposal:
 
 **L1 / L2 判定标准**：
 - 仅涉及 `notes.md` / `MEMORY.md` / `projects/proposals/` / `projects/changelog.md` 的变更 → **L1**
-- 任何触及以下文件的变更一律 **L2**：`CLAUDE.md` / `.claude/agents/**` / `.claude/rules/**`（含 `local/` 与 `workframe/core/` 两层）/ `.claude/skills/**` / `.claude/settings*.json` / `.workframe-config.json` / `plugins/core/**`
+- 任何触及以下文件的变更一律 **L2**：`CLAUDE.md` / `AGENTS.md` / `.claude/agents/**` / `.claude/skills/**` / `.agents/skills/**` / `.claude/settings*.json` / `.workframe-config.json` / `plugins/core/**`（含框架的注入源 `context/**`）
 - **MEMORY 冲突 / `[纠正]` 条目冲突** → 强制 L2（不管其他条件）
 
-> **入口分流提示**：`.claude/rules/local/**` 也有"用户显式确认"入口（见 `correction-detection.md` §入口分流），与本 skill 的 L2 提案路径**互不冲突**——前者由用户在纠正回显时直接落盘，后者由 self-iteration 自动提案审批。本 skill 自动提议时一律走 L2，不直接写。
+- **触及框架注入源 `context/` 任一片 = L2，且提案必须带打包器 dry-run 的**前后余量**。必载层是**零和**的：一条提案可能悄悄把别的内容挤出上限，而挤出去的那部分**不会报错**
+
+> **入口分流提示**：项目自有判据（`AGENTS.md` 的判据段 + 项目 skill）也有"用户显式确认"入口（用户纠正被判为通用规则时的那条），与本 skill 的 L2 提案路径**互不冲突**——前者由用户在纠正回显时直接落盘，后者由 self-iteration 自动提案审批。本 skill 自动提议时一律走 L2，不直接写。
 
 **若阶段 2/3 结束后无任何提案生成**（所有候选模式 confidence < 0.5）：
 
-1. 在 `.claude/agent-memory/shared/notes.md` 补记本次自迭代无提案原因（简短，≤ 2 行）
+1. 在 `.workframe/agent-memory/shared/notes.md` 补记本次自迭代无提案原因（简短，≤ 2 行）
 2. 关闭所有触发本次自迭代的 open 条目——**用代码通道**，它会连同 `reason` 一起写
-   `pending_maintenance_dismissed` 事件（条目 7 天后被 GC 清掉，没有事件就查不到
+   `pending_maintenance_dismissed` 事件（条目会被 SessionStart 定期 GC 清掉，保留天数
+   见 `session-start-prep.py` 的 `PM_CLOSED_RETENTION_DAYS`；没有事件就查不到
    「它当时为什么关的」）：
 
    ```bash
-   python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/maintenance_workorder.py" \
+   python "$(cat .workframe/state/plugin-root.txt)/scripts/maintenance_workorder.py" \
        --close-pm <PM-ID> [<PM-ID> ...] --reason self_iteration_no_proposal
    ```
 
    待关闭条目的 kind 为 `cadence_timeout` / `problem_threshold` / `activity_threshold` /
-   `memory_backlog` / `completed_delta` 之一——与 `check-iteration-trigger.py` 实际写入的
-   kind 集合一致；`skill_low_success` 已移除，存量条目一并关闭。
-3. 退出，不进入阶段 4（迭代日期由 `check-iteration-trigger.py` 从 proposals/ 的
-   `applied_at` / `rejected_at` 派生，无提案时日期自然不前移；同 kind 信号由
-   pending_maintenance 的 dedup upsert 保证只保留一条 open 条目，不会重复堆积）
+   `memory_backlog` / `completed_delta` / `close_check_due` 之一——与
+   `check-iteration-trigger.py` 实际写入的 kind 集合一致；`skill_low_success` 已移除，
+   存量条目一并关闭。
+3. 退出，不进入阶段 4。**让这批信号安静下来的是第 2 步，不是迭代日期**：无提案时
+   proposals 派生的日期本来就不前移（`derive_last_iteration_date()` 只读 `applied_at` /
+   `rejected_at`），真正生效的是第 2 步给每个 kind 装上的驳回基线。反过来说，
+   **第 2 步漏关的条目会原样重开**——dedup upsert 只对 `status=open` 的条目去重，
+   closed 条目不参与，同一个 kind 会以新 ID 再冒出来。
 
 ### 阶段 4：用户审批
 
@@ -175,7 +186,7 @@ Verify by: 2026-05-08 | Signal: 同主题 user_correction = 0 且 memory_promote
    - 用 Bash 创建 versions/ 目录，每个 target basename 最多保留 3 个备份，删除最旧的同 target 备份
    - 多 target 时：所有备份失败任一即整批回退，不执行后续步骤
 2. **eval 门禁**（若 `eval_cases_required=true`）：
-   - 遍历提案的 `eval_cases` 路径列表，确认每个路径存在，且至少覆盖：core rule ≥2 正 +1 负；core skill 1 成功 +1 失败；agent 路由 ≥3 样例
+   - 遍历提案的 `eval_cases` 路径列表，确认每个路径存在，且至少覆盖：必载片 ≥2 正 +1 负；core skill 1 成功 +1 失败；agent 路由 ≥3 样例
    - 未满足则拒绝执行，回退到阶段 4 提示用户补 case
 3. **执行变更**：按选中的候选 `proposed_change.description` 修改目标文件
 4. **记录 changelog / MEMORY / board tracking**：
@@ -204,7 +215,7 @@ Verify by: 2026-05-08 | Signal: 同主题 user_correction = 0 且 memory_promote
    ```json
    {"ts":"<ISO-8601>","type":"proposal_applied","proposal_id":"<id>","change_target":"<targets[0]>","applied_option":"<A|B|C>"}
    ```
-7. **写 rollback-index entry**（一条 entry 涵盖**用户选定候选**的所有 target，**不含**未执行候选的 target）：向 `.claude/workframe-state/rollback-index.json` 的 `entries` 数组追加：
+7. **写 rollback-index entry**（一条 entry 涵盖**用户选定候选**的所有 target，**不含**未执行候选的 target）：向 `.workframe/state/rollback-index.json` 的 `entries` 数组追加：
    ```json
    {"id":"RB-<YYYYMMDD-NNN>","proposal_id":"<id>","targets":["<target1>","<target2>"],"backups":["<backup1>","<backup2>"],"applied_at":"<ISO-8601>","applied_option":"<A|B|C>"}
    ```
@@ -216,11 +227,21 @@ Verify by: 2026-05-08 | Signal: 同主题 user_correction = 0 且 memory_promote
    session_counter / drift 历史等攒出来的状态，整份重写漏字段不报错只丢历史）：
 
    ```bash
-   python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/maintenance_workorder.py" \
+   python "$(cat .workframe/state/plugin-root.txt)/scripts/maintenance_workorder.py" \
        --close-pm <PM-ID> [<PM-ID> ...]
    ```
 
    该命令一并写 `pending_maintenance_dismissed` 事件，无需再手写事件行。
+
+   > 这一步不只是清提醒：关掉一条会把**该 kind** 的计分起点推进到本次 `closed_at`，
+   > 此后只算更晚发生的证据（`problem` / `activity` 只认更晚的事件，`close_check_due`
+   > 只认驳回之后新打上的 stale 标记，`cadence` 从驳回那天重新计时**或从更晚的那次迭代
+   > 起算**，`completed_delta` 只数驳回之后完成的任务；`memory_backlog` 没有可比的
+   > 证据时间点，改为静默一个保留期后重报）。
+   > 按 kind 各管各的，关一条不影响其余。
+   > 所以只关**本次自迭代真的覆盖到**的那些条目——把没处理的信号一并关掉，等于宣称
+   > 它们对应的证据也已闭环，那批证据会就此从计分里消失。
+
 **若所有候选均被拒绝**：
 
 1. 提案文件从 `proposals/pending/` 移至 `proposals/rejected/`（用 Bash mv）

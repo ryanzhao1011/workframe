@@ -1,10 +1,10 @@
 # Role Profile 目录
 
-`role_profile` 决定 baseline 4 角色（pm / dev / qa / prompt-eng）在该项目里的**默认路由优先级**。本目录为 `project_scaffold.py` 的 `extract_role_profile_routing()` 抽取路由偏好文本、注入 `CLAUDE.md` 的 `{{ROLE_PROFILE_ROUTING}}` 占位符所用。
+`role_profile` 决定 baseline 4 角色（pm / dev / qa / prompt-eng）在该项目里的**默认路由优先级**。本目录为 `project_scaffold.py` 的 `extract_role_profile_routing()` 抽取路由偏好文本、注入 `AGENTS.md` 的 `{{ROLE_PROFILE_ROUTING}}` 占位符所用。
 
 ## 设计约束
 
-- **软提示，非硬约束**：profile 只影响 `CLAUDE.md` 的"路由偏好"段，**不**禁用任何 core agent；用户始终可 `@角色名` 直接调用
+- **软提示，非硬约束**：profile 只影响 `AGENTS.md` 的"路由偏好"段，**不**禁用任何 core agent；用户始终可 `@角色名` 直接调用
 - **不影响运行期**：`role_profile` 不写入 `activity-state.json`，是项目配置不是运行期状态
 - **不生成附加产物**：profile 不自动生成项目级 skill / rule / 业务目录 / 起手任务
 - **可选字段**：`.workframe-config.json` 中 `role_profile` 由 launcher 在创建对话中推断写入；接入已有项目时可缺省
@@ -43,7 +43,7 @@
 |---|---|---|
 | pm / dev / qa | prompt-eng | — |
 
-**CLAUDE.md 路由偏好渲染文本**：
+**AGENTS.md 路由偏好渲染文本**：
 
 ```markdown
 ## 路由偏好（profile: software-team）
@@ -68,7 +68,7 @@
 |---|---|---|
 | pm | dev / qa | prompt-eng |
 
-**CLAUDE.md 路由偏好渲染文本**：
+**AGENTS.md 路由偏好渲染文本**：
 
 ```markdown
 ## 路由偏好（profile: solo-pm）
@@ -94,7 +94,7 @@
 |---|---|---|
 | prompt-eng / pm / dev | qa | — |
 
-**CLAUDE.md 路由偏好渲染文本**：
+**AGENTS.md 路由偏好渲染文本**：
 
 ```markdown
 ## 路由偏好（profile: ai-product）
@@ -115,11 +115,11 @@
 
 ## 渲染契约
 
-`project_scaffold.py` 的 `extract_role_profile_routing()` 在渲染 `CLAUDE.md` 时：
+`project_scaffold.py` 的 `extract_role_profile_routing()` 在渲染 `AGENTS.md` 时：
 
 1. 按选定的 profile 定位本文件对应的 `### <profile>` 章节
-2. 抽取该章节的「CLAUDE.md 路由偏好渲染文本」代码块（去掉外层 `markdown` 围栏）
-3. 注入到 `claude-md-template.md` 的 `{{ROLE_PROFILE_ROUTING}}` 占位符位置
+2. 抽取该章节的「AGENTS.md 路由偏好渲染文本」代码块（去掉外层 `markdown` 围栏）
+3. 注入到 `agents-md-template.md` 的 `{{ROLE_PROFILE_ROUTING}}` 占位符位置
 
 抽取由脚本确定性完成、不经模型转述；profile 名在本文件里找不到时直接报错，不静默降级。
 
@@ -136,7 +136,7 @@
 
 profile 只是路由**软偏好**，**不限制**项目级 override 行为：
 
-- 用户可在项目本地 `.claude/agents/<role>.md` 全量 override 任何 core agent，profile 不会"反向干预"
+- 用户可在项目本地 `.claude/agents/<role>.md` 放任何 core agent 的同名自定义版（与 `core:<role>` 并存、不是覆盖，见 `role-customization-guide.md` §何时 override 现有角色），profile 不会"反向干预"
 - 用户可新增项目级角色（如 `content-operator`），路由偏好段会建议"优先项目级"，但不影响主 Claude 在用户明确 `@xxx` 时直接路由
 - profile 的"几乎不用"标记是**默认路由暗示**，不阻止任何用户主动调用
 

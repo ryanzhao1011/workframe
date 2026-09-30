@@ -6,7 +6,7 @@ status: active                          # planning | active | done | dropped
 # ↑ 这是 **yaml 实体**的词表，与同目录 overview.md 的 markdown status（planning/draft/
 #   in_progress/...）是两套独立枚举，见 document-norms §2.2。出厂值不同不是笔误：
 #   yaml 讲模块生命周期（在用），overview 讲文档成熟度（刚建的空骨架）。
-owner: {{OWNER_ROLE}}
+owner: "{{OWNER_ROLE}}"
 domain_tags: []                         # 领域标签，可选
 created_at: "{{TODAY}}"
 related_basic_modules: []               # 跨基础模块的依赖声明（不强校验）

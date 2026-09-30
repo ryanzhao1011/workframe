@@ -1,0 +1,158 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/heartbeat-check.py\" --harness codex --output hook-json",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/heartbeat-check.py\" --harness codex --output hook-json",
+            "additionalContextLimit": 0
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start-prep.py\" --harness codex --output hook-json",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start-prep.py\" --harness codex --output hook-json",
+            "additionalContextLimit": 0
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-context.py\" --harness codex --scope main --shard all",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-context.py\" --harness codex --scope main --shard all",
+            "additionalContextLimit": 0
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-stale-modules.py\" scan-git-diff --harness codex",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-stale-modules.py\" scan-git-diff --harness codex",
+            "additionalContextLimit": 0
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/memory-ask.py\" --harness codex",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/memory-ask.py\" --harness codex",
+            "additionalContextLimit": 0
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/codex-trust-seed.py\" --harness codex",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/codex-trust-seed.py\" --harness codex",
+            "additionalContextLimit": 0
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/user-prompt-inject.py\" --harness codex",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/user-prompt-inject.py\" --harness codex",
+            "additionalContextLimit": 0
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-context.py\" --harness codex --scope prompt",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-context.py\" --harness codex --scope prompt",
+            "additionalContextLimit": 0
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-stale-modules.py\" --harness codex",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-stale-modules.py\" --harness codex"
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/signoff-guard.py\" --harness codex",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/signoff-guard.py\" --harness codex"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/signoff-guard.py\" --harness codex",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/signoff-guard.py\" --harness codex"
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-skill-invoked.py\" --harness codex",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-skill-invoked.py\" --harness codex"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-iteration-trigger.py\" --harness codex",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-iteration-trigger.py\" --harness codex"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/subagent-memory-inject.py\" --harness codex",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/subagent-memory-inject.py\" --harness codex",
+            "additionalContextLimit": 0
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-context.py\" --harness codex --scope sub --shard all",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-context.py\" --harness codex --scope sub --shard all",
+            "additionalContextLimit": 0
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-subagent-activity.py\" --harness codex",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-subagent-activity.py\" --harness codex"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end-flush.py\" --harness codex",
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end-flush.py\" --harness codex"
+          }
+        ]
+      }
+    ]
+  }
+}

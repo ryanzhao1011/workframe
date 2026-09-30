@@ -28,11 +28,15 @@ except Exception:
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
-from _state_io import load_activity, save_activity as _save_activity  # noqa: E402
+import _harness  # noqa: E402
+from _harness import project_dir as _project_dir  # noqa: E402
+from _state_io import (  # noqa: E402
+    load_activity, save_activity as _save_activity, state_dir_of,
+)
 
 
-PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
-STATE_DIR = PROJECT_DIR / ".claude" / "workframe-state"
+PROJECT_DIR = _project_dir()
+STATE_DIR = state_dir_of(PROJECT_DIR)
 ACTIVITY_FILE = STATE_DIR / "activity-state.json"
 
 # critical 是**预留档**：当前 producer（check-iteration-trigger）只写 info / warn，
@@ -75,6 +79,9 @@ def format_pending_items(items):
 
 
 def main():
+    # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
+    if _harness.hook_outside_project():
+        return 0
     state = load_state()
     # dormant 或 wake_up_pending 都不注入（首次唤醒会话用户只看 wake-up 摘要）
     if state.get("dormant") or state.get("wake_up_pending"):

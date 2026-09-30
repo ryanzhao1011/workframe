@@ -1,10 +1,6 @@
 ---
 name: html-demo
-description: 仿真型 HTML 交互 demo 生成：按用户截图复刻真实界面，产出自包含、全状态可达（带模拟开关）的可交互单文件 demo，落 tmp/ 就地多轮迭代；拍板后归档 prototypes/ 并衔接 prd-writer「demo 先行变体」写 PRD。
-when_to_use: |
-  用户说「出个 demo / 做个 demo / 交互方案 / UI 方案 / 交互样式 / 页面方案 / HTML 原型」时；
-  写 PRD 前要先用可交互原型对齐交互细节时（demo 先行工作流）。
-  边界：只要静态图 → screenshot；要落正式需求文档 → prd-writer。
+description: '仿真型 HTML 交互 demo 生成：按用户截图复刻真实界面，产出自包含、全状态可达（带模拟开关）的可交互单文件 demo，落 tmp/ 就地多轮迭代；拍板后归档 prototypes/ 并衔接 prd-writer「demo 先行变体」写 PRD。用于写 PRD 前先用可交互原型对齐交互细节（demo 先行工作流）。典型触发：「出个 demo / 做个 demo / 交互方案 / UI 方案 / 交互样式 / 页面方案 / HTML 原型」。边界：只要静态图 → screenshot；要落正式需求文档 → prd-writer。'
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 ---

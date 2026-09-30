@@ -10,3 +10,4 @@ system_skills:
   - memory-log             # /core:memory-log 记忆活动流水
   - maintenance-review     # /core:maintenance-review dormant 唤醒入口
   - onboard                # /core:onboard 一次性可选配置引导（默认 skip）
+  - signal-intake          # 信号入账的落盘工序（由主会话必载片点名调起）

@@ -1,12 +1,6 @@
 ---
 name: prd-style
-description: 本项目的 PRD 框架与写作风格——工序形态 / 章节结构 / 各章写法 / 范式表 / 标注习惯的唯一事实源。写改 PRD（core prd-writer 工作流）时自动叠加加载；与 core 通用写作纪律冲突时以本文件为准（机器契约除外）。
-when_to_use: |
-  写或改 prd.md 时（core prd-writer 前置依赖自动读取；不走完整 prd-writer 流程的 PRD 小改也应加载）；
-  确认本项目 PRD 的章节结构 / 工序形态 / 标注习惯时；建立或调整本项目 PRD 风格时。
-  通用写作纪律在 core `prd-writer/writing-guide.md`，图件 / 原型能力库在 core
-  `prd-writer/{diagram-guide,html-prototype}.md`；本文件管本项目的框架与风格，
-  冲突时以本文件为准（机器契约 §0 除外）。
+description: '本项目的 PRD 框架与写作风格——工序形态 / 章节结构 / 各章写法 / 范式表 / 标注习惯的唯一事实源。写改 PRD（core prd-writer 工作流）时自动叠加加载；与 core 通用写作纪律冲突时以本文件为准（机器契约除外）。用于写或改 prd.md 时（core prd-writer 前置依赖自动读取；不走完整 prd-writer 流程的 PRD 小改也应加载）、确认本项目 PRD 的章节结构 / 工序形态 / 标注习惯时、建立或调整本项目 PRD 风格时。通用写作纪律在 core `prd-writer/writing-guide.md`，图件 / 原型能力库在 core `prd-writer/{diagram-guide,html-prototype}.md`；本文件管本项目的框架与风格，冲突时以本文件为准（机器契约 §0 除外）。'
 ---
 
 # {{PROJECT_NAME}} · PRD 框架
@@ -14,7 +8,7 @@ when_to_use: |
 > **这份文件属于你的项目**：装机时由框架放入（出厂默认版），之后框架**不再覆盖**。
 > 想让 PRD 长成你习惯的样子——章节怎么排、要不要流程图、用不用原型——直接改这份文件，
 > 下一次写需求即生效。改坏了想回默认：从框架模板重新复制一份即可——
-> `$(cat .claude/workframe-state/plugin-root.txt)/templates/project-skills/prd-style/SKILL.md`。
+> `$(cat .workframe/state/plugin-root.txt)/templates/project-skills/prd-style/SKILL.md`。
 >
 > 与 core 的分工：core `prd-writer` 管**工作流骨架与通用写作纪律**（怎么协作、怎么写得清楚），
 > 本文件管**本项目的框架与风格**（写成什么样）。两边冲突时**以本文件为准**，但下方

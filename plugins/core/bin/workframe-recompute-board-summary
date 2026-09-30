@@ -7,6 +7,12 @@ board summary 手工兜底入口 — 调用 plugins/core/scripts/recompute_board
 
 用法（在 Claude Code 项目内任意位置）：
     workframe-recompute-board-summary
+    workframe-recompute-board-summary --harness cc   # 知道自己在哪扇门时带上
+
+`--harness` 不传时，写出的 summary_recomputed 事件带 `harness: "unknown"`——**不是省略、
+也不猜 cc**。省略在 event-schema 里等于宣称 cc（存量兼容口径），而这条命令是用户手跑的、
+两扇门都可能；猜错一次就是一条静默错归门的事件。口径全文见 event-schema.json 的
+`harness_field` PARTITION 段。
 
 返回 JSON：
     {"status": "ok", "total": ..., "counts": {...}}

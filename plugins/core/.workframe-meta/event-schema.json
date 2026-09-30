@@ -1,16 +1,36 @@
 {
- "__schema_version__": "workframe.event-schema.v2",
- "__doc__": "Event registry for .claude/workframe-state/events.jsonl. Single source of truth for event type names, reliability tiers, producers, and consumers. Workframe-private — not a Claude Code official file. TS FORMAT (binding on every producer): UTC with second precision — datetime.now(timezone.utc).isoformat(timespec='seconds'), e.g. 2026-08-16T07:24:04+00:00. Consumers sort and window-filter events by raw string comparison, so a single file must not mix timezones or precisions; on 2026-08-16 four variants coexisted (local/UTC x sec/microsec) with the same event type appearing in three of them, which silently mis-orders anything compared as text.",
+ "__schema_version__": "workframe.event-schema.v3",
+ "__doc__": "Event registry for .workframe/state/events.jsonl. Single source of truth for event type names, reliability tiers, producers, and consumers. Workframe-private — not a Claude Code official file. TS FORMAT (binding on every producer): UTC with second precision — datetime.now(timezone.utc).isoformat(timespec='seconds'), e.g. 2026-08-16T07:24:04+00:00. Consumers sort and window-filter events by raw string comparison, so a single file must not mix timezones or precisions; on 2026-08-16 four variants coexisted (local/UTC x sec/microsec) with the same event type appearing in three of them, which silently mis-orders anything compared as text.",
  "reliability_tiers": {
   "hook_deterministic": "Produced by Python hook scripts (SessionStart / Stop / SubagentStop / SessionEnd). Capture is guaranteed by the Claude Code runtime as long as the hook is registered and not externally killed. Safe to use as core triggering logic and state transitions.",
-  "protocol_expected": "Produced by an explicit agent-facing protocol or core rule instruction — for example agent-protocols.md Step 1 or correction-detection.md. Useful signal but NOT guaranteed: the model may skip the write (under context pressure), duplicate it (re-running the protocol), or misattribute it. Use as corroborating signal, not single-source-of-truth.",
+  "protocol_expected": "Produced by an explicit agent-facing protocol instruction in an injected discipline shard — for example the event-stream step of the common protocol shard, or the correction handling in the main-session signal-intake shard. Useful signal but NOT guaranteed: the model may skip the write (under context pressure), duplicate it (re-running the protocol), or misattribute it. Use as corroborating signal, not single-source-of-truth.",
   "model_mediated": "Produced by a skill body or an agent reasoning step (no protocol-level enforcement). Capture depends entirely on Claude following the relevant SKILL.md instruction. Use only for audit / corroboration; do NOT base core triggering logic on these counts.",
   "removed_v0_2_1": "Event name was defined in v0.2.0 but cannot be reliably captured (e.g., rules have no trigger callback). Removed from producers and triggering logic; schema stub retained only for historical compatibility."
+ },
+ "harness_field": "OPTIONAL field on every event line: harness = cc | codex | unknown, i.e. which door produced the line. ABSENT means a legacy line written before v3; consumers read it as cc. The value unknown is written EXPLICITLY when the producer was not told which door it runs in — never omit the field to mean that, because omission already means cc. Hook producers get the value from the --harness <door> argument that the hook table puts on every command (each door has its own table, and each table writes its own door): a command-line argument, NOT environment detection — CLAUDE_* leaks into a nested `codex exec` and would make detection confidently wrong. Model-hand-written events get it from the workframe-event bin command. Single stamping point in code: _state_io.event_json(). PARTITION (binding from v3, and the reason bin entries do NOT guess `cc`): every line written BY CODE carries the field — held by routing every event-line serialization through _state_io.event_json(), which the event_line_serialization_single_source check pins at the call sites. THE BOUNDARY ON THAT WORD 'every', stated so consumers can size the claim: that check reads the append_line/append_lines call site, so a JSON string built into a variable first and only then passed in would slip past it (today zero such sites; the check's >=9 floor on event_json call sites would still catch the single-source path being abandoned wholesale, but not one producer sneaking around it). The spill / merge-back path is NOT a second channel: _spill() and merge_spills() move already-serialized whole lines and construct none of their own — verified as the general property, NOT as a list of shapes: neither function BUILDS ANY MAPPING (no dict literal, dict() call, or dict comprehension), CALLS json AT ALL (so nothing is dumped, and nothing is loaded-then-rewritten), or EMITS ANY JSON TEXT (no string literal or f-string carrying braces; their f-strings build filenames, a glob, a timestamp format and two [warn] lines). Re-check it as that property. Checking only for json.dumps and event-shaped dict literals would still report zero the day someone adds a dict(...) — the criterion has to outlive the conclusion — hook producers get cc/codex from their command line; bin entries (workframe-event, workframe-recompute-board-summary, workframe-recompute-skill-metrics; they all accept --harness, pass it when you know the door) — and that parenthesis is THE list: anything that tells a model to pass --harness must point here rather than retype the names, because a second copy silently misses the fourth event-writing entry the day one appears. Passing it to a bin entry that is NOT on this list is not harmless: workframe-doctor and workframe-module-close-check parse args and exit 2 on an unknown one, and BOTH already use a non-zero exit to mean 'I found problems', so the argument error and a real finding look identical in the terminal — the reader goes looking at the project instead of at the argument. Those three listed entries write `unknown` when the caller did not say. So an ABSENT field means the line was not written by v3+ code: it either predates v3, or the model hand-wrote it (the instruction to use workframe-event travels in the injected discipline shards; on Codex the SessionStart main shard additionally carries a `本会话 harness=codex session_id=…` line and the bin command falls back to the per-session marker file, so the instruction is DELIVERED to the Codex MAIN thread — observed by a zero-credential probe reading the rollout's context items. Narrower than it sounds: for sub-agent threads only the channel is verified (a review-type sub thread received the sub shard); full-shard arrival in `spawn_agent`-type sub threads has NOT been verified, and whether the model ACTS on the instruction on either thread type has not been observed — see __delivery_established__ for why the flag stays false). Consumers MUST keep the two apart — _harness.harness_breakdown() reports them as `unknown` vs `unstamped` — and MUST NOT re-default a v3-era `unknown` back to `cc`. Re-defaulting would silently misattribute a bin entry run from the Codex door, which is the exact failure this field exists to prevent; the cost of NOT re-defaulting is only that a CC-only project sees a small `unknown` bucket for manually run commands, which is a true statement rather than a lucky guess.",
+ "availability_values": {
+  "__doc__": "Per-event, per-harness producibility. Consumers MUST print a data-source line derived from this map before any cross-harness count, otherwise a structural absence reads as a real signal (e.g. 'Codex sessions fail less' when in fact turn_failed cannot be captured there). Computed, never hand-copied: _harness.events_by_availability() / _harness.harness_breakdown().",
+  "full": "Producer path exists on that harness with the same coverage as the other one.",
+  "partial": "At least one producer path is established on that door AND at least one is missing or not yet established. `note` MUST say which half and WHICH KIND — a known gap and an unjudged path are not the same claim, and collapsing them is the failure `unknown` was added to prevent.",
+  "none": "No producer path on that harness — absence of this event type there carries no information.",
+  "unknown": "No producer path is established on that door — nothing has been probed either way. Deliberately distinct from full: reporting an unverified path as available is the failure mode this value exists to prevent. Also distinct from partial, which requires at least one working path.",
+  "note": "Free text, REQUIRED whenever cc or codex is not full; it must name which emission path is affected and what the reader would otherwise mis-read.",
+  "__how_to_judge__": "GRADING RULE (explicit so the next author reproduces it; the first version of this map left it implicit and graded three SessionEnd-driven events too generously). Ask, per door, of EACH producer path: is that path ESTABLISHED on this door? WHAT A 'PATH' IS, since this bit is easy to get wrong: a path runs from the EMISSION POINT (the function that actually appends the event) out to the mounts that can REACH that function — not to every mount the enclosing script happens to have. One script can be mounted on several hooks and still have emission points reachable from only one of them: check-stale-modules.py sits on both SessionStart and PostToolUse, yet process_postool_use() is reachable only from the latter and clear_stale() only from a CLI subcommand. Grading at script granularity instead of emission-point granularity mis-grades exactly those. Then: none = no path can ever run here; unknown = NO path is established; partial = at least one path IS established AND at least one is missing-or-unestablished; full = every path is established. WHAT COUNTS AS ESTABLISHED: (a) a door-agnostic path — the model runs a CLI command or a script directly, no harness mechanism involved; or (b) a hook-mounted path whose hook event has been OBSERVED EXECUTING on that door by a probe AND — where the mount is MATCHER-SCOPED — whose matcher has been established on that door too. The matcher half is a separate layer and must be asked separately: a hook event can be observed executing while its matcher still never fires for the intended targets, because matchers name tool names and the two doors do not share a tool vocabulary. Today NO matcher-scoped mount is established on Codex: the Codex hook table carries the CC matchers verbatim (Bash / Edit|Write|NotebookEdit / Skill) and whether those tool names ever match on Codex has not been verified (it takes one credentialed tool call), so a path that reaches its producer only through a matcher-scoped mount is UNESTABLISHED there even though its hook event sits in the observed list. Skipping this layer is how the first version of this rule failed to reproduce three of its own entries. For Codex seven hook events have been observed executing: SessionStart, SubagentStart, PostToolUse, Stop (the first probe batch), UserPromptSubmit and SessionEnd (the review-thread probe, then every zero-credential end-to-end run of the door — payloads captured), SubagentStop (the spawn_agent-type probe). The other five that the runtime enumerates (PreToolUse, PermissionRequest, PreCompact, PostCompact, Interrupt) have NOT been observed running — PreToolUse was mounted in one probe but no tool call happened in a zero-credential run, so it stays unobserved; the other four were never mounted. A hook event merely APPEARING in that enumeration does NOT make it established: the enumeration was read out of the binary, not observed running. Grading by 'is the event name in the list' instead of 'has it been seen running' is exactly the mistake this paragraph exists to stop. WHAT COUNTS AS DISPROVEN (this is what separates `none` from `unknown`, and the first version of this rule could not express it): a path is IMPOSSIBLE, not merely unestablished, in either of two ways. (i) THE MECHANISM IS ABSENT: the hook event name does not appear in that runtime's event enumeration at all, so no probe could ever see it fire. (ii) A PROBE RAN AND THE EVENT DID NOT COME: the mechanism exists and was exercised, and the trace was measured absent — this is a positive finding, not a missing measurement. `skill_invoked` is `none` on Codex through BOTH: UserPromptExpansion is absent by (i), and PostToolUse with the Skill matcher was exercised and produced no trace by (ii). When leaning on (ii), the `note` MUST carry the probe's scope verbatim — an entry path that was not exercised is not disproven, it is unknown, and blurring the two turns a bounded measurement into an unbounded claim. `turn_failed` and `config_changed` are `none` on Codex for that reason (StopFailure / ConfigChange are not among its events), whereas `signoff_guard_error` is only `unknown` (PostToolUse IS observed running, but both of its mounts are matcher-scoped and the matcher half is unverified). Both read as 'no established path', so grading on observation alone collapses them; ask whether the mechanism EXISTS before asking whether it has been SEEN. `session_ended` is the worked example of an entry that moved: it sat at `unknown` while SessionEnd was merely enumerated, and became `full` once SessionEnd was observed running on that door. MODEL-SIDE EVENTS (protocol_expected / model_mediated) are graded full on both doors because the write itself is door-agnostic — a model with shell and file access performs it identically. DECLARED CAVEAT, not an oversight: what is NOT yet established is whether the INSTRUCTION to write reaches the model on the Codex door (skill / rule / context delivery). Those events are therefore full-but-conditional; a reader seeing zero of them on Codex should suspect delivery before suspecting the model. This axis is deliberately not folded into the grade — folding it in would merge 'the mechanism may not exist' with 'the mechanism exists but is not wired yet', and only the first is a risk to the reader.",
+  "__delivery_established__": {
+   "__doc__": "Per door: is the chain that TELLS the model to write an event established there? Model-side events (protocol_expected / model_mediated) are graded `full` because the write itself is door-agnostic, but a reader still needs to know that zero of them on a door may mean 'never asked' rather than 'never happened'. This flag is what _harness.harness_breakdown() computes the full_but_delivery_unverified table from; flip a door to true when its skill / rule / context delivery lands and the table empties itself. WHAT 'LANDS' MEANS FOR codex, so the flip is not made on partial evidence: the instruction (use the workframe-event bin command) travels in the injected discipline shards; the main-thread shard has been observed arriving in a Codex rollout, and a review-type sub thread has been observed receiving the sub shard — that is the CHANNEL. It stays false until BOTH remaining halves are observed: (i) full-shard arrival in a `spawn_agent`-type sub thread (only the channel is verified there, not the whole shard), and (ii) a model on that door actually writing an event through the bin command after reading the shard. Flipping on channel evidence alone would turn 'never asked' into 'never happened' for exactly the reader this flag protects. Keep it a flag, not prose: a hand-written caveat in a report template is a copy, and copies drift — which is the one thing this whole section forbids.",
+   "cc": true,
+   "codex": false
+  }
  },
  "events": {
   "skill_used": {
    "reliability": "protocol_expected",
-   "producer": "agent wrap-up protocol (Step 1 of agent-protocols.md, executed by the model)",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "模型手写，两门皆可。harness 字段由 `workframe-event` 打上：告知模型用它的指令随注入的纪律片投递，Codex 门主线程实测抵达（main 片首行带 `本会话 harness=codex session_id=…`，bin 命令另有会话标记文件兜底）；**模型是否照做未观察、`spawn_agent` 型子线程全片抵达未验**——所以 `__delivery_established__.codex` 仍是 false，该门下这类事件为零时先怀疑投递、再怀疑模型。没有 harness 字段的行是 v3 之前写的，按缺省读作 cc。"
+   },
+   "producer": "agent wrap-up protocol (the event-stream step of the injected common protocol shard, executed by the model)",
    "consumers": [
     "librarian (skill-metrics.yaml)",
     "audit",
@@ -29,11 +49,16 @@
     "fallback_used": "boolean, optional — obsidian-* skills: whether it degraded to Read/rg",
     "operation": "string, optional — obsidian-* / doc-graph-health: sub-operation name"
    },
-   "caveats": "Counts may be slightly off if a subagent skips wrap-up or counts a preloaded but unused skill. Corroborate with rollback_applied / proposal_applied for high-confidence skill activity. Without session_id, per-session cap silently devolves into per-event cap. The four optional extension fields are written by the obsidian-* skills and doc-graph-health; consumers must tolerate their absence and must not reject events that carry them."
+   "caveats": "Counts may be slightly off if a subagent skips wrap-up. (The older 'preloaded but unused skill' caveat no longer applies: agent frontmatter preloading is retired, and a skill merely named in the SubagentStart point-name section produces no skill_used event unless it is actually invoked.) Corroborate with rollback_applied / proposal_applied for high-confidence skill activity. Without session_id, per-session cap silently devolves into per-event cap. The four optional extension fields are written by the obsidian-* skills and doc-graph-health; consumers must tolerate their absence and must not reject events that carry them."
   },
   "user_correction": {
    "reliability": "protocol_expected",
-   "producer": "correction-detection rule writes immediately when it writes the [纠正] entry (role/shared MEMORY, or auto-memory when scope=main per 两套记忆分工契约); agent wrap-up must not emit a duplicate user_correction for the same correction",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "同 skill_used：模型手写，两门皆可；harness 由 `workframe-event` 打上，指令随纪律片投递、Codex 主线程实测抵达，模型是否照做未观察（`__delivery_established__.codex` 仍 false）。"
+   },
+   "producer": "the correction-detection flow (judgement half in the injected main shard, procedure half in skill signal-intake) writes immediately when it writes the [纠正] entry (role/shared MEMORY, or auto-memory when scope=main per 两套记忆分工契约); agent wrap-up must not emit a duplicate user_correction for the same correction",
    "consumers": [
     "check-iteration-trigger.py (problem weight 3.0)",
     "librarian",
@@ -48,11 +73,16 @@
     "summary": "short snapshot of the corrected fact, required so memory-log does not depend on current sidecar state",
     "source": "literal '[纠正]'"
    },
-   "caveats": "Depends on the model recognizing the correction signal AND following correction-detection.md. Misses possible if the agent silently incorporates the correction without ceremony."
+   "caveats": "Depends on the model recognizing the correction signal AND following the correction handling in the injected main-session signal-intake shard. Misses possible if the agent silently incorporates the correction without ceremony."
   },
   "task_blocked": {
    "reliability": "protocol_expected",
-   "producer": "Primary producer = test-case-design skill (QA-driven flow: test failure → SEC/BUG issue → status=blocked → skill appends event). Fallback producer = current agent wrap-up, restricted to non-QA / manual blocked transitions that did NOT go through test-case-design; fallback MUST dedup-check events.jsonl in current session for the same task_id before appending.",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "同 skill_used：模型手写，两门皆可；harness 由 `workframe-event` 打上，指令随纪律片投递、Codex 主线程实测抵达，模型是否照做未观察（`__delivery_established__.codex` 仍 false）。"
+   },
+   "producer": "Primary producer = test-case-design skill (QA-driven flow: test failure → SEC/BUG issue → status=blocked → skill appends event). Fallback producer = current agent wrap-up (the event-stream step of the injected common protocol shard), restricted to non-QA / manual blocked transitions that did NOT go through test-case-design; fallback MUST dedup-check the FULL events.jsonl for the same task_id before appending (task_id-only scope — this schema has no session_id field, so session-scoped dedup is not machine-executable; full-history is a conservative approximation that may skip a repeated manual re-block of the same task, accepted trade-off, see the task_blocked fallback dedup rule in the injected common protocol shard).",
    "consumers": [
     "check-iteration-trigger.py (problem weight 2.0)",
     "audit",
@@ -64,10 +94,15 @@
     "task_id": "string",
     "role": "agent role string"
    },
-   "caveats": "Producer policy is primary+fallback (NOT sole producer) — see agent-protocols.md §Step 1 task_blocked producer 策略. Without dedup, both test-case-design and wrap-up would append for the same QA-driven blocked transition, double-counting the 2.0 problem weight. Do NOT revert producer wording to 'qa agent wrap-up' alone (qa wrap-up alone misses skill-driven appends) nor to 'sole producer = test-case-design' (which contradicts the fallback path for non-QA / manual blocked transitions). Starvation record (2026-08 audit, G1#3): zero occurrences in 3+ months of consumer-project events — diagnosed as architectural starvation, NOT producer breakage (project QA loop idle; board history has zero blocked tasks). Mechanism and weight retained as-is; consumer pipeline verified by synthetic drill 2026-08-06. Doctor labels count==0 + producer-text-present as 'never-triggered (starved)', distinct from missing-producer 'broken promise'."
+   "caveats": "Producer policy is primary+fallback (NOT sole producer) — see the task_blocked producer policy in the injected common protocol shard (§Step 1 — 事件流). Without dedup, both test-case-design and wrap-up would append for the same QA-driven blocked transition, double-counting the 2.0 problem weight. Do NOT revert producer wording to 'qa agent wrap-up' alone (qa wrap-up alone misses skill-driven appends) nor to 'sole producer = test-case-design' (which contradicts the fallback path for non-QA / manual blocked transitions). Starvation record (2026-08 audit, G1#3): zero occurrences in 3+ months of consumer-project events — diagnosed as architectural starvation, NOT producer breakage (project QA loop idle; board history has zero blocked tasks). Mechanism and weight retained as-is; consumer pipeline verified by synthetic drill 2026-08-06. Doctor labels count==0 + producer-text-present as 'never-triggered (starved)', distinct from missing-producer 'broken promise'."
   },
   "session_ended": {
    "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "唯一 producer 是 session-end-flush.py，只挂 `SessionEnd` 一处，**没有任何门无关的旁路**。`SessionEnd` 在 Codex 侧**已被观察到执行**：早期探针的 marker 计数（`codex exec` 一次 +1；review 型子线程上只在父线程触发一次）、装机器零凭据验活会话里本事件以 `harness: codex` 落盘（`workframe-door --check --live` 把它列为五条无条件侧效应之一）。无 matcher、无第二条路径 ⇒ `full`。**边界**：只在 `codex exec` 与 review 型两条路径上观察过；app-server 客户端直接杀线程（无 SessionEnd）时本事件缺席是客户端行为，不是本门的结构缺口。"
+   },
    "producer": "session-end-flush.py (SessionEnd hook)",
    "consumers": [
     "session-digest",
@@ -82,6 +117,11 @@
   },
   "summary_recomputed": {
    "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "两条 producer 路径：① `recompute_board_summary.py` 经 bin 命令由模型 / 用户直跑，**门无关、已确立**；② `session-end-flush.py` 在 `SessionEnd` 上自动重算——`SessionEnd` 在 Codex 侧已被观察到执行（见 `session_ended`），且本事件本身在装机器零凭据验活会话里以 `harness: codex` 落盘。两条都确立 ⇒ `full`。"
+   },
    "producer": "recompute_board_summary.py (invoked by SessionEnd hook, or by user via plugin bin/ command for manual fallback)",
    "consumers": [
     "audit"
@@ -90,13 +130,18 @@
     "ts": "ISO-8601 string, required",
     "type": "literal 'summary_recomputed'",
     "status": "ok | skipped | error",
-    "reason": "string, only when status=skipped or status=error (board_not_found | summary_block_not_found | unknown_statuses_in_tasks | tasks_unparsed | exception detail)",
+    "reason": "string, only when status=skipped or status=error (board_not_found | summary_block_not_found | unknown_statuses_in_tasks | tasks_unparsed | parse_mismatch | board_yaml_unparsable | exception detail)",
     "total": "integer, only when status=ok",
     "counts": "object mapping status name to count, only when status=ok"
    }
   },
   "skill_metrics_recomputed": {
    "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "两条 producer 路径：① `recompute_skill_metrics.py` 经 bin 命令由模型 / 用户直跑，**门无关、已确立**；② `session-end-flush.py` 在 `SessionEnd` 上自动重算——`SessionEnd` 在 Codex 侧已被观察到执行（见 `session_ended`），且本事件本身在装机器零凭据验活会话里以 `harness: codex` 落盘。两条都确立 ⇒ `full`。"
+   },
    "producer": "recompute_skill_metrics.py (invoked by SessionEnd hook, or by user via plugin bin/ command for manual fallback)",
    "consumers": [
     "audit",
@@ -112,10 +157,14 @@
     "events_counted": "integer, only when status=ok",
     "skills_count": "integer, only when status=ok"
    },
-   "purpose": "Deterministic refresh marker for .claude/workframe-state/skill-metrics.yaml. The file is derived from events.jsonl and can be regenerated."
+   "purpose": "Deterministic refresh marker for .workframe/state/skill-metrics.yaml. The file is derived from events.jsonl and can be regenerated."
   },
   "summary_drift_repaired": {
    "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "full"
+   },
    "producer": "session-start-prep.py (SessionStart drift check, v0.2.2+)",
    "consumers": [
     "audit (drift history display)"
@@ -131,6 +180,10 @@
   },
   "summary_drift_repair_skipped": {
    "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "full"
+   },
    "producer": "session-start-prep.py (SessionStart drift check, v0.2.2+)",
    "consumers": [
     "audit (alerts user)"
@@ -138,8 +191,9 @@
    "fields": {
     "ts": "ISO-8601 string, required",
     "type": "literal 'summary_drift_repair_skipped'",
-    "reason": "unknown_statuses_in_tasks | tasks_unparsed | summary_block_not_found | recompute_failed | read_failed | import_failed | parse_failed — 裸枚举值，不拼接详情",
-    "detail": "string, optional — 异常类型与消息（截断 100 字）；详情放这里，保证 reason 可被等值匹配的消费方命中",
+    "reason": "unknown_statuses_in_tasks | tasks_unparsed | summary_block_not_found | recompute_failed | recompute_skipped | read_failed | import_failed | parse_failed — 裸枚举值，不拼接详情",
+    "detail": "string, optional — 异常类型与消息（截断 100 字）；reason=recompute_skipped 时放 recompute 自己返回的 reason（本文件的 reason 只用自己那套词表，recompute 加新 reason 不必回改此处）。详情放这里，保证 reason 可被等值匹配的消费方命中",
+    "repair_status": "ok | skipped | error（recompute 实际返回的 status；reason=recompute_skipped 时恒为 skipped，与 summary_drift_repaired 的同名字段同义）",
     "unknown_statuses": "list of unknown status values (only when reason=unknown_statuses_in_tasks)",
     "drift_fields": "object mapping field name to {summary, actual} pair (when applicable)"
    },
@@ -147,6 +201,11 @@
   },
   "memory_promoted": {
    "reliability": "model_mediated",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "两条 producer 路径中，maintenance_workorder.py --commit 若经 bin/workframe-maintenance 拉起，那是 CC 专属的批量维护会话（claude -p --maintenance + Setup hook），Codex 门下不可用；而模型侧路径与直接跑 --commit / --close-pm 两门皆可，故事件类型本身不缺。**Setup hook 自身不产任何事件**（默认分支只写 flag 与工单文件），所以它虽是 Codex 缺口 hook，却不对应任何事件类型缺口。"
+   },
    "producer": "Two paths (both in use): (1) maintenance_workorder.py --commit writes it in code while processing manifest.promotions, together with the sidecar entry — deterministic; (2) librarian step 3 writes it after the model updates MEMORY.md and the sidecar. Only (2) was registered originally. Note the `reliability` tier stays `model_mediated` (the weaker of the two): which path fires is not knowable in advance, and the field is a fixed enum consumed by workframe_doctor's ACTIVE_TIERS filter — putting free text like \"mixed\" there silently drops this event type out of the producer reconciliation check.",
    "consumers": [
     "memory-log",
@@ -168,6 +227,10 @@
   },
   "memory_decayed": {
    "reliability": "model_mediated",
+   "availability": {
+    "cc": "full",
+    "codex": "full"
+   },
    "producer": "librarian step 3 user-confirmed decay/capacity cleanup; must be appended before deleting the memory-index sidecar entry",
    "consumers": [
     "memory-log",
@@ -188,6 +251,10 @@
   },
   "proposal_applied": {
    "reliability": "model_mediated",
+   "availability": {
+    "cc": "full",
+    "codex": "full"
+   },
    "producer": "self-iteration stage 5 (model executes)",
    "consumers": [
     "audit",
@@ -203,6 +270,11 @@
   },
   "proposal_verified": {
    "reliability": "model_mediated",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "两条 producer 路径中，maintenance_workorder.py --commit 若经 bin/workframe-maintenance 拉起，那是 CC 专属的批量维护会话（claude -p --maintenance + Setup hook），Codex 门下不可用；而模型侧路径与直接跑 --commit / --close-pm 两门皆可，故事件类型本身不缺。**Setup hook 自身不产任何事件**（默认分支只写 flag 与工单文件），所以它虽是 Codex 缺口 hook，却不对应任何事件类型缺口。"
+   },
    "producer": "self-iteration stage 1b (model executes)",
    "consumers": [
     "audit",
@@ -218,6 +290,10 @@
   },
   "proposal_failed": {
    "reliability": "model_mediated",
+   "availability": {
+    "cc": "full",
+    "codex": "full"
+   },
    "producer": "self-iteration stage 1b (emitted alongside proposal_verified signal_met=false)",
    "consumers": [
     "audit",
@@ -231,6 +307,10 @@
   },
   "rollback_applied": {
    "reliability": "model_mediated",
+   "availability": {
+    "cc": "full",
+    "codex": "full"
+   },
    "producer": "rollback skill (user-invocable, model executes)",
    "consumers": [
     "audit",
@@ -245,6 +325,11 @@
   },
   "pending_maintenance_dismissed": {
    "reliability": "model_mediated",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "两条 producer 路径中，maintenance_workorder.py --commit 若经 bin/workframe-maintenance 拉起，那是 CC 专属的批量维护会话（claude -p --maintenance + Setup hook），Codex 门下不可用；而模型侧路径与直接跑 --commit / --close-pm 两门皆可，故事件类型本身不缺。**Setup hook 自身不产任何事件**（默认分支只写 flag 与工单文件），所以它虽是 Codex 缺口 hook，却不对应任何事件类型缺口。"
+   },
    "producer": "All four callers now write through code — maintenance_workorder.py: `--commit` (manifest close_pm) and `--close-pm <PM-ID>... [--reason <text>]` (invoked by maintenance-review mode A, self-iteration when closing trigger entries with reason=self_iteration_no_proposal, and librarian after clearing a memory_backlog). Before 2026-08-16 the latter three told the model to hand-edit activity-state.json, which bypassed the file lock / atomic replace / three-way merge; the tier stays model_mediated (the WEAKEST link) because whether the model remembers to RUN the command is still model-dependent — but once run, the write itself is code-guaranteed.",
    "consumers": [
     "audit (dismissal trail)"
@@ -259,6 +344,10 @@
   },
   "maintenance_review_completed": {
    "reliability": "model_mediated",
+   "availability": {
+    "cc": "full",
+    "codex": "full"
+   },
    "producer": "maintenance-review skill mode B: full wake-up review (user-invocable, model executes)",
    "consumers": [
     "audit (review history)"
@@ -270,6 +359,11 @@
   },
   "rule_triggered": {
    "reliability": "removed_v0_2_1",
+   "availability": {
+    "cc": "none",
+    "codex": "none",
+    "note": "无 producer，与门无关：CC 不给 rule 触发回调，Codex 亦然。两侧同为 none 是「这个事件谁都产不出来」，不是「Codex 缺一块」——读报告时别把它算进跨门缺口。"
+   },
    "producer": "none — rules are CLAUDE.md-style instructions injected to context; CC does not emit a trigger callback and agent wrap-up cannot reliably attribute follow-up actions to a specific rule",
    "consumers": [
     "(deprecated) check-iteration-trigger.py idle_rules / skill-metrics.rules[]"
@@ -279,6 +373,11 @@
   },
   "modules_index_rebuilt": {
    "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "partial",
+    "note": "rebuild_full_index() 有三个调用点：scan_git_diff_for_stale()（SessionStart，两门可得）、main() 的 rebuild-index 子命令（CLI，两门可得）、lookup_submodules() 的损坏兜底（经 PostToolUse，Codex 侧 matcher 对等未验）。前两条可得、第三条未判定，故 partial。"
+   },
    "producer": "check-stale-modules.py rebuild_full_index() — fallback 全量重建（损坏检测 / migrate-to-modules / 手动 `python check-stale-modules.py rebuild-index`）",
    "consumers": [
     "audit (modules index health)"
@@ -292,6 +391,11 @@
   },
   "modules_index_segment_rebuilt": {
    "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "unknown",
+    "note": "唯一发射点在 check-stale-modules.py 的 process_postool_use()，即挂 PostToolUse (matcher Edit|Write|NotebookEdit) 的那条。Codex 有 PostToolUse 事件（插件源上实测触发过），但 Codex 清单原样带着 CC 的这条 matcher，CC 这三个工具名在 Codex 是否命中**未验**（需一次带凭据的工具调用），故记 unknown 而不是 full——「未能判定」是结论，不许当成 full 顺过去。另已实证：Codex 的 PostToolUse 对**失败的**工具调用不触发，任何以它为输入的「尝试次数」类计数在 Codex 侧系统性偏低。"
+   },
    "producer": "check-stale-modules.py PostToolUse on **/submodule.yaml — 增量重建该子模块的索引段",
    "consumers": [
     "audit",
@@ -306,6 +410,11 @@
   },
   "modules_index_lookup_slow": {
    "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "unknown",
+    "note": "唯一发射点在 check-stale-modules.py 的 process_postool_use()，即挂 PostToolUse (matcher Edit|Write|NotebookEdit) 的那条。Codex 有 PostToolUse 事件（插件源上实测触发过），但 Codex 清单原样带着 CC 的这条 matcher，CC 这三个工具名在 Codex 是否命中**未验**（需一次带凭据的工具调用），故记 unknown 而不是 full——「未能判定」是结论，不许当成 full 顺过去。另已实证：Codex 的 PostToolUse 对**失败的**工具调用不触发，任何以它为输入的「尝试次数」类计数在 Codex 侧系统性偏低。"
+   },
    "producer": "check-stale-modules.py PostToolUse — 单次 lookup 超过 PERFORMANCE_BUDGET_MS (100ms) 时报警",
    "consumers": [
     "audit (perf regression signal)"
@@ -319,6 +428,11 @@
   },
   "modules_index_rebuild_skipped_lock_timeout": {
    "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "unknown",
+    "note": "唯一发射点在 check-stale-modules.py 的 process_postool_use()，即挂 PostToolUse (matcher Edit|Write|NotebookEdit) 的那条。Codex 有 PostToolUse 事件（插件源上实测触发过），但 Codex 清单原样带着 CC 的这条 matcher，CC 这三个工具名在 Codex 是否命中**未验**（需一次带凭据的工具调用），故记 unknown 而不是 full——「未能判定」是结论，不许当成 full 顺过去。另已实证：Codex 的 PostToolUse 对**失败的**工具调用不触发，任何以它为输入的「尝试次数」类计数在 Codex 侧系统性偏低。"
+   },
    "producer": "check-stale-modules.py — submodule.yaml index rebuild 拿不到文件锁（5s 超时）",
    "consumers": [
     "audit (concurrency contention signal)"
@@ -331,20 +445,31 @@
   },
   "modules_stale_write_skipped_lock_timeout": {
    "reliability": "hook_deterministic",
-   "producer": "check-stale-modules.py — stale-modules.yaml 写入拿不到文件锁（5s 超时）",
+   "availability": {
+    "cc": "full",
+    "codex": "partial",
+    "note": "两条发射路径：process_postool_use()（PostToolUse，Codex 侧 matcher 对等未验，见 modules_index_segment_rebuilt 的说明）与 scan_git_diff_for_stale()（SessionStart，两门都有对等物）。SessionStart 那半在 Codex 可得、PostToolUse 那半未判定，故 partial。"
+   },
+   "producer": "check-stale-modules.py — stale 标记链路拿不到文件锁（5s 超时）；PostToolUse 与 SessionStart scan-git-diff 两条路径同型留痕",
    "consumers": [
     "audit (concurrency contention signal)"
    ],
    "fields": {
     "ts": "ISO-8601 string, required",
     "type": "literal 'modules_stale_write_skipped_lock_timeout'",
-    "submodule": "two-segment slug",
-    "file": "project-relative path that triggered the stale mark"
+    "submodule": "two-segment slug；lookup 超时场景省略（此时连受影响子模块都未知）",
+    "file": "project-relative path that triggered the stale mark",
+    "reason": "optional; lookup 超时场景为 'index_lookup_lock_timeout'，mark_stale 超时场景省略"
    }
   },
   "modules_check_stale_error": {
    "reliability": "hook_deterministic",
-   "producer": "check-stale-modules.py — process_postool_use() 顶层异常捕获（防止 hook 崩溃影响主流程）",
+   "availability": {
+    "cc": "full",
+    "codex": "partial",
+    "note": "三条发射路径：_git_lines() 与 scan_git_diff_for_stale()（均在 SessionStart 链路上，两门可得）、main() 的 PostToolUse 顶层兜底（Codex 侧 matcher 对等未验）。"
+   },
+   "producer": "check-stale-modules.py — 故障留痕汇集点：process_postool_use() 顶层异常捕获，以及 scan-git-diff 路径的 git 命令失败（error 前缀 scan_git_failed）/ 入口索引保障锁超时（scan_ensure_index_lock_timeout）/ 扫描未预期崩溃兜底（scan_git_diff_crashed）",
    "consumers": [
     "audit (error trail)"
    ],
@@ -354,8 +479,32 @@
     "error": "string, type+message truncated to 200 chars"
    }
   },
+  "stale_cleared": {
+   "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "唯一发射点 clear_stale() 由模型跑 CLI 触发（code-to-doc Step 7 / 手动），不经任何 hook。"
+   },
+   "producer": "check-stale-modules.py clear_stale() — code-to-doc Step 7 调用 / 维护者手动 `python check-stale-modules.py clear-stale <basic/sub> [--reason ...]`；条目真的被清掉才写，本来就不存在时不写",
+   "consumers": [
+    "audit (stale 处置留痕——清单条目清除后即消失，事件流是区分「处理过才清」与「没处理直接清」的唯一地方)",
+    "module-close-check (人工审计辅助，不参与判定)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'stale_cleared'",
+    "submodule": "two-segment slug, e.g. 'profile/edit'",
+    "reason": "optional; 处置理由一句话（--reason 传入；未传则省略此字段）"
+   }
+  },
   "turn_failed": {
    "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "none",
+    "note": "唯一 producer 是 log-stop-failure.py，挂 StopFailure——Codex 侧**无对等 hook 事件**。连带后果：check-iteration-trigger.py 加权积分里 turn_failed 在 Codex 侧恒为 0，**问题信号被系统性低估**；这是已拍板的产品决策——只披露，不凭猜给某一扇门补分。"
+   },
    "producer": "log-stop-failure.py (StopFailure hook, CC 2.1.78+) — turn 因 API 错误（rate limit / auth 等）终止时记录",
    "consumers": [
     "audit (SessionEnd 链路可能缺状态的旁证)",
@@ -371,9 +520,14 @@
   },
   "config_changed": {
    "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "none",
+    "note": "唯一 producer 是 log-config-change.py，挂 ConfigChange——Codex 侧无对等 hook 事件。受保护资产的运行时审计面在 Codex 门下整体缺失。"
+   },
    "producer": "log-config-change.py (ConfigChange hook, CC 2.1.49+) — 会话内配置文件（settings / rules / agents 等）变更时记录",
    "consumers": [
-    "audit (受保护资产运行时审计面，配合 auto-update.md 受保护资产清单)"
+    "audit (受保护资产运行时审计面，配合必载片的受保护资产清单)"
    ],
    "fields": {
     "ts": "ISO-8601 string, required",
@@ -385,7 +539,11 @@
   },
   "memory_migrated": {
    "reliability": "model_mediated",
-   "producer": "librarian step 3 writes it when relocating an entry between memory scopes (main-led 记忆分流改造 batch 5: auto-memory -> role/shared MEMORY.md). A dedicated type rather than reusing memory_promoted: promotion means notes.md -> MEMORY.md within one scope after D/U/R/A review, while migration moves an already-qualified entry across scopes. Conflating them would pollute the notes-staleness signal that consumers derive from memory_promoted.",
+   "availability": {
+    "cc": "full",
+    "codex": "full"
+   },
+   "producer": "librarian step 3 writes it when relocating an entry between memory scopes (main-led 记忆分流改造: auto-memory -> role/shared MEMORY.md). A dedicated type rather than reusing memory_promoted: promotion means notes.md -> MEMORY.md within one scope after D/U/R/A review, while migration moves an already-qualified entry across scopes. Conflating them would pollute the notes-staleness signal that consumers derive from memory_promoted.",
    "consumers": [
     "memory-log",
     "audit",
@@ -411,6 +569,11 @@
   },
   "skill_invoked": {
    "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "none",
+    "note": "两个入口在 Codex 侧都不可得：UserPromptExpansion 无对等 hook 事件；PostToolUse(Skill) 侧已实测**不产生留痕**。**作用域必须照抄，不许读宽**：实测证的是「skill 作为 spawn_agent 的上下文项进入子 agent 时不产生 PostToolUse」（SKILL.md 全文以 role:user 消息到达，不是 function_call；同批 9 次 PostToolUse 的 tool_name 无一含 skill，而同一过滤器对 agent 得 6、对 mcp 得 3，证明它能算出非零）。**主 agent 在自己轮次里用 $skill 直调那条路径仍未测**——这里的 none 只覆盖已实测的那条入口，不代表已穷尽所有入口。"
+   },
    "producer": "scripts/log-skill-invoked.py, wired to two entries: UserPromptExpansion (user types /skill-name; the command expands into a prompt WITHOUT going through the Skill tool) and PostToolUse matcher:Skill (model invokes the Skill tool). The first entry is the important one — direct slash-command typing is the most common way skills get used. Field extraction is multi-candidate by design (command / command_name / prompt / user_prompt / expanded_prompt): CC makes no hard promise about the UserPromptExpansion stdin schema, and betting on a single key means this entry fails 100% silently if the key is named differently — no events at all, while every consumer concludes 'nobody uses skills'.",
    "consumers": [
     "workframe_doctor.py check_events_parse (近 30 天调起数，与 skill_used 并列展示、不相加)",
@@ -425,6 +588,66 @@
     "session_id": "from hook stdin, omitted when unavailable",
     "agent_type": "present only when fired inside a subagent (pending spike verification)",
     "plugin": "optional — the stripped plugin prefix (e.g. `core`), present only when the invocation carried one. Kept as a separate field so `skill` stays comparable with skill_used."
+   }
+  },
+  "self_signoff": {
+   "reliability": "model_mediated",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "由签发方在收口时手写，不经 hook——**因而它的输入不可信**，只能做趋势不能做证据（写的人正是被审计的人）。看板签发块的 schema 与四段闸门的重算由 signoff-guard.py 把关，那道闸挡的是**档位写松**，挡不住「干脆不写这条事件」。"
+   },
+   "producer": "signoff 方在把研发任务从 pending_qa 流转到 completed 且未经 @qa 独立验证时手写一行；由 closeout-discipline §谁签发这次收口 要求",
+   "consumers": [
+    "audit (分开统计两种成色的事后问题率——same_party=true 的那批是否更容易返工)",
+    "self-iteration (自签占比与事后问题率是流程分级是否过松的唯一反馈回路)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required（UTC ＋ 秒级）",
+    "type": "literal 'self_signoff'",
+    "task_id": "string, required — 被签发的任务 id",
+    "tier": "string, required — 四档之一：自签 / 轻签注 / 完整验证 / 你拍板",
+    "same_party": "bool, **required** — 实现方与签发方是否同一方。允许同一方时这是唯一的补偿控制：它把「成色最低的那种」从散文变成可分组的字段，缺了它 audit 就只能看到一个混合池、分不出两种成色",
+    "radius": "int 1-4, optional — 声明的爆炸半径（模型判的输入，不是机器算的结论）",
+    "passport": "bool, optional — 通行证是否成立",
+    "role": "string, optional — 签发方（主 Claude 直做时填 main）"
+   }
+  },
+  "signoff_guard_error": {
+   "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "unknown",
+    "note": "事件在：Codex 有 `PostToolUse`，插件源上实测触发过（一次带凭据的探针运行里触发 9 次）。本 hook 的两条 mount 都是 matcher 限定的（`Bash` 与 `Edit|Write|NotebookEdit`，按 `tool_name` 正则匹配），而 CC 的工具名在 Codex 是否命中**未验**（需一次带凭据的工具调用）——按 `__how_to_judge__`，事件被观察到执行但 matcher 那一半未确立 ⇒ 无一条已确立路径 ⇒ `unknown`。**读法**：Codex 门下签发块的机器把关**按不存在对待**，四段举证纯靠自觉；「未验」不许读成「已有把关」，也不许读成「已知不触发」——后者是本条改口前的旧口径（`none`），已被「事件在、matcher 未验」取代。"
+   },
+   "producer": "signoff-guard.py 自身抛异常时写（它按 fail-open 处理内部错误，不阻断写入）——静默失败与通过在终端里同形，这条事件是唯一的区分处",
+   "consumers": [
+    "audit (本 hook 若长期报错则签发校验实际处于失效状态，而看板一切正常)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required",
+    "type": "literal 'signoff_guard_error'",
+    "error": "string — 异常类型与消息前 200 字"
+   }
+  },
+  "discipline_spotcheck": {
+   "reliability": "model_mediated",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "只在用户显式 `/core:audit --record` 时由模型经 `workframe-event discipline-spotcheck` 追加一行，写入本身与门无关。抽样面分门：CC 读 transcript（主会话 ＋ 子 agent），Codex 读 `<CODEX_HOME>/sessions` 下的 rollout。判据 S2（选择题须用 AskUserQuestion）在 Codex 门恒不适用，所以 Codex 样本里 S2 的适用次数恒为 0——那不是「没有违规」。CC 侧 S2 只在 `entrypoint` 为 `sdk-cli` 的非交互会话里不适用；「整场没调用过 AskUserQuestion」不算不适用（常驻工具在 transcript 里没有可用性观测面）。取不到样本的门不写进 `sessions_sampled`，不写成 0 场；两扇门都无样本时不写这条事件。"
+   },
+   "producer": "audit skill 纪律抽查段：仅当用户这次带了 --record，经 workframe-event discipline-spotcheck 写一行",
+   "consumers": [
+    "audit (纪律失效率的趋势：把失效率从不可观测变成可估计；样本小时抓不到低频失效)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required（UTC ＋ 秒级）",
+    "type": "literal 'discipline_spotcheck'",
+    "sessions_sampled": "object, required — 各门抽到的会话数 {cc: int, codex: int}；取不到样本的门不写",
+    "criteria_version": "string, required — audit SKILL.md 判据表的版本",
+    "per_criterion": "object, required — {<判据 id>: {applicable: int, violations: int}}，violations ≤ applicable",
+    "role": "string, required — 执行抽查的一方（/core:audit 在主会话跑，填 main）"
    }
   }
  }

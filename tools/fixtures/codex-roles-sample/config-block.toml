@@ -1,0 +1,17 @@
+# === Workframe managed (do not edit between markers) ===
+# 由 workframe-door 生成（core plugin vSAMPLE）；角色正文在 roles/<role>.toml，定制写 roles/<role>.local.toml 后重跑 workframe-door --codex
+[plugins."core@workframe"]
+enabled = true
+[agents.dev]
+description = "全栈工程师。负责前后端开发、数据库设计、API 实现、部署配置、性能优化、Bug 修复、技术方案设计。 触发场景：编码任务、bug 修复、技术方案设计、数据库变更、部署、性能问题。 当项目包含应用代码时，默认负责修改源代码文件的角色（项目可通过 override 拆分专业工程角色）。"
+config_file = "roles/dev.toml"
+[agents.pm]
+description = "产品经理。负责需求分析、功能拆解、验收标准定义、竞品调研、PRD 创作。 触发场景：新功能需求、需求讨论、用户反馈分析、竞品对比、验收标准制定、写需求、写 PRD。 不直接编写代码。需求文档落盘： projects/modules/<basic>/<sub>/requirements/<req_slug>/<sub_req_slug>/prd.md （走 prd-writer skill；PRD 框架读项目 .claude/skills/prd-style/）。"
+config_file = "roles/pm.toml"
+[agents.prompt-eng]
+description = "Prompt 工程师。负责 Prompt 设计与优化、AI 策略研究、Prompt 实验与评估。 触发场景：Prompt 优化、AI 交互策略设计、Prompt 模板开发、Prompt 质量评估、AI 能力评估。"
+config_file = "roles/prompt-eng.toml"
+[agents.qa]
+description = "质量工程师。负责功能测试、回归验证、代码审查、Issue 管理、研发任务签发。 触发场景：测试请求、回归验证、代码审查、pending_qa 任务验证。 不修改应用业务代码，可创建测试脚本和 Issue 记录。测试结论必须独立客观。"
+config_file = "roles/qa.toml"
+# === End Workframe managed ===

@@ -1,12 +1,6 @@
 ---
 name: requirement-archiving
-description: 历史需求资产归档入库：把项目外的原始需求资料（TAPD 单 / 飞书导出 docx / xls 清单 / 截图原型等异构收料）重整为 modules/ 体系下的现状基线 PRD + shared 事实源 + 溯源台账。九段流水线（Phase 0-8）：收料冻结 → 通读建模 → 方案拍板 → 骨架与 shared → PRD 回填 → 反向对账 → 原型校准 → 关联收口 → 审查清源。
-when_to_use: |
-  - 用户提供一批历史需求原始资料（本地文件夹 / 网盘导出），要求「归档 / 入库 / 整理成 PRD」时；
-  - 为已上线的生产功能补建 modules/ 需求事实源（现状基线形态）时；
-  - 新建 basic / sub 模块并批量回填历史需求时。
-  边界：项目内已有 specs/ 下 md 的一次性搬迁 → migrate-to-modules；写全新需求 → prd-writer；
-  从代码反解实现现状 → code-to-doc。本 skill 只管「外部异构原始资料 → 需求事实源」。
+description: '历史需求资产归档入库：把项目外的原始需求资料（TAPD 单 / 飞书导出 docx / xls 清单 / 截图原型等异构收料）重整为 modules/ 体系下的现状基线 PRD + shared 事实源 + 溯源台账。九段流水线（Phase 0-8）：收料冻结 → 通读建模 → 方案拍板 → 骨架与 shared → PRD 回填 → 反向对账 → 原型校准 → 关联收口 → 审查清源。用于用户提供一批历史需求原始资料（本地文件夹 / 网盘导出）时、为已上线的生产功能补建 modules/ 需求事实源（现状基线形态）时、新建 basic / sub 模块并批量回填历史需求时。典型触发：「归档 / 入库 / 整理成 PRD」。边界：项目内已有 specs/ 下 md 的一次性搬迁 → migrate-to-modules；写全新需求 → prd-writer；从代码反解实现现状 → code-to-doc。本 skill 只管「外部异构原始资料 → 需求事实源」。'
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 ---
@@ -124,8 +118,8 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 
 | 脚本 | 用法（插件根从 `plugin-root.txt` 取，不依赖 PATH） | 产出 |
 |---|---|---|
-| `scripts/extract_assets.py` | `python "$(cat .claude/workframe-state/plugin-root.txt)/skills/requirement-archiving/scripts/extract_assets.py" <源目录> <工作目录>` | `inventory.md` 模态矩阵 / `text/` 逐文件正文 / `images/` 无损图片 / `links.md` 外链清单 |
-| `scripts/check_archive.py` | `python "$(cat .claude/workframe-state/plugin-root.txt)/skills/requirement-archiving/scripts/check_archive.py" <projects/modules/<basic>>` | 终端报告：frontmatter、tags 词表（无 taxonomy 自动跳过）、禁用标签、AI 病灶、wikilink 与图片断链、孤儿图、AUTO-INDEX 配对 |
+| `scripts/extract_assets.py` | `python "$(cat .workframe/state/plugin-root.txt)/skills/requirement-archiving/scripts/extract_assets.py" <源目录> <工作目录>` | `inventory.md` 模态矩阵 / `text/` 逐文件正文 / `images/` 无损图片 / `links.md` 外链清单 |
+| `scripts/check_archive.py` | `python "$(cat .workframe/state/plugin-root.txt)/skills/requirement-archiving/scripts/check_archive.py" <projects/modules/<basic>>` | 终端报告：frontmatter、tags 词表（无 taxonomy 自动跳过）、禁用标签、AI 病灶、wikilink 与图片断链、孤儿图、AUTO-INDEX 配对 |
 
 索引刷新**不在**本 skill 脚本内——调 core `module-index-refresh`，避免双实现。
 

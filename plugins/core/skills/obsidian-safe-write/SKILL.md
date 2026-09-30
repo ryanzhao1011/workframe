@@ -1,11 +1,6 @@
 ---
 name: obsidian-safe-write
-description: 用 Obsidian 官方 CLI 做小范围、结构安全的写入：property:set / property:remove、prepend、create template，以及用户明确确认后的单文件 move/rename。大段正文仍由业务 skill + Edit/Write 完成。
-when_to_use: |
-  改文档 frontmatter 字段（含按 document-norms §2.7 维护 `updated`）时；
-  用模板新建 spec / plan / decision / overview 时；在 frontmatter 后追加标准块时；
-  用户明确要求重命名或移动某个单文件时。
-  边界：要写大段正文 → 用 Edit/Write；批量多文件操作不走本 skill。
+description: '用 Obsidian 官方 CLI 做小范围、结构安全的写入：property:set / property:remove、prepend、create template，以及用户明确确认后的单文件 move/rename。大段正文仍由业务 skill + Edit/Write 完成。用于改文档 frontmatter 字段（含按 document-norms §2.7 维护 `updated`）时、用模板新建 spec / plan / decision / overview 时、在 frontmatter 后追加标准块时、用户明确要求重命名或移动某个单文件时。边界：要写大段正文 → 用 Edit/Write；批量多文件操作不走本 skill。'
 user-invocable: true
 allowed-tools: [Bash, Read, Write, Edit, Glob, Grep]
 ---
@@ -34,7 +29,7 @@ allowed-tools: [Bash, Read, Write, Edit, Glob, Grep]
 
 ## CLI Probe
 
-优先读取 `.claude/workframe-state/obsidian-cli-status.json`（schema 权威定义见 skill: `obsidian-doc-structure` §status.json schema）：
+优先读取 `.workframe/state/obsidian-cli-status.json`（schema 权威定义见 skill: `obsidian-doc-structure` §status.json schema）：
 
 - `do_not_probe: true` → **永不重新 probe**（不设 TTL、不做过期自判），直接按 `cli_available` 决定走 CLI 还是 fallback；重新启用 CLI 的唯一入口 = 用户手动删除该文件
 - 缓存缺失 → 执行**非执行检测**（全程不运行任何 obsidian 命令）：定位命令（`Get-Command obsidian` / `command -v obsidian`）→ 判定是否 GUI 启动器（所在目录存在 `Obsidian.exe` / `resources.pak` 特征文件）→ 不可用则写入 status.json（`cli_available: false`、`do_not_probe: true`、`reason`）并 fallback
@@ -100,7 +95,7 @@ obsidian rename path="<file>" name="<new-name>"
 
 ## Workframe Event
 
-使用后按 `agent-protocols.md` 记录 `skill_used` 事件，至少包含：
+使用后按必载片 §Step 1 — 事件流 记录 `skill_used` 事件，至少包含：
 
 ```json
 {

@@ -1,11 +1,6 @@
 ---
 name: module-init
-description: 创建 modules/ 体系下的基础模块 / 子模块 / 需求资产包。基于 templates/modules-template/ 复制骨架，填充占位符，初始化机器维护索引段，刷新上级 overview，并维护反向索引 code-paths-index.json 段。触发词：新建模块、新建子模块、初始化需求、module-init、新建 PRD 需求骨架。
-when_to_use: |
-  创建第一个/新的基础模块或子模块时；
-  为子模块新建一个需求资产包（含默认子需求 `main/`）时；
-  迁移老需求到 modules/ 体系前作为单点工具使用；
-  用户主动调用 `/core:module-init` 时。
+description: '创建 modules/ 体系下的基础模块 / 子模块 / 需求资产包。基于 templates/modules-template/ 复制骨架，填充占位符，初始化机器维护索引段，刷新上级 overview，并维护反向索引 code-paths-index.json 段。触发词：新建模块、新建子模块、初始化需求、module-init、新建 PRD 需求骨架。用于创建第一个/新的基础模块或子模块时、为子模块新建一个需求资产包（含默认子需求 `main/`）时、迁移老需求到 modules/ 体系前作为单点工具使用、用户主动调用 `/core:module-init` 时。'
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 ---
@@ -134,7 +129,7 @@ modules/ 体系下三类骨架的唯一创建入口：
 
 ```bash
 # 插件根从 plugin-root.txt 取（SessionStart hook 每会话刷新），不依赖环境变量
-python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/module_init.py" --project "<项目根>" --params "<tree.json>"
+python "$(cat .workframe/state/plugin-root.txt)/scripts/module_init.py" --project "<项目根>" --params "<tree.json>"
 ```
 
 脚本承包：骨架复制 + 占位符替换（**断言零残留**）+ `positioning` 写入定位段 + `code_paths` 写入 submodule.yaml + 反向索引初始化（内部调 `check-stale-modules.py init-submodule`，复用其文件锁与原子写）+ global `basic-modules-index` 与 basic `submodules-index` 两层索引段重建。**幂等**：已存在文件一律跳过，重跑索引无变化。
@@ -145,7 +140,7 @@ python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/module_init.py" -
 
 #### 2b. 需求资产包：模型按下列步骤执行（暂不脚本化）
 
-1. 从 `<插件根>/templates/modules-template/requirement/`（插件根 = `cat .claude/workframe-state/plugin-root.txt`）用 Read + Write 逐文件复制 → `<sub>/requirements/<req_slug>/`（含 `meta.yaml` + `overview.md` + `main/` 子目录及其下文件），保持 .gitkeep
+1. 从 `<插件根>/templates/modules-template/requirement/`（插件根 = `cat .workframe/state/plugin-root.txt`）用 Read + Write 逐文件复制 → `<sub>/requirements/<req_slug>/`（含 `meta.yaml` + `overview.md` + `main/` 子目录及其下文件），保持 .gitkeep
 2. 用户给定的 `sub_req_name` 不是默认值 `main` 时，把 `<req_slug>/main/` 重命名为 `<req_slug>/<sub_req_name>/`
 3. 逐文件替换 `{{XXX}}` 占位符（表见 `templates/modules-template/README.md`；`{{SUB_REQ_SLUG}}` 无论目录是否重命名都要替换）。`{{NOW_ISO}}` = ISO-8601 带时区时间戳（格式见 `document-norms` §2.7）；`{{TODAY}}` = `YYYY-MM-DD`
 4. 调 `module-index-refresh` skill 同步需求层索引段：`<sub>/overview.md`（requirements-index）+ `<sub>/requirements/overview.md`（requirements-by-status）+ `<req_slug>/overview.md`（sub-requirements-index，初次同步含 `main/` 一行）
@@ -170,7 +165,7 @@ python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/module_init.py" -
     - submodule.yaml 的 tech_stack（数组对象）
 
   下一步建议：
-    - 配置 code_paths 后跑 `python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/check-stale-modules.py" init-submodule <basic>/<sub>` 触发反向索引重建（或 `... rebuild-index` 全量重建）
+    - 配置 code_paths 后跑 `python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" init-submodule <basic>/<sub>` 触发反向索引重建（或 `... rebuild-index` 全量重建）
     - 调 `code-to-doc` skill 解析现有代码生成 current-state/
   ```
 
@@ -234,7 +229,7 @@ python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/module_init.py" -
 |---|---|
 | `module_init.py` 退出码 2（参数/命名校验） | 转述 stderr 原文，修正输入后重跑；不手工补文件 |
 | `module_init.py` 退出码 1（异常） | 转述报错；确认 `plugin-root.txt` 指向的插件根有效后重试 |
-| 反向索引初始化失败（脚本 ⚠ 警告） | 转述警告 + 提示用户事后跑 `python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/check-stale-modules.py" rebuild-index` |
+| 反向索引初始化失败（脚本 ⚠ 警告） | 转述警告 + 提示用户事后跑 `python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" rebuild-index` |
 | 需求模式模板复制失败 | 报错 + 不写部分文件；用户重试 |
 | 需求模式占位符替换不完全 | 报告未替换的占位符位置，请用户手动填充 |
 | 需求层索引同步失败 | 报告"骨架已建但索引未同步"，提示手动 `/core:module-index-refresh` |

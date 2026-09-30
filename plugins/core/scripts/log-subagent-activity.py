@@ -21,7 +21,14 @@ from datetime import datetime
 from pathlib import Path
 
 
-PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
+# 同目录公共模块：harness 差异只有一份实现（见 _harness.py 抬头）
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+import _harness  # noqa: E402
+from _harness import plugin_root_candidates, project_dir as _project_dir  # noqa: E402
+
+PROJECT_DIR = _project_dir()
 LOG_FILE = PROJECT_DIR / "logs" / "subagent-activity.log"
 
 
@@ -57,13 +64,9 @@ def _discover_known_agents():
             pass
 
     # Plugin 级 agents
-    # Codex F3 fixup: ${CLAUDE_PLUGIN_ROOT} 在某些 Claude Code 版本/上下文可能不可用，
-    # 加 __file__ 推导 fallback（本脚本位于 plugins/core/scripts/，向上 2 级即 plugin root）
-    plugin_root_env = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    plugin_agents_candidates = []
-    if plugin_root_env:
-        plugin_agents_candidates.append(Path(plugin_root_env) / "agents")
-    plugin_agents_candidates.append(Path(__file__).resolve().parent.parent / "agents")
+    # 插件根有环境变量与 __file__ 推导两个来源（环境变量在某些 CC 版本/上下文不可用，
+    # Codex 侧只在插件源注入），逐个试——两条候选的产出与排序见 _harness.plugin_root_candidates
+    plugin_agents_candidates = [root / "agents" for root in plugin_root_candidates()]
 
     for plugin_agents_dir in plugin_agents_candidates:
         if plugin_agents_dir.exists():
@@ -101,6 +104,9 @@ def extract_agent_type_from_path(transcript_path):
 
 
 def main():
+    # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
+    if _harness.hook_outside_project():
+        return 0
     # Windows 上强制 UTF-8 读写三条流，防止 GBK/UTF-8 编码冲突
     try:
         sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")

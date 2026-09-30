@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Manual fallback entry for recomputing .claude/workframe-state/skill-metrics.yaml.
+Manual fallback entry for recomputing .workframe/state/skill-metrics.yaml.
 
 Claude Code plugin bin/ should put this command on the Bash PATH, so agents do
 not need to rely on ${CLAUDE_PLUGIN_ROOT} being present in ordinary Bash calls.
@@ -8,6 +8,12 @@ not need to rely on ${CLAUDE_PLUGIN_ROOT} being present in ordinary Bash calls.
 Usage:
     workframe-recompute-skill-metrics
     workframe-recompute-skill-metrics --window-days 14
+    workframe-recompute-skill-metrics --harness cc   # pass it when you know the door
+
+Without --harness the skill_metrics_recomputed event carries harness="unknown" — NOT an
+omitted field and NOT a guessed "cc". Omission means cc in event-schema (legacy-compat
+default), and this command is user-invoked from either door; guessing wrong writes a
+silently mis-attributed event. Full contract: harness_field PARTITION in event-schema.json.
 """
 
 import sys

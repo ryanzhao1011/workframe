@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""
+Change-completeness check before closing out a module change (module-close-check).
+
+Claude Code plugin bin/ should put this command on the Bash PATH. If it is not
+on PATH in your shell, run the script directly:
+    python <plugin>/scripts/module_close_check.py
+
+Run it after the module docs and the project ledger are written, and before the
+outer repo's close-out commit (the code repo should already be committed — the
+baseline hash only exists once committed).
+
+Usage:
+    workframe-module-close-check                    # full report, exit 1 on any error
+    workframe-module-close-check --project <dir>    # target another project directory
+
+With no --project it uses $CLAUDE_PROJECT_DIR, then the current directory.
+It modifies nothing it inspects. Its only writes are one line appended to its own
+counting log (discipline-trace-log.jsonl in the state directory) and that log's
+lock file (plus a spill file if the lock times out); the
+discipline-trace item also reads back to compute its upgrade count. To mark a red
+discipline-trace run, use workframe-discipline-mark.
+"""
+
+import sys
+from pathlib import Path
+
+
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from module_close_check import main  # noqa: E402
+
+
+if __name__ == "__main__":
+    sys.exit(main())

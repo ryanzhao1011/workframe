@@ -52,7 +52,7 @@ modules-template/
 ## 复制后必须做
 
 - 替换所有 `{{XXX}}` 占位符（module-init Step 3 自动完成；手动复制时需手工替换）
-- 子模块创建后跑 `python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/check-stale-modules.py" init-submodule <basic>/<sub>` 初始化反向索引
+- 子模块创建后跑 `python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" init-submodule <basic>/<sub>` 初始化反向索引
 - 用 module-index-refresh 同步上级 overview 的机器维护段
 - 检查 `module` 字段二段式 `<basic>/<sub>`（basic-module overview 除外，详见各模板 frontmatter 注释）
 

@@ -18,3 +18,19 @@ rules: {}                   # schema 占位（v0.2.1 起）：rule_triggered 无
 corrections_count: 0        # 近 window_days 内 user_correction 事件数
 blocks_count: 0             # 近 window_days 内 task_blocked 事件数
 proposal_failures_count: 0  # 近 window_days 内 proposal_verified 且 signal_met=false 的事件数
+
+harness_breakdown:          # 事件按门（cc / codex）分列 + 各门的结构性缺口，v3 起
+  counts: {}                # 例如：{cc: 214, codex: 9, unstamped: 1188}
+                            # unstamped = 无 harness 字段的存量行（schema 缺省读作 cc）
+  cross_door_gaps: {}       # 对门产得出、本门产不出 —— **这才是跨门缺口**
+  partial: {}               # 该门有一路 producer 缺失或未判定（note 里写明哪一种）
+  unverified: {}            # 该门一条已确立的 producer 路径都没有
+  neither_door: []          # 两扇门都没有 producer，与门无关；**不计入跨门缺口**
+  full_but_delivery_unverified: {}   # 模型侧事件：写入动作门无关（判 full），但
+                            # 「告知模型去写」的那条链在该门未确立 —— 该门零计数
+                            # 同样可能是结构性的。投递状态取自 event-schema 的
+                            # availability_values.__delivery_established__，现算
+                            # 两张表分开是有原因的：合成一张时 codex 那格会多出
+                            # 一个两侧皆无的类型，照抄进报告会把跨门缺口数读大
+                            # 三张清单一律现算于 .workframe-meta/event-schema.json 的
+                            # availability 段；此处是占位，不是副本

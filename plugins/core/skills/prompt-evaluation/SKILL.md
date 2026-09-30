@@ -1,10 +1,6 @@
 ---
 name: prompt-evaluation
-description: Prompt 评估与对比，通过维度定义、样本设计、对比测试、量化评分、上线建议的五步流程验证 Prompt 效果
-when_to_use: |
-  用于 Prompt 效果验证、A/B 对比测试、量化评分、上线决策依据时调用。
-  典型触发："评估这版 prompt 效果" / "对比 A/B" / "看 prompt 数据" / "评估实验"。
-  不用于：Prompt 设计本身（用 prompt-design）/ 系统功能测试（用 test-case-design 由 qa 主导）/ 单条 case 调试（直接对话即可）。
+description: 'Prompt 评估与对比，通过维度定义、样本设计、对比测试、量化评分、上线建议的五步流程验证 Prompt 效果。用于 Prompt 效果验证、A/B 对比测试、量化评分、上线决策依据。典型触发："评估这版 prompt 效果" / "对比 A/B" / "看 prompt 数据" / "评估实验"。不用于：Prompt 设计本身（用 prompt-design）/ 系统功能测试（用 test-case-design 由 qa 主导）/ 单条 case 调试（直接对话即可）。'
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 ---

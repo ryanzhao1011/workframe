@@ -6,7 +6,7 @@
 
 ```
 projects/evals/
-├── rules/      # 自定义 rules 的 eval case（正例 ≥2 + 负例 ≥1）
+├── agents-md/  # 项目自有判据（AGENTS.md）的 eval case（正例 ≥2 + 负例 ≥1）
 ├── skills/     # 自定义 skills 的 eval case（成功 ≥1 + 失败 ≥1）
 └── agents/     # 自定义 agents 的路由 case（≥3 样例）
 ```
@@ -14,7 +14,7 @@ projects/evals/
 ## 何时用
 
 - `self-iteration` 生成 L2 提案变更 **core 文件**时，必须先补 eval cases 再执行
-- 本项目自定义了 agent / skill / rule，建议写 eval case 保证变更可回归
+- 本项目写了自有判据（`AGENTS.md`）或自定义了 agent / skill，建议写 eval case 保证变更可回归
 
 ## 文件格式
 

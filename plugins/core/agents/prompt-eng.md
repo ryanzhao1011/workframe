@@ -13,14 +13,12 @@ tools:
   - WebSearch
   - WebFetch
   - AskUserQuestion
-skills:
-  - prompt-design
-  - prompt-evaluation
+  - Skill
 ---
 
 # Prompt 工程师 @prompt-eng
 
-> 启动协议、协作边界、通用收尾协议（Step 0-3 通用骨架）见 workframe core rule: `agent-protocols`（项目内同步路径 `.claude/rules/workframe/core/agent-protocols.md`）。本文件只定义 @prompt-eng 的角色特质。
+> 启动协议、协作边界、通用收尾协议由 `SubagentStart` 在本 agent 启动时**直接注入上下文**，不必也无处去读文件。本文件只定义 @prompt-eng 的角色特质。
 
 ## 角色定位
 
@@ -45,7 +43,7 @@ skills:
 | **评估实验数据** | 含基线对照、case 表、结论 |
 | **临时探索 / 候选方案** | 未稳定的策略草稿 |
 
-**具体落盘路径与文件命名约定**：由项目在 `CLAUDE.md` 或 `role-customization-guide.md` 自定义；对应 skill 内可定义文件级元信息格式（如 frontmatter 版本号字段）。**core agent 不强制目录深度或文件名格式**，只要求"一 Prompt 一文件 + 变更可追溯"。
+**具体落盘路径与文件命名约定**：由项目在 `AGENTS.md`（项目自有判据）里约定（写法见 `role-customization-guide.md` §项目级路径与命名约定）；对应 skill 内可定义文件级元信息格式（如 frontmatter 版本号字段）。**core agent 不强制目录深度或文件名格式**，只要求"一 Prompt 一文件 + 变更可追溯"。
 
 ## 特有约束
 
@@ -55,7 +53,7 @@ skills:
 
 ## Step 3 扩展 — Prompt-Eng 任务流转
 
-通用 Step 3 规则见 `agent-protocols.md`。@prompt-eng 特有：
+通用 Step 3 规则见必载片 §Step 3 — 更新任务看板。@prompt-eng 特有：
 
 - **Prompt 变更类任务**（Prompt 模板修改、策略文件变更、新版本上线等）：状态从 `in_progress` 流转到 `pending_qa`，**不得直接 `completed`**
   - 响应末尾明确标注："Prompt 变更已完成，需 @qa 验证"（由用户 / 主 Claude 调度）

@@ -3,7 +3,10 @@
 重算 board.yaml 的 summary 块（可单独执行，也可被 session-end-flush.py import）
 
 设计原则：
-  - 不用 yaml.safe_load / yaml.dump，避免丢失注释和字段顺序
+  - **写入侧不用 yaml.dump**，避免丢失注释和字段顺序——summary 块仍是逐行替换
+  - **读计数用 yaml.safe_load**（软依赖，缺 PyYAML 时降级逐行 + 自检）：逐行判据
+    对 YAML 的跨行标量续行失明（续行不要求缩进），会提前退出、静默少算并把错值
+    写回，还返回 status=ok（BUG-005）。读取不涉及注释与字段顺序，故与上一条不冲突
   - 逐行扫描 summary 块，只替换已知字段（total / pending / in_progress / pending_qa /
     completed / blocked / cancelled / last_updated），未知字段原样保留
   - board.yaml 不存在或 summary 块格式异常时跳过 + 写 skipped 事件，不抛错
@@ -24,10 +27,40 @@ import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+# **只用于读计数**，写入侧仍走 rewrite_summary_block 的逐行替换——见上面 §设计原则
+# 前两条：会丢注释与字段顺序的是 **dump**，读取不涉及，所以两条不冲突。
+# 软依赖：缺 PyYAML 时降级到逐行解析，由 count_task_statuses 里的自检兜住
+# （形态同 skills/requirement-archiving/scripts/check_archive.py）。
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
-PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
+
+class BoardParseMismatch(Exception):
+    """逐行解析的结果与文件里的任务条目数对不上——拒绝写回（见下方自检）。"""
+
+
+class BoardYamlUnparsable(Exception):
+    """**PyYAML 在位却读不动 board.yaml**——文件本身是坏的，不是环境问题。
+
+    与 `BoardParseMismatch` 是两回事，别合并：那条说的是「降级路径自己算得不对」，
+    这条说的是「权威解析器根本读不进去」。两者的处置都是拒绝写回，但 reason 必须
+    分开——否则排查的人不知道该去修 board.yaml 的语法，还是去查降级解析器的失明面。
+    """
+
+
+# 同目录公共模块：运行态目录、harness 差异、追加写各只有一份实现
+# （见 _state_io.py / _harness.py 抬头）
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+from _harness import project_dir as _project_dir  # noqa: E402
+from _state_io import append_line, event_json, state_dir_of  # noqa: E402
+
+PROJECT_DIR = _project_dir()
 BOARD_FILE = PROJECT_DIR / "projects" / "board.yaml"
-EVENTS_FILE = PROJECT_DIR / ".claude" / "workframe-state" / "events.jsonl"
+EVENTS_FILE = state_dir_of(PROJECT_DIR) / "events.jsonl"
 
 KNOWN_FIELDS = (
     "total",
@@ -52,19 +85,99 @@ FIELD_LINE_RE = re.compile(r'^(\s+)(\w+):\s*(.*?)(\s*#.*)?$')
 
 
 def append_event(**fields):
-    """写一条 summary_recomputed 事件到 events.jsonl。"""
-    EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    """写一条 summary_recomputed 事件到 events.jsonl（加锁与 spill 见 _state_io.append_line）。"""
     event = {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "type": "summary_recomputed",
         **fields,
     }
-    with EVENTS_FILE.open("a", encoding="utf-8", newline="") as f:
-        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    append_line(EVENTS_FILE, event_json(event))
+
+
+def _count_via_yaml(text):
+    """用 safe_load 取计数。**只读不写**——写入侧仍是逐行替换，注释与字段顺序不受影响。
+
+    比逐行解析多覆盖的是**跨行标量**的全部形态：双引号 / 单引号续行（YAML 不要求
+    续行缩进）、块状标量 `|` `>`。逐行判据对这些一律失明，且方向还不一致——实测
+    双引号续行少算、块状标量里的 `status:` 正文多算（BUG-005）。
+
+    返回签名与 _count_task_statuses_by_line 一致，便于两条路径互换。
+    """
+    data = yaml.safe_load(text)
+    if not isinstance(data, dict):
+        raise ValueError("board.yaml 顶层不是映射")
+    tasks = data.get("tasks") or []
+    if not isinstance(tasks, list):
+        raise ValueError("board.yaml 的 tasks 不是序列")
+    counts = {k: 0 for k in KNOWN_FIELDS if k not in ("total", "last_updated")}
+    total = 0
+    unknown_statuses = set()
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+        status = t.get("status")
+        if status in counts:
+            counts[status] += 1
+            total += 1
+        elif status is not None:
+            unknown_statuses.add(str(status))
+    return total, counts, unknown_statuses, len(tasks)
 
 
 def count_task_statuses(text):
+    """统计 tasks 的 status 分布。**yaml 优先；只有 PyYAML 缺失才降级逐行 + 自检**。
+
+    返回 (total, counts dict, unknown_statuses set, n_entries)——两条路径签名一致。
+
+    **两种「读不到」分流，不共用一条路径**：
+
+    - **PyYAML 缺失**（环境问题）→ 降级逐行 + 自检。逐行路径的已知失明面写在
+      `_count_task_statuses_by_line` 的 docstring 里。
+    - **PyYAML 在位但解析失败**（文件坏了）→ 抛 `BoardYamlUnparsable`，调用方转
+      skipped，**不写回、不报 ok**。这一支曾与上一支共用 `except Exception: pass`，
+      后果是 board.yaml 里的 C0 控制字符 / 未转义裸双引号被静默吞掉，summary 照写、
+      事件照报 `status:"ok"`——「真解析器读不了这个文件」这件事一点痕迹都不留。
+
+    降级路径抛 `BoardParseMismatch` 时调用方**必须拒绝写回**：本函数的老实现对跨行
+    标量续行失明，会静默少算并把错值写进 summary、还返回 status=ok（BUG-005）。
+    """
+    if yaml is not None:
+        try:
+            return _count_via_yaml(text)
+        except Exception as e:
+            # **「缺库」与「文件坏了」必须分流，不能共用一条降级路径。**
+            # 走到这里说明 PyYAML 在位、却读不动 board.yaml ⇒ 文件本身是坏的。
+            # 旧实现在这里 `except Exception: pass` 落进逐行路径，而逐行路径对
+            # C0 控制字符、未转义裸双引号这类畸形**完全失明**（它只按行找
+            # `status:`），于是照常算出一组数、写进 summary、事件写 `status:"ok"`
+            # ——真解析器读不了这个文件这件事**不留任何痕迹**。实测：把 U+0001
+            # 写进 board.yaml，两条路径都报 total=3，事件 ok，零告警。
+            # 现在改为抛出，由调用方转成 skipped + 可查的 reason，绝不静默报 ok。
+            # （逐行降级仍然保留，但**只服务于 PyYAML 缺失**这一种情形——见下方。）
+            raise BoardYamlUnparsable(f"{type(e).__name__}: {e}") from e
+
+    # 只有 PyYAML 不可用时才走到这里：降级逐行 + 下面的自检。
+    total, counts, unknown_statuses, n_entries = _count_task_statuses_by_line(text)
+
+    # **自检的参照必须不共享块内循环的退出条件。**
+    # `n_entries` 与 `total` 都在那个循环里递增，遇到提前退出会**一起**少算——
+    # 实测 BUG-005 现场两者同为 23（真值 27），拿它俩互比是**恒绿假闸**。
+    # 全文件 `- id:` 计数与该循环无关，同一现场得 27 vs 23，正确报红。
+    declared = sum(1 for ln in text.splitlines() if TASK_ENTRY_RE.match(ln))
+    if declared != n_entries:
+        raise BoardParseMismatch(
+            f"全文件 `- id:` {declared} 条，tasks 块内只解析到 {n_entries} 条"
+            f"——逐行解析对某种跨行标量失明，拒绝写回（见 BUG-005）"
+        )
+    return total, counts, unknown_statuses, n_entries
+
+
+def _count_task_statuses_by_line(text):
     """**只扫描 tasks: 块内**的 `status: <value>` 行，遇到下一个顶层 key 停止。
+
+    降级实现：仅在 PyYAML 不可用或 safe_load 失败时使用，且结果必须过
+    count_task_statuses 的自检才作数。**已知失明面**：YAML 的跨行标量续行不要求
+    缩进，本函数会把这类续行判成下一个顶层 key 而提前退出（BUG-005）。
 
     返回 (total, counts dict, unknown_statuses set, n_entries)。
 
@@ -251,7 +364,23 @@ def recompute_board_summary():
 
     # utf-8-sig 容错 Windows BOM（PowerShell Set-Content -Encoding UTF8 默认带 BOM；普通 utf-8 文件不受影响）
     text = BOARD_FILE.read_text(encoding="utf-8-sig")
-    total, counts, unknown_statuses, n_entries = count_task_statuses(text)
+    # strict 保护 0：逐行降级路径的自检不通过 → 不重算。
+    # 与下面两道同一形态（skipped + 不写回）。本缺陷的伤害主要来自「写错还报 ok」，
+    # 所以宁可什么都不写、留一条可查的 reason，也不把少算的值盖上去。
+    try:
+        total, counts, unknown_statuses, n_entries = count_task_statuses(text)
+    except BoardParseMismatch as e:
+        result = {"status": "skipped", "reason": "parse_mismatch", "detail": str(e)}
+        append_event(**result)
+        return result
+    except BoardYamlUnparsable as e:
+        # strict 保护 0b：真解析器读不动 board.yaml → 不重算、留痕。
+        # 与 parse_mismatch 分成两个 reason：那条指向降级解析器的失明面，
+        # 这条指向 board.yaml 自己的语法。跑 `workframe-doctor --group runtime`
+        # 的 `yaml_parse` 项可以拿到具体行列与肇事字符。
+        result = {"status": "skipped", "reason": "board_yaml_unparsable", "detail": str(e)}
+        append_event(**result)
+        return result
     today = date.today().isoformat()
 
     # strict 保护：发现未知 status 时不重算（避免静默忽略错误数据）

@@ -200,7 +200,7 @@ def _render_tree_files(src_dir: Path, dst_dir: Path, mapping: dict,
     if not src_dir.is_dir():
         raise InstallError(
             f"模板目录不存在：{src_dir}\n"
-            f"  插件安装不完整或模板被删。确认 .claude/workframe-state/plugin-root.txt "
+            f"  插件安装不完整或模板被删。确认运行态状态目录下的 plugin-root.txt "
             f"指向的插件根有效（重装 core 插件可修复），再重跑。")
     for src in sorted(src_dir.rglob("*")):
         if not src.is_file():

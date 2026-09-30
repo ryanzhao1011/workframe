@@ -6,23 +6,31 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/heartbeat-check.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/heartbeat-check.py\" --harness cc"
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start-prep.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start-prep.py\" --harness cc"
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/sync-rules.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-context.py\" --harness cc --scope main --shard 1/3"
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-stale-modules.py\" scan-git-diff"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-context.py\" --harness cc --scope main --shard 2/3"
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/memory-ask.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-context.py\" --harness cc --scope main --shard 3/3"
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-stale-modules.py\" scan-git-diff --harness cc"
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/memory-ask.py\" --harness cc"
           }
         ]
       }
@@ -33,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/maintenance_workorder.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/maintenance_workorder.py\" --harness cc"
           }
         ]
       }
@@ -44,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/user-prompt-inject.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/user-prompt-inject.py\" --harness cc"
           }
         ]
       }
@@ -55,7 +63,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-stale-modules.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-stale-modules.py\" --harness cc"
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/signoff-guard.py\" --harness cc"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/signoff-guard.py\" --harness cc"
           }
         ]
       },
@@ -64,7 +85,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-skill-invoked.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-skill-invoked.py\" --harness cc"
           }
         ]
       }
@@ -75,7 +96,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-iteration-trigger.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-iteration-trigger.py\" --harness cc"
           }
         ]
       }
@@ -86,7 +107,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/subagent-memory-inject.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/subagent-memory-inject.py\" --harness cc"
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-context.py\" --harness cc --scope sub --shard 1/3"
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-context.py\" --harness cc --scope sub --shard 2/3"
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-context.py\" --harness cc --scope sub --shard 3/3"
           }
         ]
       }
@@ -97,7 +130,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-subagent-activity.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-subagent-activity.py\" --harness cc"
           }
         ]
       }
@@ -108,7 +141,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-stop-failure.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-stop-failure.py\" --harness cc"
           }
         ]
       }
@@ -119,7 +152,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-config-change.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-config-change.py\" --harness cc"
           }
         ]
       }
@@ -130,7 +163,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end-flush.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end-flush.py\" --harness cc"
           }
         ]
       }
@@ -141,7 +174,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-skill-invoked.py\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-skill-invoked.py\" --harness cc"
           }
         ]
       }

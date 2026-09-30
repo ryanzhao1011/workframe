@@ -1,10 +1,6 @@
 ---
 name: obsidian-link-audit
-description: 用 Obsidian 官方 CLI 做链接、反链、坏链与孤岛文档审计——改文档前查谁引用了它，改完后确认没留下断链。CLI 不可用时 fallback 到 rg/Read。
-when_to_use: |
-  正式文档修改前后、单文件 rename/move 前后、发布到外部平台前；
-  用户问「谁引用了这个文档 / 有没有断链 / 哪些是孤岛文档」时；
-  删改概念后要确认无落空引用时（document-norms §8.1 Step 3 的 L2 反链查漏）。
+description: '用 Obsidian 官方 CLI 做链接、反链、坏链与孤岛文档审计——改文档前查谁引用了它，改完后确认没留下断链。CLI 不可用时 fallback 到 rg/Read。用于正式文档修改前后、单文件 rename/move 前后、发布到外部平台前，以及删改概念后要确认无落空引用时（document-norms §8.1 Step 3 的 L2 反链查漏）。典型触发：「谁引用了这个文档 / 有没有断链 / 哪些是孤岛文档」。'
 user-invocable: true
 allowed-tools: [Bash, Read, Grep, Glob]
 ---
@@ -33,7 +29,7 @@ allowed-tools: [Bash, Read, Grep, Glob]
 
 ## CLI Probe
 
-优先读取 `.claude/workframe-state/obsidian-cli-status.json`（schema 权威定义见 skill: `obsidian-doc-structure` §status.json schema）：
+优先读取 `.workframe/state/obsidian-cli-status.json`（schema 权威定义见 skill: `obsidian-doc-structure` §status.json schema）：
 
 - `do_not_probe: true` → **永不重新 probe**（不设 TTL、不做过期自判），直接按 `cli_available` 决定走 CLI 还是 fallback；重新启用 CLI 的唯一入口 = 用户手动删除该文件
 - 缓存缺失 → 执行**非执行检测**（全程不运行任何 obsidian 命令）：定位命令（`Get-Command obsidian` / `command -v obsidian`）→ 判定是否 GUI 启动器（所在目录存在 `Obsidian.exe` / `resources.pak` 特征文件）→ 不可用则写入 status.json（`cli_available: false`、`do_not_probe: true`、`reason`）并 fallback
@@ -85,7 +81,7 @@ rg "\]\([^)]*\.md\)" projects docs
 
 ## Workframe Event
 
-使用后按 `agent-protocols.md` 记录 `skill_used` 事件，至少包含：
+使用后按必载片 §Step 1 — 事件流 记录 `skill_used` 事件，至少包含：
 
 ```json
 {

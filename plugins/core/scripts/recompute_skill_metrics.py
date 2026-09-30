@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Recompute .claude/workframe-state/skill-metrics.yaml from events.jsonl.
+Recompute skill-metrics.yaml from events.jsonl (both live in the runtime state dir;
+its location is decided once by `_state_io.state_dir_of`).
 
 This is the deterministic implementation for the skill/rule metrics summary.
 Librarian may invoke it manually, and SessionEnd calls it automatically through
@@ -22,8 +23,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
-STATE_DIR = PROJECT_DIR / ".claude" / "workframe-state"
+# 同目录公共模块：运行态目录、harness 差异、追加写各只有一份实现
+# （见 _state_io.py / _harness.py 抬头）
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+from _harness import (  # noqa: E402
+    add_harness_arg, harness_breakdown, project_dir as _project_dir,
+)
+from _state_io import append_line, event_json, state_dir_of  # noqa: E402
+
+PROJECT_DIR = _project_dir()
+STATE_DIR = state_dir_of(PROJECT_DIR)
 EVENTS_FILE = STATE_DIR / "events.jsonl"
 METRICS_FILE = STATE_DIR / "skill-metrics.yaml"
 
@@ -129,18 +140,61 @@ def _render_metrics(metrics):
             "",
         ]
     )
+    lines.extend(_render_harness_breakdown(metrics.get("harness_breakdown") or {}))
     return "\n".join(lines)
 
 
+def _render_harness_breakdown(bd):
+    """按门分列的数据来源段。**追加段**——上面每个既有键与数值一字未动。
+
+    为什么必须随指标一起落盘：跨门混合的 events.jsonl 里，一类事件为零可能是「真的没发生」，
+    也可能是「那扇门根本产不出它」。不把这两件事分开，读者会把 `turn_failed` 在 Codex 侧
+    恒为 0 读成「Codex 会话失败更少」。清单一律现算于 event-schema 的 `availability`，
+    本函数不自带副本（`_harness.harness_breakdown` 是唯一实现）。
+    """
+    if not bd:
+        return []
+    out = ["harness_breakdown:",
+           "  # 数据来源分列；unstamped = 无 harness 字段的存量行（schema 缺省读作 cc）",
+           "  counts:"]
+    counts = bd.get("counts") or {}
+    if counts:
+        for key in sorted(counts):
+            out.append(f"    {key}: {counts[key]}")
+    else:
+        out[-1] = "  counts: {}"
+    for label, comment in (
+        ("cross_door_gaps", "对门产得出、本门产不出 —— **这才是跨门缺口**，本门零计数是结构性的"),
+        ("partial", "该门有一路 producer 缺失或未判定（note 里写明是哪一种）"),
+        ("unverified", "该门一条已确立的 producer 路径都没有，不许当成可得"),
+        ("full_but_delivery_unverified",
+         "模型侧事件：写入动作门无关（故判 full），但**告知模型去写**的那条链在该门未确立"),
+    ):
+        mapping = bd.get(label) or {}
+        if not any(mapping.values()):
+            out.append(f"  {label}: {{}}  # {comment}")
+            continue
+        out.append(f"  {label}:  # {comment}")
+        for door in sorted(mapping):
+            names = mapping[door]
+            out.append(f"    {door}: [{', '.join(names)}]" if names else f"    {door}: []")
+    # 两侧皆无：与门无关，**单独一张表**。混进 cross_door_gaps 会让跨门缺口数被读大
+    # ——真实发生过：合并时 codex 那格四项，而真正的跨门缺口是三项。
+    neither = bd.get("neither_door") or []
+    out.append(f"  neither_door: [{', '.join(neither)}]" if neither else "  neither_door: []")
+    out.append("                            # 两扇门都没有 producer，与门无关；**不计入跨门缺口**")
+    out.append("")
+    return out
+
+
 def append_event(ev_type, **extra):
-    EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    """加锁与 spill 见 _state_io.append_line。"""
     event = {
         "ts": _now().isoformat(timespec="seconds"),
         "type": ev_type,
         **extra,
     }
-    with EVENTS_FILE.open("a", encoding="utf-8", newline="") as f:
-        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    append_line(EVENTS_FILE, event_json(event))
 
 
 def recompute_skill_metrics(window_days=30, write_event=True):
@@ -196,6 +250,9 @@ def recompute_skill_metrics(window_days=30, write_event=True):
         "corrections_count": corrections_count,
         "blocks_count": blocks_count,
         "proposal_failures_count": proposal_failures_count,
+        # 窗口内事件的门分列 + 各门的结构性缺口。**不参与上面任何一个计数**——
+        # 既有键与数值在本次改造前后逐字相同，这是新加的一段。
+        "harness_breakdown": harness_breakdown(scoped_events),
     }
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -231,6 +288,9 @@ def main():
     parser = argparse.ArgumentParser(description="Recompute Workframe skill metrics from events.jsonl")
     parser.add_argument("--window-days", type=int, default=30)
     parser.add_argument("--no-event", action="store_true", help="Do not append skill_metrics_recomputed event")
+    # 本脚本经 bin/workframe-recompute-skill-metrics 由模型手工兜底调用，模型被告知
+    # 该带 `--harness`；argparse 对未知参数是 exit 2，不挂这一个参数就会当场失败。
+    add_harness_arg(parser)
     args = parser.parse_args()
 
     if args.window_days <= 0:

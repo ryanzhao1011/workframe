@@ -23,7 +23,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
-# 冒号全角半角都认：`agent-protocols.md` 与 CLAUDE.md 模板示范的条目格式是半角
+# 冒号全角半角都认：skill `signal-intake` 与必载注入片（notes 格式硬要求）示范的条目格式是半角
 # `- YYYY-MM-DD:`，而 correction-detection 的写入模板用全角 `：`。只认一种会让
 # 另一种写法的条目**整条游离在三账本校验之外**（静默漏检，不是误报）。
 ENTRY_RE = re.compile(r"^- (?:\[纠正\] )?(\d{4}-\d{2}-\d{2})[:：]")
@@ -70,8 +70,13 @@ def main():
     args = ap.parse_args()
 
     root = Path(args.project)
-    state = root / ".claude" / "workframe-state"
-    memory_dir = root / ".claude" / "agent-memory"
+    # 运行态两个目录的位置只由 core 插件的 `_state_io` 决定——eval 跑在真实项目上，
+    # 自己拼路径就是第二个源，挪目录那天这里漏改、读的是一个没人写的目录
+    # __file__ = <core>/eval-cases/memory-pipeline/scripts/…  → parents[3] 即 <core>
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
+    from _state_io import memory_dir_of, state_dir_of
+    state = state_dir_of(root)
+    memory_dir = memory_dir_of(root)
 
     sidecar = json.loads((state / "memory-index.json").read_text(encoding="utf-8"))
     entries = sidecar.get("entries", {})

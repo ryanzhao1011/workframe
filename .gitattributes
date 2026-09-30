@@ -7,3 +7,9 @@
 # 在 Windows 上永远测不出来。gitattributes 后行覆盖前行，故 .cmd 需在此后重新声明。
 plugins/core/bin/* text eol=lf
 plugins/core/bin/*.cmd text eol=crlf
+
+# `plugins/core/context/` 下的注入源一律 LF。`context_sources_lf_only` 钉的是「源里没有
+# CR」，而本仓在 `core.autocrlf=true` 的机器上新克隆出来会是 CRLF——不钉 eol 的话那条断言
+# 在新克隆上必红，且红的原因与源本身无关，排查会一路找错方向。用**目录通配**而不是逐文件
+# 枚举：枚举必然漏掉将来新增的片。
+plugins/core/context/** text eol=lf

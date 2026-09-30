@@ -1,6 +1,6 @@
 # PRD 图件规范（能力库）
 
-> **适用条件**：项目 PRD 框架（`.claude/skills/prd-style/SKILL.md` §1）声明启用图件时，
+> **适用条件**：项目 PRD 框架（`.agents/skills/prd-style/SKILL.md` 或 `.claude/skills/prd-style/SKILL.md` §1，两个候选按存在性解析，规则见 SKILL.md）声明启用图件时，
 > 由 SKILL.md S2（结构图草稿）与 S4（落盘渲染）读取。项目未启用图件则本文件整体不适用。
 >
 > 本文件是图件纪律的**单一实现**——选型、双格式落点、同步纪律、组织纪律都只在这里，

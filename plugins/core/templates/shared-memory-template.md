@@ -16,7 +16,7 @@
 
 <!-- 示例（请根据实际项目填写后删除示例）：
 - 2026-04-10：`projects/board.yaml` 的 `summary:` 段由 SessionEnd hook 自动重算 + SessionStart drift check 兜底；其他角色更新 tasks 条目时不修改 summary 段
-- [纠正] 2026-04-12：研发任务必须流转 `in_progress → pending_qa → completed`，@dev 不能直接标记 completed
+- [纠正] 2026-04-12：研发任务必须流转 `in_progress → pending_qa → completed`；`pending_qa → completed` 在角色侧仅 @qa（@dev 不能直接标记 completed）。主 Claude 自签是另一条通道，准入由四段闸门判定（必载片 §谁签发这次收口）
 -->
 
 ## 项目级共识

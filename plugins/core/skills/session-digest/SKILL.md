@@ -12,7 +12,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 ⚠️ **重要——执行模型说明**：SessionEnd hook 由 Python 脚本独立运行（见 `session-end-flush.py`）。两个关键事实：
 
 1. hook 结束后 Claude Code runtime **不会**再调度任何 skill 执行
-2. hook 在 SessionEnd 时**无条件覆盖** `.claude/workframe-state/session-digest-latest.md`（见 `session-end-flush.py` 的 `write_digest_skeleton()`：`DIGEST_FILE.write_text(content)` 不做任何"是否已富填充"的检查）
+2. hook 在 SessionEnd 时**无条件覆盖** `.workframe/state/session-digest-latest.md`（见 `session-end-flush.py` 的 `write_digest_skeleton()`：`DIGEST_FILE.write_text(content)` 不做任何"是否已富填充"的检查）
 
 因此本 skill 的**唯一有效触发路径**是：
 
@@ -23,14 +23,15 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 ## 输入
 
 无参数。读取以下文件：
-- `.claude/workframe-state/events.jsonl`（本 session 内的事件，按 ts 范围过滤）
-- `.claude/workframe-state/activity-state.json`（last_session_at / pending_maintenance）
-- `.claude/workframe-state/session-digest-latest.md`（骨架或上次内容）
-- `projects/changelog.md`（如有）近期条目
+- `.workframe/state/events.jsonl`（本 session 内的事件，按 ts 范围过滤）
+- `.workframe/state/activity-state.json`（last_session_at / pending_maintenance）
+- `.workframe/state/session-digest-latest.md`（骨架或上次内容）
+- **账本近期条目**（如有）：先读 `.workframe-config.json` 的 `close_check.ledger`——它声明的就是本项目的开发账本（写代码的项目常另立一本，如仓根的开发账）；**该键存在且文件可读时读它**，否则读 `projects/changelog.md`。两本都在时**只读前者**，不重复计入
+  - 该键默认开启（scaffold 装机即写入，默认指向 `projects/dev-log.md`），所以多数项目走的是前者；把它改成空壳 `{}` 关掉账本检查的项目、以及框架此项默认开启之前装机的老项目，读不到 `ledger`，仍只读 `projects/changelog.md`
 
 ## 输出
 
-覆盖写入 `.claude/workframe-state/session-digest-latest.md`：
+覆盖写入 `.workframe/state/session-digest-latest.md`：
 
 ```markdown
 # Session Digest (latest)

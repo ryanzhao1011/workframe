@@ -1,11 +1,6 @@
 ---
 name: doc-graph-health
-description: 知识网健康巡检：跑 skill 内 scripts/graph_health.py 产出持久报告 projects/modules/graph-health.md（断链 / 孤儿 / hub / stale current-state / 姊妹时差 / updated 异常 / 概念热点七项检测），并按处置指引推进修复。触发词：知识库体检、图谱健康、巡检知识网、graph-health、查断链、查孤儿文档、文档过期检查。
-when_to_use: |
-  - 大规模文档变更后（批量回填 / 迁移 / 织网 / 归档收口）；
-  - 月度周期性体检（无 hook 自动触发，靠人/会话建议）；
-  - 用户问「知识库健康吗 / 有没有断链 / 哪些文档过期了」。
-  扫描对象是 projects/modules + projects/specs 的链接图（workframe 项目骨架恒有）。
+description: '知识网健康巡检：跑 skill 内 scripts/graph_health.py 产出持久报告 projects/modules/graph-health.md（断链 / 孤儿 / hub / stale current-state / 姊妹时差 / updated 异常 / 概念热点七项检测），并按处置指引推进修复。触发词：知识库体检、图谱健康、巡检知识网、graph-health、查断链、查孤儿文档、文档过期检查。用于大规模文档变更后（批量回填 / 迁移 / 织网 / 归档收口）、月度周期性体检（无 hook 自动触发，靠人/会话建议），或用户问「知识库健康吗 / 有没有断链 / 哪些文档过期了」时。扫描对象是 projects/modules + projects/specs 的链接图（workframe 项目骨架恒有）。'
 user-invocable: true
 allowed-tools: [Bash, Read, Grep, Glob, Edit, AskUserQuestion]
 ---
@@ -23,8 +18,8 @@ allowed-tools: [Bash, Read, Grep, Glob, Edit, AskUserQuestion]
 从项目根目录执行（插件根路径由 SessionStart hook 写入 `plugin-root.txt`，不依赖 PATH）：
 
 ```bash
-python "$(cat .claude/workframe-state/plugin-root.txt)/skills/doc-graph-health/scripts/graph_health.py"          # 全量巡检 + 覆写报告
-python "$(cat .claude/workframe-state/plugin-root.txt)/skills/doc-graph-health/scripts/graph_health.py" --dry    # 只看摘要不写报告
+python "$(cat .workframe/state/plugin-root.txt)/skills/doc-graph-health/scripts/graph_health.py"          # 全量巡检 + 覆写报告
+python "$(cat .workframe/state/plugin-root.txt)/skills/doc-graph-health/scripts/graph_health.py" --dry    # 只看摘要不写报告
 ```
 
 跑完对比上次：`git diff -- projects/modules/graph-health.md`（收敛趋势比绝对数字重要）。
@@ -70,7 +65,7 @@ python "$(cat .claude/workframe-state/plugin-root.txt)/skills/doc-graph-health/s
 
 ## Workframe Event
 
-使用后按 `agent-protocols.md` 记录 `skill_used` 事件：
+使用后按必载片 §Step 1 — 事件流 记录 `skill_used` 事件：
 
 ```json
 {"ts":"<ISO-8601>","type":"skill_used","skill":"doc-graph-health","role":"<role>","success":true,"source":"projects/modules/graph-health.md"}

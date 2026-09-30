@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "workframe-launcher",
   "displayName": "Workframe Launcher",
-  "version": "1.0.0",
-  "description": "Workframe launcher: the one command that starts everything. Creates a new Workframe project or onboards an existing one — asks about your product, proposes a module structure, scaffolds it, subscribes the project to the core plugin, and verifies the install. Install this once per machine; it installs core into each project for you.",
+  "version": "1.1.0",
+  "description": "Workframe 启动器：一条命令开启全部流程。新建 Workframe 项目或接入已有项目——问清你的产品、提出模块结构、生成骨架、把项目订阅到 core 插件，并验证装机结果。每台机器装一次，它会替你把 core 装进每个项目。",
   "author": {
     "name": "Zhao Jiahao"
   },

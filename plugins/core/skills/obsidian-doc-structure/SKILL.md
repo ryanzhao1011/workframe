@@ -1,10 +1,6 @@
 ---
 name: obsidian-doc-structure
-description: 用 Obsidian 官方 CLI 读取文档 outline、properties、property、tags、aliases、wordcount——比 Read 快且不把全文灌进上下文。CLI 不可用时 fallback 到 Read + Markdown/frontmatter 解析。
-when_to_use: |
-  只想先看某文档的章节结构 / frontmatter 字段 / 标签 / 字数，不需要读全文时；
-  需求评估前快速理解已有文档结构、查文档归属、发布前做属性与完整性检查时。
-  边界：要查引用关系 → obsidian-link-audit；要改 frontmatter → obsidian-safe-write。
+description: '用 Obsidian 官方 CLI 读取文档 outline、properties、property、tags、aliases、wordcount——比 Read 快且不把全文灌进上下文。CLI 不可用时 fallback 到 Read + Markdown/frontmatter 解析。用于只想先看某文档的章节结构 / frontmatter 字段 / 标签 / 字数、不需要读全文时，以及需求评估前快速理解已有文档结构、查文档归属、发布前做属性与完整性检查时。边界：要查引用关系 → obsidian-link-audit；要改 frontmatter → obsidian-safe-write。'
 user-invocable: true
 allowed-tools: [Bash, Read, Grep]
 ---
@@ -31,7 +27,7 @@ allowed-tools: [Bash, Read, Grep]
 
 ## CLI Probe
 
-优先读取 `.claude/workframe-state/obsidian-cli-status.json`（schema 权威定义见下方「status.json schema」）：
+优先读取 `.workframe/state/obsidian-cli-status.json`（schema 权威定义见下方「status.json schema」）：
 
 - `do_not_probe: true` → **永不重新 probe**（不设 TTL、不做过期自判），直接按 `cli_available` 决定走 CLI 还是 fallback；重新启用 CLI 的唯一入口 = 用户手动删除该文件后自然触发重新检测
 - 缓存缺失 → 执行**非执行检测**（三步全程不运行任何 obsidian 命令）：
@@ -95,7 +91,7 @@ obsidian wordcount path="<file>" format=json
 
 ## Workframe Event
 
-使用后按 `agent-protocols.md` 记录 `skill_used` 事件，至少包含：
+使用后按必载片 §Step 1 — 事件流 记录 `skill_used` 事件，至少包含：
 
 ```json
 {

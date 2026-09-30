@@ -8,17 +8,17 @@
 
 ```
 plugins/workframe-launcher/   用户级入口插件
-plugins/core/                 项目级插件：agents / skills / rules / hooks / scripts / templates / reference
-tools/                        validate.py（唯一质量闸）、sync-rules.py
+plugins/core/                 项目级插件：agents / skills / context / hooks / scripts / templates / reference
+tools/                        validate.py（唯一质量闸）与配套单测
 docs/                         用户文档
 .claude-plugin/               市场元数据
 ```
 
 ## 四条硬约束
 
-1. **`python tools/validate.py` 必须全绿**才能提交。它是本仓唯一的质量闸，纯标准库零依赖。如果你的改动需要放宽某道护栏，多半说明护栏该重新瞄准而不是删掉——在 PR 里说明理由。
+1. **`python tools/validate.py` 必须全绿**才能提交。它是本仓唯一的质量闸；自身只用标准库，但它以子进程跑的收口闸单测有一组需要 **PyYAML**（`pip install pyyaml==6.0.2`，CI 装的就是这一版），没装时那一组会整组报红——「没跑」不等于「通过」。这是**贡献者**的前置依赖，不是用户装框架的前置依赖。如果你的改动需要放宽某道护栏，多半说明护栏该重新瞄准而不是删掉——在 PR 里说明理由。
 2. **发版锁步**：两个插件、市场元数据、README 状态行同版本一起 bump。`version` 是用户感知「有更新」的唯一信号，且按插件各自独立，锁步是为了不让任何一边的用户被静默落下（`check_version_consistency` 强制）。
-3. **`plugins/core/{rules,templates,skills}/` 下的资产会装到用户机器，不得引用仓内路径**（`check_core_assets_no_repo_internal_path` 强制）。用户那里没有 `tools/`、没有 `docs/`，写了就是死引用。
+3. **`plugins/core/{templates,skills,context}/` 下的资产会装到用户机器，不得引用仓内路径**（`check_core_assets_no_repo_internal_path` 强制）。用户那里没有 `tools/`、没有 `docs/`，写了就是死引用。
 4. **新增检查必须用它自己的失败方式打一遍**（二检）。「写完了但从没被真正执行过」的检查与通过长得一模一样——本仓踩过多次，包括一次改动误删赋值导致某检查全程失效、而当时全部闸显示绿灯。
 
 ## 两份 CHANGELOG
@@ -42,7 +42,7 @@ docs/                         用户文档
 
 ## 提交与平台
 
-- **改了框架源，记得同步项目镜像**——`.claude/rules/workframe/core/` 是 `sync-rules` 维护的镜像，而模型每会话实际读的是镜像不是源。只改源等于没改。
+- **改了必载纪律的源，下一次会话才生效**——`plugins/core/context/` 下的源由启动时的 hook 打包投递，项目里没有副本。改完当轮不生效，别在同一个会话里验它。
 - **Windows 上写文件一律钉 `newline=""`**。Python 文本模式默认把 LF 转成 CRLF，一次写入就让整个文件产生 diff，真实改动被淹没。`check_text_writes_pin_newline` 扫 `plugins/` 与 `tools/` 下所有写入点。
 - **hooks 保持 shell-form**，不要迁 exec form——双包装器设计依赖 shell 的扩展名解析，exec form 无法用一份跨平台 `hooks.json` 表达。
 - **`${CLAUDE_PLUGIN_ROOT}` 只注入 hook / MCP / LSP 子进程**，Bash 工具子进程不在官方承诺内。skill 里定位插件根一律用 `plugin-root.txt` 配方（`check_no_plugin_root_env_in_skills` 强制）。

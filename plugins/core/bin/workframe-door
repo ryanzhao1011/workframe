@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""
+Two-door installer (workframe-door): install / check / upgrade the Codex door;
+check the Claude Code door read-only, and back-fill it when it is missing.
+
+Claude Code plugin bin/ should put this command on the Bash PATH. If it is not
+on PATH in your shell, run the script directly:
+    python <plugin>/scripts/workframe_door.py --codex
+
+Usage:
+    workframe-door --codex [--marketplace SRC]   # install Codex door (11 steps)
+    workframe-door --check [--live]              # read-only reconciliation (+ one real session)
+    workframe-door --upgrade                     # refresh the plugin cache, then re-seed trust
+                                                 #   git source      -> marketplace upgrade
+                                                 #   local directory -> plugin add (re-materialise);
+                                                 #     this one DOES flip the user-level `enabled`
+                                                 #     back to true, then back to false in step 7
+    workframe-door --cc                          # read-only check of .claude/settings.json
+    workframe-door --backfill                    # installed project: fill in whichever door is
+                                                 #   missing (writes the CC subscription and/or
+                                                 #   installs the Codex door); re-running when both
+                                                 #   doors are up writes nothing
+    workframe-door --migrate [--project P]       # installed-project migration: write the plan only
+
+The migration apply step is run by the user, not by the model (the plan prints
+the exact command with its confirmation code):
+    python <plugin>/scripts/workframe_door.py --migrate --apply --confirm <code> --project <P>
+--apply / --confirm are rejected unless --migrate is given, and --confirm is
+rejected unless --apply is given too.
+"""
+
+import sys
+from pathlib import Path
+
+
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from workframe_door import main  # noqa: E402
+
+
+if __name__ == "__main__":
+    sys.exit(main())

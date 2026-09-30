@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""
+Mark one red discipline-trace run of module-close-check (workframe-discipline-mark).
+
+Claude Code plugin bin/ should put this command on the Bash PATH. If it is not
+on PATH in your shell, run the script directly:
+    python <plugin>/scripts/discipline_trace_mark.py
+
+Usage:
+    workframe-discipline-mark --fingerprint <prefix> --verdict missed --by qa|user|self
+    workframe-discipline-mark --fingerprint <prefix> --verdict false-positive --by qa|user
+    workframe-discipline-mark ... --project <dir>
+
+It appends one mark line to the counting log that module-close-check keeps in the
+state directory and never rewrites existing lines. Exit 0 written / 1 not written /
+2 refused (unknown or ambiguous fingerprint, run not red, value out of range).
+Rules and limits are in scripts/discipline_trace_mark.py.
+"""
+
+import sys
+from pathlib import Path
+
+
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from discipline_trace_mark import main  # noqa: E402
+
+
+if __name__ == "__main__":
+    sys.exit(main())

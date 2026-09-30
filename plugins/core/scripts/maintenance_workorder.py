@@ -13,13 +13,13 @@ Setup Hook (matcher=maintenance) — 维护批处理工单聚合器（v0.4 G2#8�
   4. pending_maintenance open 信号 + workframe-doctor 全量检查异常项
 
 产物：
-  - .claude/workframe-state/maintenance-workorder.md   工单（模型读取执行）
-  - .claude/workframe-state/maintenance-run.flag       旗标（memory-ask.py 据此静默，
+  - <状态目录>/maintenance-workorder.md   工单（模型读取执行）
+  - <状态目录>/maintenance-run.flag       旗标（memory-ask.py 据此静默，
     30 分钟有效期，无需显式清理——2026-08-06 实测 --maintenance 会话中 SessionStart
     hook 照常触发，不静默会与工单重复询问）
 
 两阶段提交（judge → commit，2026-08-06 深测后定型）：
-  模型会话只做内容判断与 agent-memory 写盘，把全部记账诉求写成 manifest
+  模型会话只做内容判断与角色记忆写盘，把全部记账诉求写成 manifest
   （logs/maintenance-commit.json，logs/ 非敏感可写）；wrapper 在会话结束后调本脚本
   `--commit` 用代码统一提交——sidecar entry + memory_promoted/skill_used/dismissed
   事件 + 关 PM 信号 + 工单打勾。记账=代码，与框架设计法则一致。
@@ -27,9 +27,11 @@ Setup Hook (matcher=maintenance) — 维护批处理工单聚合器（v0.4 G2#8�
 实测依据（2026-08-06 沙盒，勿回退）：
   - Setup hook 的 stdout（JSON additionalContext 与纯文本）均不注入模型上下文
     —— 工单必须落文件、由 -p prompt 引导模型读取
-  - headless 会话对 `.claude/workframe-state/**` 的写入被 CC 判为敏感文件并硬拒，
-    `Edit(path)` allow 规则也压不过（`Write(path)` 规则更是无效语法）——所以记账
-    只能走会话外代码提交；`.claude/agent-memory/**` 的 md 实测可写
+  - 旧布局（运行态目录在 `.claude/` 下）的 headless 会话对**状态目录**下的写入被 CC
+    判为受保护路径并硬拒，`Edit(path)` allow 规则也压不过（`Write(path)` 规则更是无效
+    语法）——两阶段提交最初因此成形；**角色记忆目录**下的 md 实测可写。新布局的状态
+    目录不在 CC 受保护路径内，这条已不成立；记账仍走会话外代码提交，理由是上面的
+    设计法则，不再是权限所迫
   - -p 会话下 Skill 工具不注入正文 → 工单指挥模型直接 Read librarian SKILL.md
     （wrapper 用 --add-dir 授予 plugin 目录读权限）
 """
@@ -54,13 +56,20 @@ except Exception:
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
-from _state_io import atomic_write, load_activity, quarantine, update_activity  # noqa: E402
+from _harness import project_dir as _project_dir  # noqa: E402
+from _state_io import (  # noqa: E402
+    SPILL_SUFFIX, append_lines, atomic_write, event_lines, load_activity, memory_dir_of,
+    probe_appendable,
+    quarantine, state_dir_of, update_activity,
+)
 
 
-PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
-STATE_DIR = PROJECT_DIR / ".claude" / "workframe-state"
+PROJECT_DIR = _project_dir()
+STATE_DIR = state_dir_of(PROJECT_DIR)
+STATE_REL = STATE_DIR.relative_to(PROJECT_DIR).as_posix()
 ACTIVITY_FILE = STATE_DIR / "activity-state.json"
-MEMORY_DIR = PROJECT_DIR / ".claude" / "agent-memory"
+MEMORY_DIR = memory_dir_of(PROJECT_DIR)
+MEMORY_REL = MEMORY_DIR.relative_to(PROJECT_DIR).as_posix()
 CANDIDATES_FILE = STATE_DIR / "promotion-candidates.md"
 PROPOSALS_APPLIED = PROJECT_DIR / "projects" / "proposals" / "applied"
 WORKORDER_FILE = STATE_DIR / "maintenance-workorder.md"
@@ -74,7 +83,7 @@ MANIFEST_APPLIED = PROJECT_DIR / "logs" / "maintenance-commit.applied.json"
 def count_notes_entries(memory_dir):
     """数各角色 notes.md 的积压条目数——`### ` 章节头与顶层日期列表条目两种口径取 max。
 
-    真实写入存在两种条目形态（rules 不约束 notes 格式）：`### ` 章节式与
+    真实写入存在两种条目形态（必载纪律只认这两种）：`### ` 章节式与
     `- YYYY-MM-DD：` 顶层列表式（含 `- [纠正] …` 变体）。二者取 max：
     漏计 = 积压对真实数据失明（高危）；过计只是提早询问（fail-safe 方向）。
     返回 {scope: count}（仅收录 count>0）。纯前缀统计，无语义判断——
@@ -186,12 +195,12 @@ def build_workorder():
         "## 执行规约（先读再动手）",
         "",
         "- 本会话为非交互批处理（print 模式）：只执行 **L1**（角色记忆整理/归档）与记录性操作。",
-        "- **L2 一律不动**（rules / CLAUDE.md / skills / 删除 / 降级 / 受保护资产）——只在结果里提示用户。",
+        "- **L2 一律不动**（AGENTS.md / CLAUDE.md / skills / 删除 / 降级 / 受保护资产）——只在结果里提示用户。",
         "- 文件操作用 Read/Edit/Write 工具；**不要使用 Bash**（本会话无法批准权限）。",
-        "- `.claude/workframe-state/` 本会话**不可写**（CC 敏感文件闸，实测）：sidecar / events /",
-        "  关信号 / 本工单打勾一律**不要自己写**——把记账诉求写进 manifest（见文末格式），",
-        "  会话结束后由 wrapper 代码统一提交。`.claude/agent-memory/` 下 MEMORY / notes /",
-        "  notes-archive **可正常写**（实测）。",
+        f"- `{STATE_REL}/` 下的 sidecar / events / 关信号 / 本工单打勾一律**不要自己写**——",
+        "  记账由代码统一落盘：把记账诉求写进 manifest（见文末格式），",
+        f"  会话结束后由 wrapper 代码统一提交。`{MEMORY_REL}/` 下 MEMORY / notes /",
+        "  notes-archive 由本会话直接写。",
         "- 全部处理完后：先 Write manifest 到 `logs/maintenance-commit.json`，再输出执行摘要",
         "  （做了什么 / 跳过什么及原因 / 需用户拍板什么）。",
         "",
@@ -207,7 +216,7 @@ def build_workorder():
                      "（sidecar 与事件由 --commit 代码生成，勿手写）。")
         for scope, n in sorted(backlog.items()):
             lines.append(f"- [ ] {scope}：{n} 条待评估（L1 提升/归档照常；L2 候选记入 manifest `l2_candidates`——"
-                         f"promotion-candidates.md 也在 workframe-state 下本会话不可写，由 --commit 落盘）")
+                         f"promotion-candidates.md 在 {STATE_REL}/ 下，同样不要自己写，由 --commit 落盘）")
     else:
         lines.append("（无积压）")
 
@@ -231,7 +240,9 @@ def build_workorder():
         lines.append("close_pm 判据（仅此一条，勿自行扩展）：**本次工单已执行的动作实质消解了该信号的语义**"
                      "（例：memory_backlog 信号 + 本次已清完对应 notes 积压）→ ID 记入 manifest `close_pm`；"
                      "cadence_timeout / problem_threshold / activity_threshold 等自迭代节奏信号**不由批处理关闭**"
-                     "（它们等的是自迭代评审，不是维护动作）——保留并在摘要提示用户。")
+                     "（它们等的是自迭代评审，不是维护动作）——保留并在摘要提示用户。"
+                     "close_check_due 同样不关：它等的是跑一次 module-close-check + 刷新模块文档，"
+                     "而本会话既不能用 Bash、也不该改 modules/ 下的文档。")
         for it in pending:
             lines.append(f"- [ ] {it.get('id', '?')}（{it.get('kind', '?')}, {it.get('severity', '?')}）"
                          f"{it.get('details', '')} —— 按上方判据处置（关闭与 dismissed 事件由 --commit 生成）")
@@ -240,8 +251,8 @@ def build_workorder():
 
     lines += ["", "## 5. doctor 异常项", ""]
     if doctor_findings:
-        lines.append("处置判据：仅 `.claude/agent-memory/` 下可写文件的格式/内容问题可当场修复（数据修复类）；"
-                     "涉及 schema / 脚本 / skills / 权限 / workframe-state 数据的一律只报告不动手（机制类）。")
+        lines.append(f"处置判据：仅 `{MEMORY_REL}/` 下可写文件的格式/内容问题可当场修复（数据修复类）；"
+                     f"涉及 schema / 脚本 / skills / 权限 / `{STATE_REL}/` 数据的一律只报告不动手（机制类）。")
         for cid, level, msg in doctor_findings:
             lines.append(f"- [ ] [{cid}] {level}: {msg} —— 按上方判据处置")
     else:
@@ -278,26 +289,115 @@ def _unique_key(base, existing):
     return key
 
 
+def _utcnow():
+    """提交时刻（UTC）。单测冻结时钟替换这一处。"""
+    return datetime.now(timezone.utc)
+
+
+def _local_tz():
+    """本机时区。单测把它钉成固定时区——CI 常在 UTC 上跑，本地日期与 UTC 日期在那里恒相同，
+    不钉的话「跨零点」那几格构造出来与普通格完全一样。"""
+    return datetime.now().astimezone().tzinfo
+
+
+def _dedup_dates(now_utc, manifest_path):
+    """去重的日期窗 D：`--commit` 时刻与 manifest mtime **各自**的本地日期与 UTC 日期。
+
+    两个生产方的日期口径不统一——`--commit` 按本地日期拼 key，模型照 librarian SKILL 手写的 key 没规定时区；
+    manifest 在会话里写、`--commit` 在会话结束后跑，中间可能跨零点。历史 key 不回改，只在判据里兼容。"""
+    moments = [now_utc]
+    try:
+        moments.append(datetime.fromtimestamp(manifest_path.stat().st_mtime, timezone.utc))
+    except OSError:
+        pass
+    tz = _local_tz()
+    return {d for m in moments for d in (m.date().isoformat(), m.astimezone(tz).date().isoformat())}
+
+
+def _parse_entry_key(key):
+    parts = key.split(":", 2) if isinstance(key, str) else []
+    return parts if len(parts) == 3 else None
+
+
+def _promotion_events():
+    """事件流里已有的 `memory_promoted`：主文件 ＋ 未并回的 spill（与收口闸读事件同一口径），坏行跳过。"""
+    files = [EVENTS_FILE] + sorted(EVENTS_FILE.parent.glob(f"{EVENTS_FILE.stem}.*{SPILL_SUFFIX}"))
+    out = []
+    for f in files:
+        try:
+            text = f.read_bytes().decode("utf-8", "replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if '"memory_promoted"' not in line:
+                continue
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(ev, dict) and ev.get("type") == "memory_promoted":
+                out.append(ev)
+    return out
+
+
+def _same_summary(a, b, frag):
+    """两段摘要是不是同一条：删全部空白后，短的那段是长的那段的前缀，且至少长到片段那么长。
+
+    事件里的摘要被截在 80 字（`--commit` 截 `summary[:80]`，librarian 手写「原文前 80 字」），截断点前后的
+    空白又可能不同，所以比前缀不比全等；片段（前 20 字）已经相等，这里判的是片段之后的部分。"""
+    x, y = "".join((a or "").split()), "".join((b or "").split())
+    n = min(len(x), len(y))
+    return n >= len(frag) and x[:n] == y[:n]
+
+
+# librarian SKILL 的 source 枚举里「从 notes 提升」那几种（含只读不新写的历史值）；`[纠正]` 等其余来源不算
+PROMOTION_SOURCES = ("notes.md", "shared/notes.md", "librarian-promoted")
+
+
+def _promotion_decision(scope, summary, entries, events, dates):
+    """一条 promotion 该怎么记：返回 `(key, 写 sidecar?, 写事件?)`。
+
+    **两半分开判**（模型可能只写了 sidecar 与事件中的一半）：
+      - 事件流（含 spill）里有同 scope、同片段、key 日期 ∈ D、**摘要是同一条**的 `memory_promoted`
+        ⇒ 不写事件，沿用那条的 key；sidecar 里已有同 scope、同片段、`created_at` ∈ D 的条目 ⇒ 不写 sidecar，否则补上。
+      - 事件里只有**摘要不同**的同片段条目 ⇒ 判不了是不是同一条，维持加后缀（与改之前同一结局）。
+      - 只有 sidecar 条目（sidecar 不存摘要，无从比）⇒ 沿用它的 key、只补事件。
+      - 都没有 ⇒ 新 key（加后缀时连事件里已有的 key 一起避开）。
+    **sidecar 那半只认「从 notes 提升」来源的条目**（`PROMOTION_SOURCES`，且不是 `user-decree`）：同 scope、同日、
+    同片段的 `[纠正]` 条目不是这条 promotion 写过的 sidecar——认了它，事件就带着纠正条目的 key 写出去，
+    真正的这条 promotion 被吞掉。"""
+    frag = _normalize_key_fragment(summary)
+
+    def key_hits(key):
+        parts = _parse_entry_key(key)
+        return bool(parts) and parts[0] == scope and parts[2] == frag and parts[1] in dates
+
+    ev_match = [e for e in events if e.get("scope") == scope and key_hits(e.get("entry_key"))]
+    ev_same = [e for e in ev_match if _same_summary(e.get("summary"), summary, frag)]
+    sc_match = sorted(k for k, v in entries.items()
+                      if isinstance(v, dict) and v.get("scope") == scope and key_hits(k)
+                      and str(v.get("created_at") or "")[:10] in dates
+                      and v.get("source") in PROMOTION_SOURCES and v.get("provenance") != "user-decree")
+    if ev_same:
+        return ev_same[0]["entry_key"], not sc_match, False
+    if not ev_match and sc_match:
+        return sc_match[0], False, True
+    return None, True, True
+
+
 def _append_events(events):
     if not events:
         return
-    prefix = ""
-    if EVENTS_FILE.exists():
-        try:
-            tail = EVENTS_FILE.read_bytes()[-1:]
-            if tail and tail != b"\n":
-                prefix = "\n"
-        except Exception:
-            pass
-    with open(EVENTS_FILE, "a", encoding="utf-8", newline="") as f:
-        f.write(prefix + "".join(json.dumps(ev, ensure_ascii=False) + "\n" for ev in events))
+    # 本批事件同生共死：一把锁内一次写完。半行修补已由 append_lines 在锁内做掉
+    # （此前那段读末字节的判定在锁外，判完到写之间仍有窗口）。
+    append_lines(EVENTS_FILE, event_lines(events))
 
 
 def commit_manifest():
     """两阶段提交的 commit 端：读模型产出的 manifest，用代码完成全部记账。
 
-    headless 会话写不了 .claude/workframe-state/**（CC 敏感文件闸，2026-08-06 实测），
-    且记账本就该归代码（设计法则）——sidecar / 事件 / 关信号 / 工单打勾统一在此执行。
+    记账由代码统一落盘（设计法则）——
+    sidecar / 事件 / 关信号 / 工单打勾统一在此执行。
     """
     if not MANIFEST_FILE.exists():
         print("[maintenance --commit] 无 manifest（模型未产生记账诉求），跳过。")
@@ -314,8 +414,11 @@ def commit_manifest():
               f"避免 sidecar 记了 promotion 而事件缺失。manifest 保留可重跑。",
               file=sys.stderr)
         return 1
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    today = datetime.now().date().isoformat()
+    now_dt = _utcnow()
+    now = now_dt.isoformat(timespec="seconds")
+    today = now_dt.astimezone(_local_tz()).date().isoformat()
+    dates = _dedup_dates(now_dt, MANIFEST_FILE)
+    skipped_existing = 0
     events_out = []
     summary_bits = []
     # 提交前的原始快照：事件写失败时据此把 sidecar 回滚，避免「sidecar 记了 promotion
@@ -352,6 +455,8 @@ def commit_manifest():
                 return 1
             idx = loaded
         entries = idx.setdefault("entries", {})
+        known_events = _promotion_events()
+        new_sidecar = new_events = half = 0
         for p in promos:
             scope, summary = p["scope"], p["summary"].strip()
             prov = p.get("provenance")
@@ -361,35 +466,69 @@ def commit_manifest():
                 # 批处理是模型判断的产物，inferred 才是它的真实来源等级
                 # （user-decree 仅 correction-detection 写，批处理不产）。
                 prov = "inferred"
-            key = _unique_key(f"{scope}:{today}:{_normalize_key_fragment(summary)}", entries)
-            entries[key] = {"scope": scope, "created_at": today, "provenance": prov,
-                            "protected": False, "source": "notes.md"}
-            ev = {"ts": now, "type": "memory_promoted", "scope": scope,
-                  "entry_key": key, "summary": summary[:80], "source": "notes.md",
-                  "protected": False, "provenance": prov}
-            if scope != "shared":
-                ev["role"] = scope
-            events_out.append(ev)
-        atomic_write(SIDECAR_FILE, json.dumps(idx, ensure_ascii=False, indent=2))
-        events_out.append({"ts": now, "type": "skill_used", "skill": "librarian",
-                           "role": "main", "success": True})
-        summary_bits.append(f"promotions {len(promos)} 条（sidecar+事件）")
+            key, write_sidecar, write_event = _promotion_decision(scope, summary, entries, known_events, dates)
+            if key is None:
+                taken = set(entries) | {e.get("entry_key") for e in known_events}
+                key = _unique_key(f"{scope}:{today}:{_normalize_key_fragment(summary)}", taken)
+            write_sidecar = write_sidecar and key not in entries     # 已有同 key 条目时不覆盖
+            if not write_sidecar and not write_event:
+                skipped_existing += 1
+                continue
+            if write_sidecar != write_event:
+                half += 1
+            if write_sidecar:
+                entries[key] = {"scope": scope, "created_at": today, "provenance": prov,
+                                "protected": False, "source": "notes.md"}
+                new_sidecar += 1
+            if write_event:
+                ev = {"ts": now, "type": "memory_promoted", "scope": scope,
+                      "entry_key": key, "summary": summary[:80], "source": "notes.md",
+                      "protected": False, "provenance": prov}
+                if scope != "shared":
+                    ev["role"] = scope
+                events_out.append(ev)
+                known_events.append(ev)            # 同一份 manifest 里重复的那条也要看得见
+                new_events += 1
+        if new_sidecar:
+            atomic_write(SIDECAR_FILE, json.dumps(idx, ensure_ascii=False, indent=2))
+        if new_events:
+            events_out.append({"ts": now, "type": "skill_used", "skill": "librarian",
+                               "role": "main", "success": True})
+        summary_bits.append(f"promotions {len(promos)} 条（新写 sidecar {new_sidecar} / 事件 {new_events}，"
+                            f"其中只补一半 {half}；跳过已存在 {skipped_existing}）")
 
     # 1.5 l2_candidates → 追加 promotion-candidates.md（行格式与 librarian SKILL 固定格式一致；
-    #     批处理会话写不了 workframe-state，落盘归代码——2026-08-06 D2 实测抓出的缺口）
+    #     记账由代码统一落盘，不让模型自己写——2026-08-06 D2 实测抓出的缺口）
     cands = [c for c in (mani.get("l2_candidates") or [])
              if isinstance(c, dict) and (c.get("summary") or "").strip()]
     if cands:
-        header = ""
-        if not CANDIDATES_FILE.exists():
-            header = "# L2 提升候选（攒卡待用户拍板）\n\n> 由 librarian / maintenance --commit 追加；拍板后把对应行改 `- [x]`。\n\n"
-        rows = "".join(
-            f"- [ ] {c.get('scope', '?')} | {today} | {c['summary'].strip()} | "
-            f"出处: {(c.get('source') or '—').strip()} | 建议落点: {(c.get('target') or '待定').strip()}\n"
-            for c in cands)
-        with open(CANDIDATES_FILE, "a", encoding="utf-8", newline="") as f:
-            f.write(header + rows)
-        summary_bits.append(f"l2_candidates {len(cands)} 条")
+        # 已有同一行（勾没勾都算、日期 ∈ D）就不再追加——重复跑 `--commit` 或模型已手写过同一行时会撞上
+        seen = set()
+        if CANDIDATES_FILE.exists():
+            for ln in CANDIDATES_FILE.read_bytes().decode("utf-8", "replace").splitlines():
+                s = ln.strip()
+                if s.startswith(("- [ ] ", "- [x] ", "- [X] ")):
+                    seen.add(s[6:])
+
+        def _row_body(c, day):
+            return (f"{c.get('scope', '?')} | {day} | {c['summary'].strip()} | "
+                    f"出处: {(c.get('source') or '—').strip()} | 建议落点: {(c.get('target') or '待定').strip()}")
+
+        rows, cand_skipped = [], 0
+        for c in cands:
+            if any(_row_body(c, d) in seen for d in dates):
+                cand_skipped += 1
+                continue
+            seen.add(_row_body(c, today))
+            rows.append(f"- [ ] {_row_body(c, today)}\n")
+        if rows:
+            header = ""
+            if not CANDIDATES_FILE.exists():
+                header = "# L2 提升候选（攒卡待用户拍板）\n\n> 由 librarian / maintenance --commit 追加；拍板后把对应行改 `- [x]`。\n\n"
+            with open(CANDIDATES_FILE, "a", encoding="utf-8", newline="") as f:
+                f.write(header + "".join(rows))
+        skipped_existing += cand_skipped
+        summary_bits.append(f"l2_candidates {len(cands)} 条（追加 {len(rows)}，跳过已存在 {cand_skipped}）")
 
     # 2. close_pm → 关信号 + dismissed 事件
     ids = [i for i in (mani.get("close_pm") or []) if isinstance(i, str)]
@@ -502,7 +641,7 @@ def commit_manifest():
     except Exception:
         pass
     print(f"[maintenance --commit] 完成：{'；'.join(summary_bits) if summary_bits else '无记账诉求'}"
-          f"；事件 {len(events_out)} 条；勾选 {len(done)} 项。")
+          f"；事件 {len(events_out)} 条；勾选 {len(done)} 项；跳过 {skipped_existing} 条已存在。")
     return 0
 
 
@@ -535,12 +674,15 @@ def _append_events_rollbackable(events):
 
 
 def _known_event_types():
-    """从 event-schema.json 读合法事件类型；读不到返回空集（此时跳过校验，不误伤）。"""
-    try:
-        f = Path(__file__).resolve().parent.parent / ".workframe-meta" / "event-schema.json"
-        return set(json.loads(f.read_text(encoding="utf-8")).get("events", {}))
-    except Exception:
-        return set()
+    """从 event-schema.json 读合法事件类型；读不到返回空集（此时跳过校验，不误伤）。
+
+    实现引用 `_harness.registered_event_types()`——注册表的读取只留一份。口径与本函数
+    此前那版**逐字相同**：都按 `Path(__file__).parents[1]` 定位（即**正在执行的这份代码**
+    配套的注册表），都在任何异常上返回空集。特别地，那边**没有**改用 `plugin_root()`：
+    后者优先认 `CLAUDE_PLUGIN_ROOT`，env 指向另一份安装时读到的会是别人的注册表。
+    """
+    from _harness import registered_event_types
+    return registered_event_types()
 
 
 def _events_writable():
@@ -552,14 +694,9 @@ def _events_writable():
     的半截状态，而 manifest 也没标完成，重跑还可能产生重复条目
     （2026-08-16 实测：把 events.jsonl 换成目录即可稳定复现）。
     先探一次可写性，把「写不进去」挡在改账之前——比事后回滚简单，也更可靠。
+    探法本身在 `_state_io.probe_appendable`：「怎么碰 events.jsonl」只留一处实现。
     """
-    try:
-        EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with EVENTS_FILE.open("a", encoding="utf-8", newline=""):
-            pass
-        return True, None
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
+    return probe_appendable(EVENTS_FILE)
 
 
 def set_activity_flags(**flags):

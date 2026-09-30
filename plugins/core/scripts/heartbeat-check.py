@@ -6,7 +6,8 @@ SessionStart Hook — HEARTBEAT 周期检查
 
 路径策略（v7.1 plugin 化后）：
 - 当前项目根目录：$CLAUDE_PROJECT_DIR（官方 hook 环境变量），降级为当前工作目录
-- State 文件：<project>/.claude/workframe-state/heartbeat-state.json（项目内，plugin 目录是只读缓存）
+- State 文件：<运行态状态目录>/heartbeat-state.json（项目内，plugin 目录是只读缓存；
+  目录位置由 `_state_io.state_dir_of` 单点决定）
 - Board 文件：<project>/projects/board.yaml
 - 项目名：从 <project>/.workframe-config.json 的 project_name 字段读取，降级用目录名
 """
@@ -27,8 +28,17 @@ except Exception:
     pass
 
 
-PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
-STATE_DIR = PROJECT_DIR / ".claude" / "workframe-state"
+# 同目录公共模块：运行态目录与 harness 差异各只有一份实现
+# （见 _state_io.py / _harness.py 抬头）
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+import _harness  # noqa: E402
+from _harness import project_dir as _project_dir  # noqa: E402
+from _state_io import state_dir_of  # noqa: E402
+
+PROJECT_DIR = _project_dir()
+STATE_DIR = state_dir_of(PROJECT_DIR)
 STATE_FILE = STATE_DIR / "heartbeat-state.json"
 ACTIVITY_FILE = STATE_DIR / "activity-state.json"
 BOARD_FILE = PROJECT_DIR / "projects" / "board.yaml"
@@ -128,6 +138,12 @@ def count_overdue_tasks():
 
 
 def main():
+    # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
+    if _harness.hook_outside_project():
+        return 0
+    # Codex 清单带 `--output hook-json`：本脚本的 stdout 以 `[<项目名>]` 起头，Codex 会把它
+    # 按 JSON 解析失败后整条丢弃；该模式下把全部输出收成一条 hookSpecificOutput。CC 不带此参数。
+    _harness.hook_json_stdout("SessionStart")
     today = date.today()
     state = load_state()
     activity = load_activity()

@@ -2,6 +2,13 @@
 
 本文件记录 Workframe 的所有重要变更。
 
+## [1.1.0] — 2026-09-30
+
+### 新增
+
+- **支持 Codex**：同一个项目可以同时用 Claude Code 与 Codex，跑的是同一份框架。安装与升级见用户文档 [setup-guide](./docs/setup-guide.md) 的「Codex 门」一节。
+- **从 1.0.0 升级**：运行状态与角色记忆的目录搬到了 `.workframe/`，升级后要先跑一次迁移、再开会话，步骤见 [setup-guide](./docs/setup-guide.md) 的「已装项目迁移」一节。
+
 ## [1.0.0] — 2026-08-18
 
 首个公开版本。

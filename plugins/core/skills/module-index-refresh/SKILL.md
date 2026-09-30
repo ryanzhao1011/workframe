@@ -1,12 +1,6 @@
 ---
 name: module-index-refresh
-description: 递归刷新 modules/ 体系各层 overview.md 的机器维护索引段（基于 HTML 注释边界 `<!-- WORKFRAME:AUTO-INDEX:START/END -->`）。严格只重写 START/END 之间内容；段外人写部分（positioning + 中间内容）零接触。支持限定路径增量刷新与全量递归两种模式。触发词：刷新模块索引、重建 overview、module-index-refresh、同步 overview 索引。
-when_to_use: |
-  modules/ 体系下：
-  - 创建/修改/删除子模块或需求后（module-init 内部已自动调用）；
-  - 修改 submodule.yaml.status / meta.yaml.status 后手动同步上级；
-  - 大规模迁移完成后全量重建（migrate-to-modules 内部已自动调用）；
-  - 用户主动调用 `/core:module-index-refresh` 手动兜底。
+description: '递归刷新 modules/ 体系各层 overview.md 的机器维护索引段（基于 HTML 注释边界 `<!-- WORKFRAME:AUTO-INDEX:START/END -->`）。严格只重写 START/END 之间内容；段外人写部分（positioning + 中间内容）零接触。支持限定路径增量刷新与全量递归两种模式。触发词：刷新模块索引、重建 overview、module-index-refresh、同步 overview 索引。用于创建/修改/删除子模块或需求后（module-init 内部已自动调用）、修改 submodule.yaml.status / meta.yaml.status 后手动同步上级、大规模迁移完成后全量重建（migrate-to-modules 内部已自动调用）、用户主动调用 `/core:module-index-refresh` 手动兜底。'
 user-invocable: true
 effort: low
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
@@ -73,7 +67,7 @@ modules/ 体系下机器维护索引段的唯一刷新入口。
 ```bash
 # 全量：重建 global + 所有 basic 的段；限定：加 --basic "<name>"
 # 插件根从 plugin-root.txt 取（SessionStart hook 每会话刷新），不依赖环境变量
-python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/module_init.py" --project "<项目根>" --refresh-index [--basic "<name>"]
+python "$(cat .workframe/state/plugin-root.txt)/scripts/module_init.py" --project "<项目根>" --refresh-index [--basic "<name>"]
 ```
 
 跑完把输出转述（「已重建 / 无变化」逐行），然后 Step 2-4 **只处理其余层级的段**：
@@ -89,10 +83,27 @@ sub overview 的具名段（current-state-summary / requirements-index）、requ
 |---|---|
 | `modules/overview.md` basic-modules-index | 所有 `<basic>/module.yaml` 的 `name` / `status` / 摘要（取自 overview.md positioning 段首句）|
 | `<basic>/overview.md` submodules-index | 该 basic 下所有 `<sub>/submodule.yaml` 的 `name` / `status` / 摘要 |
-| `<sub>/overview.md` current-state-summary | 4 个 `current-state/*.md` 的 frontmatter（updated / confidence / source_paths）+ 第一个 H2 段首句。逐行取数：**架构 / API / 数据模型 / 代码索引**=对应文件第一个 H2 段首句，文件缺失则保留 `_（待 code-to-doc 生成 ...）_` 占位；**最近同步**=`submodule.yaml.last_synced_at`（不是 4 个 current-state 文件的 `updated`——那是文档改动时间，前者才是代码反解时间），键缺失或为空则 `_（未同步）_` |
+| `<sub>/overview.md` current-state-summary | 4 个 `current-state/*.md` 的 frontmatter（updated / confidence / source_paths）+ 第一个 H2 段首句。逐行取数：**架构 / API / 数据模型 / 代码索引**=对应文件第一个 H2 段首句，**文件缺失、或文件仍是模板骨架（frontmatter `source_ref` 为空）**时保留占位——`module_init` 按模板整目录复制、四件恒存在，只判「缺失」等于判据永不成立（实测某项目 48/48 件皆存在、命中 0；补上「仍是骨架」后命中 37）。**保留占位时原样保留段内已有的那一行**，不用模板文案覆盖它：占位行是「没有数据」的表示、不含任何机器取数，重写它零信息增益，却会抹掉人写的分档标注（如 `；普通代码档按需`）。这不是「例外」而是本段所有权规则的一个特例，规则见下方**所有权边界**；**最近同步**=`submodule.yaml.last_synced_at`（不是 4 个 current-state 文件的 `updated`——那是文档改动时间，前者才是代码反解时间），键缺失或为空则 `_（未同步）_`；**同行再读 `submodule.yaml.last_synced_ref`**，非空则在日期后附括注，**新写时形态为 `- **最近同步**：<日期>（基准 commit <ref>）`**，ref 为空则不渲染空括注。**本行机器只拥有两个 token——日期与 ref**：①**只要段内已有该行**（不论括注里当前提不提得出 ref、也不论日期位是真日期还是 `_（未同步）_`），就只就地替换这两个 token，**行内其余文字一律不动**；②括注里当前提不出 ref 而 `last_synced_ref` 非空时，把括注**插在日期之后、行内既有其余文字之前**，不重排该行；③`last_synced_ref` 由非空变空时，只移除 ref 那一个 token 与它所属的「基准 commit …」短语，**括注里的其余文字仍不动**——「不渲染空括注」只对本行从未有过括注的情形成立，不构成删除人写文字的授权。**机器不拥有这段文字：既不改也不删，其时效性由人负责**（保留不等于机器为它背书；内容过期是人的事，不是本段该动的东西）。这个括注是基准引用的**第三个落点**：`module-close-check` 的基准同值性检查按此形态从 overview 提取它；不产出它，三方对账静默降为两方，且已写在段内的括注会被本段重写抹掉，**两种失效都不报错** |
 | `<sub>/overview.md` requirements-index | 该 sub 下所有 `requirements/<req_slug>/meta.yaml` 的关键字段 |
 | `<sub>/requirements/overview.md` requirements-by-status | 同上，按 status 分成**五张表**（active / planning / done / dropped + `_未知_`）。`_未知_` 表收 `meta.yaml` 缺 status 或取值不在四态内的需求，列为 req_slug / 实际取值 / owner——它和四张状态表一样在 AUTO-INDEX 段**内**渲染（曾把它放在 END 之外，而本 skill 的硬纪律是段外零接触，那张表于是永远不会被填）。四张状态表逐列取数：**子需求数**=该 `<req_slug>/` 下 `<sub_req_slug>/` 目录数；**owner**=`meta.yaml.owner`；**摘要**=按下方摘要提取链；**完成时间 / 放弃时间**=`meta.yaml.updated_at`（纪律见 skill: `document-norms` §2.7「status 终态翻转」；只改 status 不动 updated_at 时这一列会显示创建日期，属已知失真）；**原因**=`meta.yaml.notes`，空则 `-` |
 | `<req_slug>/overview.md` sub-requirements-index | 子需求目录列表（含 `main/` + 拆出的其他子需求）+ 各 `<sub_req_slug>/prd.md` frontmatter。逐列取数：**子需求**=目录名；**状态**=`status`；**摘要**=`description`（按下方摘要提取链）；**PRD**=`prd.md` 存在则链接该文件，缺则 `_缺 prd.md_`；**复盘**=`reviews/` 下有 `.gitkeep` 以外的文件才链接该目录，否则 `-`（骨架自带 `.gitkeep` 占位，把它算成「有复盘」会让每个新需求都显示已复盘） |
+
+**所有权边界（AUTO-INDEX 段内的唯一规则）**：
+
+> **段内机器拥有的是「有数据源的 token」，不是整行。** 渲染时只写它有数据的那些 token，其余原样保留。每一行的 token 边界由上方取数表逐行给出。
+
+这一条取代了此前「机器全权重写 + 一条行级例外」的表述——那种写法给不出「下一行算不算例外」的判据。按本规则逐行推导，四类行的行为与现状逐一相符：
+
+| 段内的行 | 有数据源的 token | 导出的行为 |
+|---|---|---|
+| 占位行（`_（待 code-to-doc 生成 …）_`） | 0 个 | 整行不动（此前叫「唯一例外」的那一支） |
+| 最近同步行 | 日期、ref 两个 | 只换这两个，行内其余文字不动 |
+| 已同步的 架构 / API / 数据模型 / 代码索引 行 | 摘要 / updated / confidence 全有源 | 整行重写 |
+| 各索引表格行（requirements-index 等） | 每一列都有源 | 整行重写 |
+
+**怎么用它回答新问题**：先逐 token 问「这一处有没有数据源」。以「requirements-index 某一列能不能留人写文字」为例——五列全部有源（**空值也是数据**，如 `原因` 列取 `meta.yaml.notes`、空则渲染 `-`），故答案是不能；想在那儿留人写内容只有两条出路：给它一个数据源（加字段），或把内容挪到 AUTO-INDEX 段外。
+
+**新增行类型时的义务**：必须在上方取数表里显式写出该行的 token 边界，否则渲染方无从判断哪部分归机器。
 
 **缺 PRD 处理**：若某 `<sub_req_slug>/` 目录存在但 `prd.md` 缺失（仅有 test-cases / prototypes 等），sub-requirements-index 段渲染该行时 status / 摘要列填 `_缺 prd.md_`，并在 Step 6 报告中追加 warning `⚠️ <req_slug>/<sub_req_slug>/ 缺 prd.md`。**不用父 meta 兜底**——父需求 status 无法代表子需求状态。
 

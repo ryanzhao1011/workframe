@@ -6,7 +6,8 @@ SessionStart Hook — 记忆整理询问式触发（v0.4 G2#7）
 让模型用 AskUserQuestion 问用户「现在整理记忆积压吗？」。这是记忆整理的**主通道**：
 触发权在代码（hook_deterministic），内容判断（哪些条目值得提升）仍在 librarian skill。
 
-四道闸门（2026-08-06 用户拍板「更克制」，全过才问）：
+五道闸门（0 为 G7 J4 后补的 headless 静默；1-4 为 2026-08-06 用户拍板「更克制」；全过才问）：
+  0. 交互入口才问（CLAUDE_CODE_ENTRYPOINT 白名单静默 sdk 系入口，详见 main() 内注释）
   1. source == startup（CC 对 initialUserMessage 原生只在 startup 生效，此处双保险）
   2. notes 积压 ≥ ASK_BACKLOG_MIN_ENTRIES 条（`### ` 章节头计数，与排空跑「段」口径一致）
   3. 每日 ≤ 1 次（last_asked_date 日期比较）
@@ -34,18 +35,31 @@ from pathlib import Path
 
 
 try:
+    # stdin 也要包：Windows 上 PowerShell 起的 python 其 stdin 默认按本机 ANSI 代码页解码
+    # （`chcp 65001` 不改变它），载荷里含中文的 `cwd` 会变成另一串字符
+    sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 except Exception:
     pass
 
 
-PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
-STATE_DIR = PROJECT_DIR / ".claude" / "workframe-state"
+# 同目录公共模块：运行态目录与 harness 差异各只有一份实现
+# （见 _state_io.py / _harness.py 抬头）
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+import _harness  # noqa: E402
+from _harness import entrypoint as _entrypoint, project_dir as _project_dir  # noqa: E402
+from _state_io import memory_dir_of, state_dir_of  # noqa: E402
+
+PROJECT_DIR = _project_dir()
+STATE_DIR = state_dir_of(PROJECT_DIR)
+STATE_REL = STATE_DIR.relative_to(PROJECT_DIR).as_posix()
 ACTIVITY_FILE = STATE_DIR / "activity-state.json"
 ASK_STATE_FILE = STATE_DIR / "memory-ask-state.json"
 MAINT_FLAG_FILE = STATE_DIR / "maintenance-run.flag"
-MEMORY_DIR = PROJECT_DIR / ".claude" / "agent-memory"
+MEMORY_DIR = memory_dir_of(PROJECT_DIR)
 CANDIDATES_FILE = STATE_DIR / "promotion-candidates.md"
 
 # 频控参数（2026-08-06 用户拍板「更克制」；validate.py 锁定取值防漂移）
@@ -57,7 +71,7 @@ MAINT_FLAG_MAX_AGE_MIN = 30          # maintenance 旗标有效期（分钟）�
 def count_notes_entries(memory_dir):
     """数各角色 notes.md 的积压条目数——`### ` 章节头与顶层日期列表条目两种口径取 max。
 
-    真实写入存在两种条目形态（rules 不约束 notes 格式）：`### ` 章节式与
+    真实写入存在两种条目形态（必载纪律只认这两种）：`### ` 章节式与
     `- YYYY-MM-DD：` 顶层列表式（含 `- [纠正] …` 变体）。二者取 max：
     漏计 = 积压对真实数据失明（高危）；过计只是提早询问（fail-safe 方向）。
     返回 {scope: count}（仅收录 count>0）。纯前缀统计，无语义判断——
@@ -133,11 +147,11 @@ def build_message(backlog):
         f"1. 立即用 AskUserQuestion 向用户提问「现在整理记忆积压吗？」，三个选项：\n"
         f"   「全部处理」/「只处理最旧 1 条（条目日期最早者）」/「本次跳过」。\n"
         f"2. 用户选处理 → 调用 core:librarian skill 按所选范围整理。本场景约束：\n"
-        f"   L1（角色记忆提升/归档/事件记账）照常自动完成；L2 候选（涉及 rules / CLAUDE.md /\n"
-        f"   skills / 删除 / 降级）一律不当场处理，追加到 .claude/workframe-state/promotion-candidates.md\n"
+        f"   L1（角色记忆提升/归档/事件记账）照常自动完成；L2 候选（涉及 AGENTS.md / CLAUDE.md /\n"
+        f"   skills / 删除 / 降级）一律不当场处理，追加到 {STATE_REL}/promotion-candidates.md\n"
         f"   攒卡（格式见 librarian SKILL），仅在结果里提示用户待拍板。\n"
         f"   兜底：Skill 工具不可用时改为 Read \"{Path(script).parents[1] / 'skills' / 'librarian' / 'SKILL.md'}\"\n"
-        f"   按 SOP 执行；.claude/workframe-state/ 写入被拦时不要绕过——把 sidecar/事件记账\n"
+        f"   按 SOP 执行；{STATE_REL}/ 写入被拦时不要绕过——把 sidecar/事件记账\n"
         f"   诉求整理成清单在结果中输出，由用户在交互会话补齐。\n"
         f"3. 用户选「本次跳过」→ 用 Bash 运行：\n"
         f"   \"{py}\" \"{script}\" --record-refusal\n"
@@ -146,14 +160,17 @@ def build_message(backlog):
 
 
 def main():
+    # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
+    if _harness.hook_outside_project():
+        return 0
     if "--record-refusal" in sys.argv[1:]:
         return record_refusal()
 
-    # 闸门 0：交互入口才问——headless（claude -p）撞开场卡会空耗一轮响应，且脚本化
-    # 接续时敏感闸拦记账留三账不齐（G7 J4 实证）。判据 = CLAUDE_CODE_ENTRYPOINT
+    # 闸门 0：交互入口才问——headless（claude -p）撞开场卡会空耗一轮响应
+    # （G7 J4 实证）。判据 = CLAUDE_CODE_ENTRYPOINT
     # 白名单静默（2026-08-07 沙盒实测：交互 cli / print 模式 sdk-cli）；未知值照常
     # 出卡——CC 新增入口名时最坏回到旧行为（headless 误问），绝不新增交互失明
-    if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "") in ("sdk-cli", "sdk-ts", "sdk-py"):
+    if _entrypoint() in ("sdk-cli", "sdk-ts", "sdk-py"):
         return 0
 
     # 闸门 1：source == startup（stdin 解析失败时按 startup 继续——可用性优先，

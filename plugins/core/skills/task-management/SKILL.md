@@ -1,10 +1,6 @@
 ---
 name: task-management
-description: 管理项目看板 board.yaml 的任务创建、状态流转与进度统计
-when_to_use: |
-  用于 board.yaml 任务创建 / 状态变更 / 流转规则查阅 / schema 约束确认时调用。
-  典型触发："看板 X" / "任务状态改 Y" / "怎么流转研发任务到 pending_qa" / "签发权限"。
-  不用于：summary 数字重算（由 SessionEnd hook 自动 + 用户显式 `workframe-recompute-board-summary` 命令）/ 节奏复盘与周报（暂无对应 skill，由主 Claude 自由发挥）。
+description: '管理项目看板 board.yaml 的任务创建、状态流转与进度统计。用于 board.yaml 任务创建 / 状态变更 / 流转规则查阅 / schema 约束确认。典型触发："看板 X" / "任务状态改 Y" / "怎么流转研发任务到 pending_qa" / "签发权限"。不用于：summary 数字重算（由 SessionEnd hook 自动 + 用户显式 `workframe-recompute-board-summary` 命令）/ 节奏复盘与周报（暂无对应 skill，由主 Claude 自由发挥）。'
 user-invocable: false
 allowed-tools: [Read, Write, Edit, Glob, Grep]
 ---
@@ -76,7 +72,7 @@ modules/ 体系下，task 字段叠加 modules 归属：
 - 类型：ISO 日期字符串 `"YYYY-MM-DD"` 或 `null`
 - 何时填：
   - 用户显式提出截止时间（"下周五要上线"、"月底前完成"等）
-  - auto-update.md 的 P0「需求变更」场景捕获到上线时间
+  - 信号入账的 P0「需求变更」场景捕获到上线时间
   - 迭代计划任务（QBR / 发布窗口）
 - 何时不填：常规开发任务无刚性 deadline
 - heartbeat-check.py 使用：仅当 `deadline < today` 且 `status ∉ {completed, cancelled}` 时计为逾期
@@ -119,7 +115,7 @@ modules/ 体系下，task 字段叠加 modules 归属：
 | `pending` | 待开始 | 初始状态 |
 | `in_progress` | 进行中 | 从 pending 流转，依赖项须全部 completed |
 | `pending_qa` | 待 QA 验证 | 从 in_progress 流转，仅研发类任务经过此状态 |
-| `completed` | 已完成 | 研发任务：从 pending_qa 流转（仅 @qa 可操作）；非研发任务：从 in_progress 直接流转 |
+| `completed` | 已完成 | 研发任务：从 pending_qa 流转（**baseline 角色里仅 @qa 可操作**；主 Claude 自签的准入见 §签发权限 该行）；非研发任务：从 in_progress 直接流转 |
 | `blocked` | 被阻塞 | 从任意状态流转，须注明阻塞原因（QA 不通过时也使用此状态） |
 | `cancelled` | 已取消 | 从任意状态流转，须注明取消原因 |
 
@@ -135,17 +131,74 @@ modules/ 体系下，task 字段叠加 modules 归属：
 - 纯技术咨询、方案评估（@dev 的咨询类交付物）
 - 纯文档任务
 
+**项目自定义角色**（`assigned_to: <project-role>`）：按 `role-customization-guide.md` §任务状态流转约定的三分类归类——「产出修改线上内容」类（content-operator / designer 等）视同研发类走 pending_qa，其 `in_progress → pending_qa` 由该角色自己操作、签发仍仅 @qa（**自定义角色一律不获得签发权**，四段闸门的自签只对主 Claude 开）；「分析/咨询」「协调」类视同非研发类直接流转。项目在角色定义的 Step 3 段写明归类，不明确时按研发类处理（fail-safe：多过一道 QA 优于漏签发）。
+
+### 签发块 schema（`qa_signoff` / `verified_ranges`）
+
+`qa_signoff` 接受**两种形态**，按谁签发分：
+
+| 形态 | 用在哪 | 谁校验 |
+|---|---|---|
+| **字符串**（散文签注） | @qa 签发。写清验了什么、没验什么 | 无机器校验 |
+| **映射**（四段举证） | **主 Claude 自签或轻签注时必须用这种** | `signoff-guard.py` hook 逐字段校验 ＋ 重算四段闸门 |
+
+```yaml
+- id: TASK-042
+  status: completed
+  qa_signoff:
+    tier: 自签                    # 自签 / 轻签注 / 完整验证 / 你拍板
+    same_party: true              # 实现方与签发方是否同一方（**必填**）
+    admission:                    # ① 准入凭据——**hook 按这几个输入重算**，不读你写的结论
+      radius: 2                   # 爆炸半径（1-4，模型判的输入）
+      since: "a1b2c3d4"           # 切片起点 = 上一个签发点
+      diff_ref: "e5f6a7b8"        # 被判 diff 的锚点
+      at: "2026-09-10T01:02:03+00:00"   # UTC ＋ 秒级
+      passport:                   # 通行证；没有就写 null
+        task: TASK-041
+        round: "第二轮"
+        covered: "改动面与本轮 delta 的关系，一句话说清"
+        ref: "a1b2c3d4"
+    verified: |                   # ② 验了什么，逐条
+      ...
+    not_verified: |               # ③ 没验什么 ＋ 为什么，逐条
+      ...
+    unreviewed: |                 # ④ 未独立复核的部分
+      ...
+  verified_ranges: |              # 本次签发覆盖到哪儿（**必填**，与 qa_signoff 同级）
+    ...
+```
+
+**四个字段各自防什么**（缺一即被 hook 拒，红灯会点名是哪一段）：
+
+- **`admission` 是四段里唯一由机器重算的那段。** hook 只吃 `radius` / `since` / `passport`
+  这几个**输入**，自己调判定脚本重跑一遍，把结果与 `tier` 比——**写入的档位比重算结果松即拒**。
+  所以「把否决项写成未命中」这种事做不到：那不是输入，是结论，hook 根本不读它。
+- **`same_party`** 把「实现方与签发方是同一个」从散文变成可分组字段。允许同一方时这是唯一的
+  补偿控制：缺了它，事后问题率就只剩一个混合池，两种成色分不开。
+- **`unreviewed` 的判据是二元口诀**：本轮有没有第二个 context 从零看过同一份产出？
+  **没有 → 写「全部」**，然后列出你据以自信的机器证据。同一方签发时恒命中「没有」。
+- **`verified_ranges`** 是下一轮增量复核的锚点。不写它，下一轮只能退回全量复核或凭印象划范围。
+
+> **`tier: 自签` / `轻签注` 默认可用**：`.workframe-config.json` 的
+> `signoff.self_signoff_enabled` **缺键即开启**（默认 true）。要关掉得显式写
+> `false`；关掉之后 hook 会拒绝这两档，红灯说明要动的是配置而不是那一行档位。
+>
+> **默认开启是一个被知情接受的取舍**：它让能力对多数项目真正可用，代价是升级到本版
+> 的项目不做任何动作就获得了自签权，且 **Codex 门下本 hook 实测不起把关作用**（Codex 改文件
+> 走 `apply_patch`，载荷没有 `file_path`，hook 起了也直接放行——用它改看板不拦也不报；经 shell
+> 改看板只提示）⇒ **那一门下的把关按不存在对待**（自签照样生效，四段举证纯靠自觉）。要求更严的项目请显式关闭。
+
 ### 签发权限
 
 | 状态变更 | 允许操作者 |
 |---------|-----------|
 | `pending → in_progress` | 该任务 `assigned_to` 的角色（认领即开工，不需要谁签发） |
-| `in_progress → pending_qa` | @dev、@prompt-eng（研发任务必经）；**主 Claude 直做时代行**——`assigned_to` 仍填对应角色（域语义不变），并打 `tags: [main-executed]` |
-| `pending_qa → completed` | @qa（唯一可签发研发任务完成的角色）。**代行不含签发权，签发权仍仅 @qa**——主 Claude 直做研发任务后仍须实际调度 @qa，不得自签 |
+| `in_progress → pending_qa` | @dev、@prompt-eng（研发任务必经）；走 pending_qa 类的项目自定义角色（归类见 §pending_qa 适用范围）同此；**主 Claude 直做时代行**——`assigned_to` 仍填对应角色（域语义不变），并打 `tags: [main-executed]` |
+| `pending_qa → completed` | @qa（**baseline 角色里**唯一可签发研发任务完成的，含自定义角色的研发类任务）。**代行不含签发权**——主 Claude 直做研发任务不因此获得签发权。主 Claude **自签**的准入由四段闸门判定（判据见必载片 §谁签发这次收口），且 **自签档默认开启**（`.workframe-config.json` 的 `signoff.self_signoff_enabled` **缺键即 true**）；要求更严的项目显式写 `false`，写了之后本行等价于「**签发权仍仅 @qa**」，直做后仍须实际调度 @qa |
 | `pending_qa → blocked` | @qa（测试不通过时） |
-| `in_progress → completed` | @pm、@dev（非研发任务）、@qa（非研发任务）、@prompt-eng（非研发类 Prompt 咨询） |
-| `任意 → blocked` | 任何角色（遇阻即可标，必须同时写 `blocked_reason`）。非 QA 角色直接标 blocked 是被允许的路径——`agent-protocols.md` 的 task_blocked fallback 正是为它准备的 |
-| `blocked → in_progress` | 阻塞解除后由 `assigned_to` 角色自行恢复；QA 打回的任务由 @dev / @prompt-eng 修复后恢复，不需要 @qa 再签一次 |
+| `in_progress → completed` | @pm、@dev（非研发任务）、@qa（非研发任务）、@prompt-eng（非研发类 Prompt 咨询）；分析/咨询/协调类的项目自定义角色同此 |
+| `任意 → blocked` | 任何角色（遇阻即可标，必须同时写 `blocked_reason`）。非 QA 角色直接标 blocked 是被允许的路径——必载片 §Step 1 — 事件流 的 task_blocked fallback 正是为它准备的 |
+| `blocked → in_progress` | 阻塞解除后由 `assigned_to` 角色自行恢复；QA 打回的任务由完成研发交付的角色（@dev / @prompt-eng / 走 pending_qa 类的自定义角色）修复后恢复，不需要 @qa 再签一次 |
 | `任意 → cancelled` | @pm 或用户（范围决策，必须同时写 `cancelled_at` + `cancel_reason`） |
 
 > 上表补齐前只定义了 4 行，而状态定义表写着 blocked / cancelled
@@ -176,7 +229,7 @@ summary.last_updated = 当前日期
 主 Claude 通过 Bash 调用插件内兜底命令（不重新实现统计公式；插件根路径从 `plugin-root.txt` 取，不依赖 PATH）：
 
 ```bash
-python "$(cat .claude/workframe-state/plugin-root.txt)/bin/workframe-recompute-board-summary"
+python "$(cat .workframe/state/plugin-root.txt)/bin/workframe-recompute-board-summary"
 ```
 
 `plugin-root.txt` 由 SessionStart hook 每次会话刷新为当前插件根（正斜杠绝对路径，Git Bash / macOS 通用）。若环境里 `workframe-recompute-board-summary` 恰好已在 PATH（CC plugin `bin/` 注入生效的环境），裸调等价。

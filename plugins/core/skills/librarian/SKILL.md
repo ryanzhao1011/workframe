@@ -1,11 +1,6 @@
 ---
 name: librarian
-description: 记忆整理员：评估 notes.md 条目并按 D/U/R/A 提升到 MEMORY.md（含落点分层与同主题融合）、管理 MEMORY.md 容量候选、维护整理日志与 memory-index sidecar。
-when_to_use: |
-  SessionStart 询问式开场卡用户选「处理」后（主通道）、`workframe-maintenance`
-  批处理工单的 notes 积压项；会话中出现 `memory_backlog` 维护信号（notes 积压待整理）时；
-  MEMORY.md 接近容量上限需要评估降级候选时；用户说「整理一下记忆 / notes 太多了」时。
-  边界：只看记忆变动流水 → memory-log；纠正类条目由 correction-detection 直写高置信区，不经本 skill。
+description: '记忆整理员：评估 notes.md 条目并按 D/U/R/A 提升到 MEMORY.md（含落点分层与同主题融合）、管理 MEMORY.md 容量候选、维护整理日志与 memory-index sidecar。用于 SessionStart 询问式开场卡用户选「处理」后（主通道）、`workframe-maintenance` 批处理工单的 notes 积压项、会话中出现 `memory_backlog` 维护信号时、MEMORY.md 接近容量上限需要评估降级候选时。典型触发：「整理一下记忆 / notes 太多了」。边界：只看记忆变动流水 → memory-log；纠正类条目由 correction-detection 直写高置信区，不经本 skill。'
 user-invocable: false
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 ---
@@ -18,8 +13,8 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 
 **先处理 shared/（第 0 号"特殊角色"）**：
 ```
-Read .claude/agent-memory/shared/MEMORY.md（跨角色权威事实；不存在则跳过）
-Read .claude/agent-memory/shared/notes.md（共享缓冲；不存在则跳过）
+Read .workframe/agent-memory/shared/MEMORY.md（跨角色权威事实；不存在则跳过）
+Read .workframe/agent-memory/shared/notes.md（共享缓冲；不存在则跳过）
 ```
 shared 层的整理规则与 role 层一致（D/U/R/A 评估、容量管理、快照保存），但写入条件更严：
 - 提升到 `shared/MEMORY.md` 必须满足"影响 ≥2 个角色" + D/U/R/A ≥2 项（**主 Claude 不计入角色数**，理由见 2b 三问第 3 问）
@@ -29,20 +24,20 @@ shared 层的整理规则与 role 层一致（D/U/R/A 评估、容量管理、�
 
 **再动态发现项目中其他角色**：
 ```
-用 Glob 扫描 .claude/agent-memory/*/  得到所有子目录，排除 shared
+用 Glob 扫描 .workframe/agent-memory/*/  得到所有子目录，排除 shared
 例如返回：[pm, dev, qa, prompt-eng]（core 默认）
           [pm, dev, qa, prompt-eng, ceo, designer, ...]（项目级扩展）
 ```
 
 对发现的每个角色 `<role>`，读取其记忆文件：
 ```
-.claude/agent-memory/<role>/MEMORY.md
-.claude/agent-memory/<role>/notes.md
+.workframe/agent-memory/<role>/MEMORY.md
+.workframe/agent-memory/<role>/notes.md
 ```
 
 统计每个 MEMORY.md 的当前字符数（预算：role ≤8000 字符 / shared ≤4000 字符——字符才反映注入开销，行数可被单行超长钻空）。
 
-**为什么动态发现**：core plugin 提供 4 通用角色（pm/dev/qa/prompt-eng），项目可手动在 `.claude/agents/` 和 `.claude/agent-memory/` 下新增项目级角色（如 ceo、designer、content-operator 等）。Librarian 必须覆盖所有角色，因此不能硬编码列表。
+**为什么动态发现**：core plugin 提供 4 通用角色（pm/dev/qa/prompt-eng），项目可手动在 `.claude/agents/` 和 `.workframe/agent-memory/` 下新增项目级角色（如 ceo、designer、content-operator 等）。Librarian 必须覆盖所有角色，因此不能硬编码列表。
 
 ### 第 2 步：评估 notes.md + 决定落点
 
@@ -65,27 +60,51 @@ shared 层的整理规则与 role 层一致（D/U/R/A 评估、容量管理、�
 
 `MEMORY.md` 不是唯一落点。按知识性质选：
 
-| 落点 | 判据 | 加载时机 | 权限 |
-|---|---|---|---|
-| **项目 rules**（`.claude/rules/local/*.md`） | 跨场景稳定的纪律 / 口径，**主 Claude 也需遵守** | 每次会话必载 | **L2 用户审批** |
-| **`CLAUDE.md`** | 项目级协作规则、角色边界、目录约定 | 每次会话必载 | **L2 用户审批** |
-| **项目 skill**（`.claude/skills/<name>/`） | **场景触发且成套**的操作方法——特定场景才需要、一到场景就要整套用（SOP / 口径集 / 模板 / 清单） | 场景命中按需加载 | **L2 用户审批**（core plugin skill 不直接改，走 self-iteration 提案） |
-| **`<role>/MEMORY.md`** | 角色特有的高置信事实 | 该 subagent 被调度时 | L1 自主 |
-| **`shared/MEMORY.md`** | 影响 ≥2 角色的权威事实 | 各 subagent 启动时 | L1 自主（写入条件更严）；**agent / 主 Claude 不直写**——它们写 `shared/notes.md`，由本 skill 评估提升（对比上一行：role MEMORY 满足 D/U/R/A ≥2 可由角色直写，两行的「L1 自主」含义不同） |
-| **auto-memory**（CC 官方主 Claude 记忆目录） | **主 Claude 层**内容：用户偏好 / 协作习惯 / 项目状态指针——消费者是主 Claude 而非某个角色 | 主会话启动（官方注入，subagent 不注入） | 主 Claude 自维护；**librarian 不写**——识别到此类条目时在结果中建议归 auto-memory |
-| **保留 notes** | 未定型 / 场景太具体 / 待验证 | 不加载 | — |
-| **移出记忆体系** | 属**业务知识**（竞品分析、方案论证、领域事实）→ 应进需求文档 / spec，不是记忆 | — | L2 |
+| 落点 | 判据 | 加载时机 | 预算 | 权限 |
+|---|---|---|---|---|
+| **机器闸**（断言 / 校验脚本 / hook） | 判定是**确定性**的、能从文件系统或代码现算出来 | 运行时触发 | 不占上下文 | **L2 用户审批**（代码变更） |
+| **`context/both/`** | 每次会话必须遵守，**主会话与 subagent 都要** | 两个 hook 各注一次 | **每个字符付两遍**；实际上限由 sub 片决定 | **L2 用户审批** |
+| **`context/main/`** | 每次会话必须遵守，**只有主会话要**（假定能问用户 / 能派发） | SessionStart | 主片余量 | **L2 用户审批** |
+| **`context/sub/`** | 每次会话必须遵守，**只有 subagent 要** | SubagentStart | **余量最紧** | **L2 用户审批** |
+| **`AGENTS.md`** | **项目自有**判据，两个 harness 都读 | Codex 原生 / CC 经桥接 | **无硬闸、但单位成本最高**：没有那种静默截断（项目可覆盖文档大小上限），**但 Codex 侧每个字符付两遍**（上下文里出现两次）。**别把「无硬上限」读成「免费」** | **L2 用户审批** |
+| **项目 skill**（`.claude/skills/<name>/`） | **场景触发且成套**的操作方法——特定场景才需要、一到场景就要整套用（SOP / 口径集 / 模板 / 清单） | 场景命中按需加载 | 无硬上限（不占每会话预算） | **L2 用户审批**（core plugin skill 不直接改，走 self-iteration 提案） |
+| **`<role>/MEMORY.md`** | 角色特有的高置信事实 | 该 subagent 被调度时 | 见 doctor 的 `memory_capacity` 检查 | L1 自主 |
+| **`shared/MEMORY.md`** | 影响 ≥2 角色的权威事实 | 各 subagent 启动时 | 见 doctor 的 `memory_capacity` 检查 | L1 自主（写入条件更严）；**agent / 主 Claude 不直写**——它们写 `shared/notes.md`，由本 skill 评估提升（对比上一行：role MEMORY 满足 D/U/R/A ≥2 可由角色直写，两行的「L1 自主」含义不同） |
+| **auto-memory**（CC 官方主 Claude 记忆目录） | **主 Claude 层**内容：用户偏好 / 协作习惯 / 项目状态指针——消费者是主 Claude 而非某个角色 | 主会话启动（官方注入，subagent 不注入） | 见 doctor 的 `auto_memory` 检查 | 主 Claude 自维护；**librarian 不写**——识别到此类条目时在结果中建议归 auto-memory |
+| **保留 notes** | 未定型 / 场景太具体 / 待验证 | 不加载 | — | — |
+| **移出记忆体系** | 属**业务知识**（竞品分析、方案论证、领域事实）→ 应进需求文档 / spec，不是记忆 | — | — | L2 |
 
-**三问定落点**（顺序二元判断，逐问淘汰）：
+> **前三个 `context/*` 落点在「订阅方项目」里不可直接写。** `context/` 在插件内，而插件装在带版本号的缓存目录——订阅方项目对它**要么没有写权限，要么写进去后一次插件升级就静默消失**，后者更糟，因为它看起来成功了。
+>
+> **可选性判据必须是运行时可判的**，不能靠「你是不是框架维护者」这种自述：**判插件根是否可写**（第 0 步跑打包器时顺带取这一位）。插件根可写 → 五个落点都可选；只读 → **`context/*` 三个不可选**，`AGENTS.md` 与项目 skill 仍可选。
+>
+> **判到「该进 `context/`」但插件根只读时**：librarian **不写任何文件**，改为在**本项目**的 `promotion-candidates.md` 里落一条候选并标 `upstream: core`，摘要里写清「本条需上游框架采纳才能生效，本项目内无落点」。由用户决定是否向框架仓反馈。**不要写成「走 L2 提案」就完事**——L2 提案在本项目里审批，而变更要落在另一个仓，审批通过也改不了任何东西。
 
-1. **每次会话都必须遵守吗？** 是 → rules / CLAUDE.md（必载层）
+**先问一次（与下面三问并行，不是第四问）**：这条能不能变成**机器闸**（断言 / 校验 / hook）？能 → **优先落闸**——纪律靠模型每次记得住才生效，闸不用。**然后再走三问**决定纪律文本放哪：闸抓违例、纪律说该怎么做，两者互补不互斥，落了闸不等于不用写。
+
+**四问定落点**（顺序二元判断，逐问淘汰）：
+
+1. **每次会话都必须遵守吗？** 是 → 进必载层，**转问 1b**
+1b. **谁要遵守？**（本问是必载层内部的分流，退役前只有一个必载落点、没有这一问）
+   - 主会话与 subagent 都要 → `context/both/`（**注意双倍代价**）
+   - 只有主会话要 → `context/main/`
+   - 只有 subagent 要 → `context/sub/`
+   - 这是**项目自有**判据而非框架纪律 → `AGENTS.md`
 2. 否——**特定场景触发、且是成套方法吗？**（≥3 条同主题相关做法，或含步骤/模板/清单结构）是 → 项目 skill。两形态：已有相关 skill → **增补该 skill**；没有 → 同主题攒满 3 条前**留 notes**，攒满后聚类新建（PRD 风格类沉淀直接增补项目 prd-style；先例：requirement-archiving 由实战沉淀）
 3. 否——**一条就能说清的离散事实** → 先判**谁消费**：主 Claude（用户偏好 / 协作习惯 / 项目状态指针）→ 建议归 auto-memory（主 Claude 自维护，librarian 不代写）；单个角色 → `<role>/MEMORY.md`；跨 ≥2 角色 → `shared/MEMORY.md`
-   > **主 Claude 不参与「≥2 角色」的计数**。它在 main-led 模式下可能直做任何域的活，恒为潜在读者——把它算进去，每条工种知识都自动凑够两个消费者，`shared/` 会被稀释成第二个大杂烩，而 shared 是**各 subagent 启动时全量注入**的，稀释的代价由每次委派承担。<br>计数只数**角色域**：这条工种知识，除了它自己那个域，还有哪个**角色**未来在具体决策／操作时要读它？答不出第二个 → 单角色域。<br>（主 Claude 的读取路径由 CLAUDE.md 直做纪律与 SessionStart 记忆地图保障，不靠挤进 shared。）
+   > **主 Claude 不参与「≥2 角色」的计数**。它在 main-led 模式下可能直做任何域的活，恒为潜在读者——把它算进去，每条工种知识都自动凑够两个消费者，`shared/` 会被稀释成第二个大杂烩，而 shared 是**各 subagent 启动时全量注入**的，稀释的代价由每次委派承担。<br>计数只数**角色域**：这条工种知识，除了它自己那个域，还有哪个**角色**未来在具体决策／操作时要读它？答不出第二个 → 单角色域。<br>（主 Claude 的读取路径由主会话注入片里的直做纪律与 SessionStart 记忆地图保障，不靠挤进 shared。）
 
-**关键判断**：`rules` / `CLAUDE.md` 是**必载**资产——放这里的知识对主 Claude 直接生效，可靠性最高，但每次会话都消耗 token；skill 行是它的**制度化泄压阀**——场景性成套内容不进必载层、不占每会话 token。`MEMORY.md` 由 SubagentStart hook 注入对应 subagent（代码保证，仅角色被调度时加载）。**定型的、跨场景的纪律往必载层搬；场景性的成套方法往 skill 搬；未定型的留 notes。**
+**第 0 步「先算预算」**（**只在判定要进必载层之后跑**，不是每条都跑——否则本 skill 变慢会被跳过）：
 
-L2 落点的提升**不自动执行**：把候选清单写入 `.claude/workframe-state/promotion-candidates.md`（覆盖式重写，头部带生成时间；每条一行，固定格式 `- [ ] <scope> | <YYYY-MM-DD> | <一句话摘要> | 出处: <notes 条目> | 建议落点: <文件+章节>`——`- [ ]` 前缀是 maintenance_workorder.py 计数依赖，勿改），然后按调用场景分流：
+- 跑 `inject-context.py --scope <target> --dry-run` 拿当前片的实际字符数与余量。**唯一事实源是打包器输出**，不是任何文档里写死的数
+- **余量 < 待写内容 + 200 字符缓冲 → 不许直接写**：先做一轮「哪些已内化成默认行为、可以精简」的复盘。提升在必载层是**零和**的——装不下就得先挤掉别的
+- 复盘挤不出空间 → 该条目**降级落点**（转第 2 问看能否进 skill），或列为 L2 候选让用户裁「挤掉哪一条」
+- `both/` 写 N 个字符，主片与 sub 片各付 N；**`both/` 的实际预算上限由 sub 片决定，不由 main 片决定**
+- **落点是 `AGENTS.md` 时打包器管不到它**，第 0 步改查两件：① 该项目文档大小上限的实际设置（默认值会截断，覆盖过才没有硬闸）；② 按**两倍**计入 Codex 侧上下文账。**不查就写 = 把最贵的那个落点当成免费的**
+
+**关键判断**：必载层是**注入**资产——放这里的知识对模型直接生效，可靠性最高，但每次会话都消耗 token，且**有硬上限**；skill 行是它的**制度化泄压阀**——场景性成套内容不进必载层、不占每会话 token。`MEMORY.md` 由 SubagentStart hook 注入对应 subagent（代码保证，仅角色被调度时加载）。**定型的、跨场景的纪律往必载层搬（先过第 0 步的余量）；场景性的成套方法往 skill 搬；未定型的留 notes。**
+
+L2 落点的提升**不自动执行**：把候选清单写入 `.workframe/state/promotion-candidates.md`（覆盖式重写，头部带生成时间；每条一行，固定格式 `- [ ] <scope> | <YYYY-MM-DD> | <一句话摘要> | 出处: <notes 条目> | 建议落点: <文件+章节>`——`- [ ]` 前缀是 maintenance_workorder.py 计数依赖，勿改），然后按调用场景分流：
 
 - **常规调用 / `/core:maintenance-review`**：用 AskUserQuestion 当场请用户确认；用户跳过时清单保留在该文件，下次运行时先读它恢复候选再继续。用户确认后执行写入并把对应行改为 `- [x]`。
 - **询问式触发（SessionStart 开场卡）/ `--maintenance` 批处理**：**不当场出卡**——只写入候选文件攒卡，在结果摘要里提示用户「有 N 条 L2 候选待拍板」。开场卡场景保持轻量（用户是来干正事的），批处理场景是 print 模式（没有交互卡可用）。
@@ -102,7 +121,7 @@ L2 落点的提升**不自动执行**：把候选清单写入 `.claude/workframe
 5. **压缩表述**——notes 里的场景描述与论证**不搬**（留原处作为出处），只搬可执行规则；粒度跟随目标文档现有风格（一条一句 vs 一条一段）
 6. **格式对齐**——列表 / 表格 / 标题层级跟随目标文档现有约定
 7. **标注出处**——写明「YYYY-MM-DD 从 `<role>` notes 提升」，便于回溯原始论证。**跨 scope 搬迁**（auto-memory → 角色域，或改域）写「YYYY-MM-DD 从 `<来源>` 迁移」并 append `memory_migrated` 事件——两种标注**不可混用**：三账本 check A/A' 按字样分别要求 `memory_promoted` / `memory_migrated`，写错字样等于报错了另一种事件
-8. **体积预算**——写入 rules / CLAUDE.md 前统计目标文件行数。这是必载资产，**单文件超过约 150 行时先做一轮"哪些已内化成默认行为、可以精简"的复盘**，再写新内容；复盘时场景性成套内容优先迁往项目 skill（按 2b 三问定落点，泄压不丢内容）
+8. **体积预算**——写入必载层前走 2b 的**第 0 步**拿打包器现算的余量，**不再用「约 150 行」这种软阈值**（它没有强制力，也与实际上限无关）；余量不够先做一轮"哪些已内化成默认行为、可以精简"的复盘，复盘时场景性成套内容优先迁往项目 skill（按 2b 四问定落点，泄压不丢内容）
 9. **notes 侧处理（归档制）**——提升/处理完成后，把该条目**整段移动**到同目录 `notes-archive.md`（追加到文件尾，条目标题后加标注 `→ 已提升至 <目标文件>（YYYY-MM-DD）` 或 `→ 用户拍板不提升（YYYY-MM-DD）`），并从 notes.md 删除该段。
    - **为什么移动而不是原地标注**：notes.md 的语义是「待处理缓冲区」，`memory_backlog` 积压信号按它的内容量判定——已处理条目留在原地会让缓冲区只增不减、信号永不消解（与 M6 修复的 cadence 堆积同构）。archive 保留完整论证作为出处，不参与积压统计与后续评估
    - **混合段允许条目级拆分**：一个日期段里部分子条目已处理、部分未处理时，只移已处理的子条目，段内留一行注记 `（本段部分条目已处理，见 notes-archive.md 同日条目）`
@@ -131,13 +150,13 @@ logs/librarian-snapshots/{YYYY-MM-DD}/{HH-mm-ss}-{role}-MEMORY.md
 ```
 logs/librarian-snapshots/{YYYY-MM-DD}/{HH-mm-ss}-{role}-memory-index-entries.json
 ```
-内容是从 `.claude/workframe-state/memory-index.json` 中筛出 `scope=<role>`（或 `scope=shared` 处理 shared 角色时）的所有 entry 子集，格式：
+内容是从 `.workframe/state/memory-index.json` 中筛出 `scope=<role>`（或 `scope=shared` 处理 shared 角色时）的所有 entry 子集，格式：
 ```json
 {"<entry-key>": {"scope":"...","created_at":"...","provenance":"...",...}}
 ```
 若本次 librarian 运行未触及任何 sidecar entry（仅做 changelog 补漏 / metrics 重算），跳过 sidecar 快照。
 
-**sidecar 维护**（`.claude/workframe-state/memory-index.json`）：
+**sidecar 维护**（`.workframe/state/memory-index.json`）：
 
 若 `memory-index.json` 不存在，先按 `templates/memory-index-template.json` 的最小结构初始化：
 ```json
@@ -148,7 +167,7 @@ logs/librarian-snapshots/{YYYY-MM-DD}/{HH-mm-ss}-{role}-memory-index-entries.jso
 ```json
 {
   "entries": {
-    "shared:2026-04-10:研发任务签发仅由qa执行": {
+    "shared:2026-04-10:发版前必须跑脱敏终检": {
       "scope": "shared",              // 实际角色名（pm/dev/…）或 shared——填具体值，不照抄占位符
       "created_at": "2026-04-10",
       "provenance": "user-decree",    // 来源类型四选一，见下表；不打分、不写数字
@@ -182,23 +201,23 @@ logs/librarian-snapshots/{YYYY-MM-DD}/{HH-mm-ss}-{role}-memory-index-entries.jso
 | `librarian-promoted` | **历史值，只读不新写**——早期由 librarian 提升的条目用它。它答的是「谁做的」而非「从哪来」，与其余值不同轴；存量条目保持原样不回改，新写入一律用上面几种 |
 
 
-Key 规则：`{scope}:{YYYY-MM-DD}:{条目前 20 字规范化}`。规范化三条**缺一不可**（与 `correction-detection.md` 第 4 步同源，否则两边为同一条目算出不同 key、sidecar 出现重复项）：**先删除全部空白字符**（空格 / 制表符 / 换行）**→ 再取前 20 字**（Unicode 字符数，非字节）→ 同日同前 20 字碰撞时追加序号后缀（`-2`、`-3`…）。
+Key 规则：`{scope}:{YYYY-MM-DD}:{条目前 20 字规范化}`。规范化三条**缺一不可**（与 skill `signal-intake` §5 同源，否则两边为同一条目算出不同 key、sidecar 出现重复项）：**先删除全部空白字符**（空格 / 制表符 / 换行）**→ 再取前 20 字**（Unicode 字符数，非字节）→ 同日同前 20 字碰撞时追加序号后缀（`-2`、`-3`…）。
 
-**顺序不可颠倒**（2026-08-16 统一，同 `correction-detection.md`）：颠倒会让同一条目在两处算出不同 key。改序前的历史 key 不回改。
+**顺序不可颠倒**（2026-08-16 统一，同 skill `signal-intake` §5）：颠倒会让同一条目在两处算出不同 key。改序前的历史 key 不回改。
 
 **事件写入（供 `/core:memory-log` 展示历史流水）**：
 
-1. notes.md → MEMORY.md 提升成功后，先写 MEMORY.md 和 sidecar entry，再 append `.claude/workframe-state/events.jsonl`：
+1. notes.md → MEMORY.md 提升成功后，先写 MEMORY.md 和 sidecar entry，再 append `.workframe/state/events.jsonl`：
    ```json
    {"ts":"<ISO-8601>","type":"memory_promoted","scope":"<角色名或shared，填实际值>","role":"<role-if-any>","entry_key":"<memory-index-key>","summary":"<条目摘要/原文前80字>","source":"notes.md","protected":<sidecar.protected>,"provenance":"<sidecar.provenance>"}
    ```
    落点为 skill / rule 文件时（L2 经用户批准后执行）：**不写 sidecar**（sidecar 只索引 MEMORY 条目），事件仍写但**省略 entry_key**，落点文件路径写进 summary——与 correction-detection 第 4 步同规格。
-2. MEMORY.md → notes.md 降级或容量腾挪经用户确认后，**必须在删除 sidecar entry 前** append `.claude/workframe-state/events.jsonl`，把即将删除的元数据快照写入事件：
+2. MEMORY.md → notes.md 降级或容量腾挪经用户确认后，**必须在删除 sidecar entry 前** append `.workframe/state/events.jsonl`，把即将删除的元数据快照写入事件：
    ```json
    {"ts":"<ISO-8601>","type":"memory_decayed","scope":"<角色名或shared，填实际值>","role":"<role-if-any>","entry_key":"<memory-index-key>","summary":"<降级条目摘要/原文前80字>","source":"<sidecar.source>","age_days":<按 created_at 现算的整数>,"provenance":"<sidecar.provenance>"}
    ```
 
-3. **跨 scope 搬迁**（auto-memory → role/shared，或域判错后改域）——先在目标域写好条目与 sidecar entry，再 append `.claude/workframe-state/events.jsonl`：
+3. **跨 scope 搬迁**（auto-memory → role/shared，或域判错后改域）——先在目标域写好条目与 sidecar entry，再 append `.workframe/state/events.jsonl`：
    ```json
    {"ts":"<ISO-8601>","type":"memory_migrated","scope":"<迁入的目标域：角色名或shared>","role":"<role-if-any>","entry_key":"<目标域新建的 memory-index-key>","summary":"<条目摘要/原文前80字>","source":"<迁出方：auto-memory 或 <role>/MEMORY.md>","from_ref":"<源文件名或条目标识>","protected":<sidecar.protected>,"provenance":"<原样承接，不重新判定>"}
    ```
@@ -244,17 +263,17 @@ Key 规则：`{scope}:{YYYY-MM-DD}:{条目前 20 字规范化}`。规范化三�
 
 ### 第 5 步：刷新 `skill-metrics.yaml`（调用 deterministic 脚本）
 
-**默认路径**：SessionEnd hook 会调用 `recompute_skill_metrics.py` 自动重算 `.claude/workframe-state/skill-metrics.yaml`。如果本次 Librarian 需要立即刷新，调用插件内兜底命令（插件根路径从 `plugin-root.txt` 取，不依赖 PATH）：
+**默认路径**：SessionEnd hook 会调用 `recompute_skill_metrics.py` 自动重算 `.workframe/state/skill-metrics.yaml`。如果本次 Librarian 需要立即刷新，调用插件内兜底命令（插件根路径从 `plugin-root.txt` 取，不依赖 PATH）：
 
 ```bash
-python "$(cat .claude/workframe-state/plugin-root.txt)/bin/workframe-recompute-skill-metrics"
+python "$(cat .workframe/state/plugin-root.txt)/bin/workframe-recompute-skill-metrics"
 ```
 
 `plugin-root.txt` 由 SessionStart hook 每次会话刷新为当前插件根。若环境里 `workframe-recompute-skill-metrics` 恰好已在 PATH（CC plugin `bin/` 注入生效的环境），裸调等价。
 
 **脚本职责**：
 
-1. 读取 `.claude/workframe-state/events.jsonl`（逐行 JSON 解析；跳过 `__schema__` 描述行和 malformed 行）
+1. 读取 `.workframe/state/events.jsonl`（逐行 JSON 解析；跳过 `__schema__` 描述行和 malformed 行）
 2. 按默认窗口 30 天过滤（`generated_at - ts ≤ 30d`），也可由调用方指定
 3. 分类聚合：
    - `skills[<name>]`: 按 `type=skill_used` 汇总 `invocations`（计数）、`successes`（`success=true` 计数）、`last_used`（最新 ts 的日期）
@@ -262,7 +281,7 @@ python "$(cat .claude/workframe-state/plugin-root.txt)/bin/workframe-recompute-s
    - `corrections_count`: `type=user_correction` 事件总数
    - `blocks_count`: `type=task_blocked` 事件总数
    - `proposal_failures_count`: `type=proposal_verified` 且 `signal_met=false` 的事件总数
-4. 整个重写 `.claude/workframe-state/skill-metrics.yaml`（不是 append），更新 `generated_at` 和 `window_days`
+4. 整个重写 `.workframe/state/skill-metrics.yaml`（不是 append），更新 `generated_at` 和 `window_days`
 5. 不写入任何 skill/rule frontmatter — frontmatter 不再承担统计职责（Phase 0 已清理非官方字段 `usage_count` / `last_used` / `trigger_count`）
 
 > 为什么 L1：脚本重算是 deterministic 的派生文件操作，不改动用户可读资产（MEMORY.md / notes.md / rules / skills 本体），失败影响面仅限 skill-metrics.yaml 自身，旧版本可随时从 events.jsonl 重新生成。
@@ -276,12 +295,12 @@ python "$(cat .claude/workframe-state/plugin-root.txt)/bin/workframe-recompute-s
 
 **关闭 `memory_backlog` 信号**（本次整理覆盖了触发该信号的 notes 时）：
 
-1. Read `.claude/workframe-state/activity-state.json`，找 `pending_maintenance` 中
+1. Read `.workframe/state/activity-state.json`，找 `pending_maintenance` 中
    `kind == "memory_backlog"` 且 `status == "open"` 的条目，记下它们的 `id`
 2. 用代码通道关闭（**不要自己改这个文件**）——它一并写 `pending_maintenance_dismissed` 事件：
 
    ```bash
-   python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/maintenance_workorder.py" \
+   python "$(cat .workframe/state/plugin-root.txt)/scripts/maintenance_workorder.py" \
        --close-pm <PM-ID> [<PM-ID> ...]
    ```
 
@@ -299,7 +318,7 @@ python "$(cat .claude/workframe-state/plugin-root.txt)/bin/workframe-recompute-s
 - 覆盖角色：{第 1 步发现的角色列表}
 - 评估 notes.md 条目：{n} 条（跳过已标注已提升：{n} 条）
 - 提升到 MEMORY.md：{n} 条
-- 提升到 rules / CLAUDE.md（L2，已确认）：{n} 条；待确认清单：{n} 条
+- 提升到 AGENTS.md / 项目 skill（L2，已确认）：{n} 条；待确认清单：{n} 条
 - 融合方式统计：新增章节 {n} / 合并进现有条目 {n} / 因冲突暂停 {n}
 - 从 MEMORY.md 降级：{n} 条（仅统计用户已确认执行的降级；候选另列）
 - 待审查降级/容量候选：{n} 条
@@ -313,6 +332,6 @@ python "$(cat .claude/workframe-state/plugin-root.txt)/bin/workframe-recompute-s
 
 - **L1 变更（自主执行）**：非冲突 notes.md → `MEMORY.md` / `shared/MEMORY.md` 条目提升、已处理条目整段移入同目录 `notes-archive.md`（归档制，见第 2.5 步第 9 条——**不是**原地加标注，那是被它取代的旧做法）、changelog 补漏、快照保存、`skill-metrics.yaml` 脚本重算
 - **L1 候选（须用户在 `/core:maintenance-review` 确认后执行）**：MEMORY.md → notes.md 降级、容量不足时的腾挪整理
-- **L2 变更（须用户审批）**：删除任何内容、**提升/增补到 `.claude/rules/local/*.md`、`CLAUDE.md` 或 `.claude/skills/**`（项目 skill）**、把业务知识移出记忆体系到需求文档、修改 `board.yaml` 任务结构、改 core plugin 内源文件（含 core skill——走 self-iteration 提案）
+- **L2 变更（须用户审批）**：删除任何内容、**提升/增补到框架的注入源 `context/**`、`AGENTS.md` 或项目 skill（`.claude/skills/**`、`.agents/skills/**`）**、把业务知识移出记忆体系到需求文档、修改 `board.yaml` 任务结构、改 core plugin 内源文件（含 core skill——走 self-iteration 提案）
 
-> L2 落点（rules / CLAUDE.md / skills）是主 Claude 直接消费的资产（前两者必载、skill 场景加载），误写影响面大，因此**一律先出清单等用户确认**，不自主执行。清单形式：每条给「一句话摘要 + 出处 + 建议落点 + 建议插入的章节」，让用户一次过目即可决策。
+> L2 落点（`AGENTS.md` / 注入源 / skills）是主 Claude 直接消费的资产（前两者每会话必载、skill 场景加载），误写影响面大，因此**一律先出清单等用户确认**，不自主执行。清单形式：每条给「一句话摘要 + 出处 + 建议落点 + 建议插入的章节」，让用户一次过目即可决策。

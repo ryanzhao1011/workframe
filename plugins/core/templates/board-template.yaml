@@ -19,6 +19,10 @@ summary:
 # - id: TASK-001
 #   title: "示例任务"
 #   status: pending          # pending | in_progress | pending_qa | completed | blocked | cancelled
+#   qa_signoff: "..."        # @qa 签发写散文；主 Claude 自签必须写四段映射形态
+#                            # （schema 与判据见 skill `task-management` §签发块 schema；
+#                            #  映射形态由 signoff-guard.py hook 逐字段校验并重算档位）
+#   verified_ranges: "..."   # 本次签发覆盖到哪儿——下一轮增量复核的锚点，自签时必填
 #   priority: P1             # P0 | P1 | P2
 #   assigned_to: dev         # pm | dev | qa | prompt-eng | <project-role>
 #   tags: []

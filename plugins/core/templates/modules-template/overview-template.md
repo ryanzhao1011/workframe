@@ -3,7 +3,7 @@ type: overview
 overview_level: global
 status: planning
 owner_role: pm
-updated: {{NOW_ISO}}
+updated: "{{NOW_ISO}}"
 description: ""                        # ★ 一句话摘要（1-2 句 ≤200 字，document-norms §2.1）；写完「产品定位」段后回填
 related: []
 tags: []

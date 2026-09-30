@@ -1,11 +1,6 @@
 ---
 name: competitive-analysis
-description: 结构化竞品分析，支持三类竞争对手识别、五维度深度分析、竞争矩阵与对战卡输出
-when_to_use: |
-  用于做竞品对比、竞争矩阵、对战卡、竞争壁垒分析时调用。
-  典型触发："竞品调研" / "对比 X 和 Y 两个产品" / "竞争优势是什么" / "对战卡"。
-  （对比的是**产品 / 公司**才走这里；对比两版 Prompt 的效果走 `prompt-evaluation`）
-  不用于：用户反馈分析（用 user-feedback-analysis）/ 行业大势研究（暂无对应 skill，按 P2 走 notes 缓冲）/ 单一产品功能拆解（用 feature-breakdown）。
+description: '结构化竞品分析，支持三类竞争对手识别、五维度深度分析、竞争矩阵与对战卡输出。用于竞品对比、竞争矩阵、对战卡、竞争壁垒分析。典型触发："竞品调研" / "对比 X 和 Y 两个产品" / "竞争优势是什么" / "对战卡"。对比的是**产品 / 公司**才走这里；对比两版 Prompt 的效果走 prompt-evaluation。不用于：用户反馈分析（用 user-feedback-analysis）/ 行业大势研究（暂无对应 skill，按 P2 走 notes 缓冲）/ 单一产品功能拆解（用 feature-breakdown）。'
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Glob, Grep, WebSearch, WebFetch]
 ---
@@ -188,7 +183,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, WebSearch, WebFetch]
 | 快速扫描 | 每月 | 竞品定价变化/新功能发布/重大新闻 |
 | 信号捕捉 | 持续 | 用户反馈中的竞品提及（联动 user-feedback-analysis） |
 
-监控结果写入 `.claude/agent-memory/pm/notes.md` 竞品动态区块。
+监控结果写入 `.workframe/agent-memory/pm/notes.md` 竞品动态区块。
 
 ## 执行步骤
 

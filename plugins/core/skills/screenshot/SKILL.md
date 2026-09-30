@@ -1,11 +1,6 @@
 ---
 name: screenshot
-description: 通用 HTML / 本地 URL 截图工具：读 JSON 配置，逐项打开 → setup → 等待 → 截图 → 输出 PNG 到 tmp/screenshots/<task-id>/。只负责出图——不上传任何平台、不写 spec、不实现业务交互；调用方通过 `setup_js` 提供 raw JS hook 控制业务逻辑。
-when_to_use: |
-  用户说「截图 / 生成原型截图 / HTML 截图 / 把 Mermaid 渲染成图」时；
-  需要把本地 HTML 原型或 Mermaid 图转成 PNG 归档、嵌入文档时。
-  也被 prd-writer / 发布器 / 报告类 skill 作为出图步骤调用。
-  边界：要的是可交互 demo 而非静态图 → html-demo。
+description: '通用 HTML / 本地 URL 截图工具：读 JSON 配置，逐项打开 → setup → 等待 → 截图 → 输出 PNG 到 tmp/screenshots/<task-id>/。只负责出图——不上传任何平台、不写 spec、不实现业务交互；调用方通过 `setup_js` 提供 raw JS hook 控制业务逻辑。用于需要把本地 HTML 原型或 Mermaid 图转成 PNG 归档、嵌入文档时，也被 prd-writer / 发布器 / 报告类 skill 作为出图步骤调用。典型触发：「截图 / 生成原型截图 / HTML 截图 / 把 Mermaid 渲染成图」。边界：要的是可交互 demo 而非静态图 → html-demo。'
 user-invocable: true
 effort: low
 allowed-tools: [Bash, Read, Write]
@@ -119,7 +114,7 @@ tmp/screenshots/<task_id>/
 }
 ```
 
-任务日志摘要写入 `.claude/workframe-state/logs/screenshot/<task_id>.json`（schema: `workframe.task-log.v1`）。
+任务日志摘要写入 `.workframe/state/logs/screenshot/<task_id>.json`（schema: `workframe.task-log.v1`）。
 
 ## 3. 调用方式
 
@@ -128,7 +123,7 @@ tmp/screenshots/<task_id>/
 本 skill 随 core plugin 分发，脚本在插件目录内（项目 `.claude/skills/` 下没有副本）；插件根从 `plugin-root.txt` 取：
 
 ```bash
-node "$(cat .claude/workframe-state/plugin-root.txt)/skills/screenshot/scripts/screenshot.js" --config <path/to/config.json>
+node "$(cat .workframe/state/plugin-root.txt)/skills/screenshot/scripts/screenshot.js" --config <path/to/config.json>
 
 # 可选参数：
 #   --output-dir <path>    覆盖默认 tmp/screenshots/<task_id>/

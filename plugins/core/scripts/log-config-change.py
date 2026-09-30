@@ -25,8 +25,16 @@ try:
 except Exception:
     pass
 
-PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
-EVENTS_FILE = PROJECT_DIR / ".claude" / "workframe-state" / "events.jsonl"
+# 同目录公共模块：运行态目录、harness 差异、追加写各只有一份实现
+# （见 _state_io.py / _harness.py 抬头）
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+from _harness import project_dir as _project_dir  # noqa: E402
+from _state_io import append_line, event_json, state_dir_of  # noqa: E402
+
+PROJECT_DIR = _project_dir()
+EVENTS_FILE = state_dir_of(PROJECT_DIR) / "events.jsonl"
 
 
 def _collect_files(data):
@@ -67,12 +75,7 @@ def main():
     if files:
         event["files"] = files[:10]
 
-    try:
-        EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with EVENTS_FILE.open("a", encoding="utf-8", newline="") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
-    except Exception as e:
-        print(f"[log-config-change] skipped: {e}", file=sys.stderr)
+    append_line(EVENTS_FILE, event_json(event))
 
     sys.exit(0)
 

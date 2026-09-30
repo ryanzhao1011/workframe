@@ -3,7 +3,7 @@
 **类型**：回归（失败/冻结）
 
 ## 输入状态
-- `.claude/workframe-state/activity-state.json`: `{"dormant": true, "dormant_profile": "low-frequency"}`
+- `.workframe/state/activity-state.json`: `{"dormant": true, "dormant_profile": "low-frequency"}`
 - notes.md 有大量待评估条目
 - MEMORY.md 接近容量
 

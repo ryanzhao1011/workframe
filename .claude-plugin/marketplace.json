@@ -4,16 +4,16 @@
     "name": "Zhao Jiahao"
   },
   "metadata": {
-    "description": "Workframe: a product-work system for Claude Code. Install workframe-launcher to create or onboard projects; each project gets the core plugin with 4 agents, 36 skills, hooks and rules.",
-    "version": "1.0.0"
+    "description": "Workframe：给 Claude Code 与 Codex 用的产品化协作系统（一份源、两扇门）。装 workframe-launcher 新建或接入项目；每个项目都会拿到 core 插件：4 角色、37 个 skills、hooks 与必载纪律注入片。",
+    "version": "1.1.0"
   },
   "plugins": [
     {
       "name": "workframe-launcher",
       "displayName": "Workframe Launcher",
       "source": "./plugins/workframe-launcher",
-      "description": "Workframe launcher: the one command that starts everything. Creates a new Workframe project or onboards an existing one — asks about your product, proposes a module structure, scaffolds it, subscribes the project to the core plugin, and verifies the install. Install this once per machine; it installs core into each project for you.",
-      "version": "1.0.0",
+      "description": "Workframe 启动器：一条命令开启全部流程。新建 Workframe 项目或接入已有项目——问清你的产品、提出模块结构、生成骨架、把项目订阅到 core 插件，并验证装机结果。每台机器装一次，它会替你把 core 装进每个项目。",
+      "version": "1.1.0",
       "homepage": "https://github.com/ryanzhao1011/workframe",
       "repository": "https://github.com/ryanzhao1011/workframe",
       "license": "MIT",
@@ -33,8 +33,8 @@
       "name": "core",
       "displayName": "Workframe Core",
       "source": "./plugins/core",
-      "description": "Workframe core plugin: 4 baseline agents (PM / Dev / QA / Prompt-Eng), 36 skills (13 domain + 8 system/maintenance + 8 docs/publishing + 7 modules-system), an 11-stage hook pipeline, 4 auto-loaded rules, and the modules/ documentation system that keeps requirements and code in sync.",
-      "version": "1.0.0",
+      "description": "Workframe 核心插件：4 个 baseline 角色（PM / Dev / QA / Prompt-Eng）、37 个 skills（13 domain + 9 system/maintenance + 8 docs/publishing + 7 modules-system）、11 段 hook 链路、按主会话与子 agent 切分的必载纪律注入片，以及让需求与代码保持同步的 modules/ 文档体系。",
+      "version": "1.1.0",
       "homepage": "https://github.com/ryanzhao1011/workframe",
       "repository": "https://github.com/ryanzhao1011/workframe",
       "license": "MIT",

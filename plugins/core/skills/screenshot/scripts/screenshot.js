@@ -26,6 +26,15 @@ const BROWSER_PATHS = {
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// 运行态状态目录的 JS 侧解析——与 core 插件 `_state_io.py` 的 `runtime_rel(_, "state")`
+// 同口径：恒为新形态，不看旧目录在不在。
+// Node 进程 import 不了 Python，这是**同一事实唯一无法合并的两个表现层**，因此两处
+// 同批改、并由 validate 的 `paths_single_source` 把本文件列为该断言的第二个（也是最后
+// 一个）豁免点，任何第三处写死字面都会当场变红。
+function stateDir() {
+  return path.resolve('.workframe', 'state');
+}
+
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
@@ -244,7 +253,7 @@ async function main() {
   const manifestPath = path.join(outputDir, '_manifest.json');
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
-  const logDir = path.resolve('.claude', 'workframe-state', 'logs', 'screenshot');
+  const logDir = path.join(stateDir(), 'logs', 'screenshot');
   fs.mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${taskId}.json`);
   fs.writeFileSync(

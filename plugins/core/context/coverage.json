@@ -1,0 +1,108 @@
+{
+  "__doc__": [
+    "语义覆盖对账的台账：`context_semantic_coverage` 的输入，**不是注入内容**（打包器只读 both/ 与 <scope>/ 下的 .md，本文件在 context/ 根，永远不会被投出去）。",
+    "`legacy_sections` 是退役前那批 rules 的**段全集快照**。它与现场切段结果逐段对账——只要源目录还在，两者不许有一段之差；源目录退役之后它就是这份历史事实的唯一载体，覆盖断言据此继续成立。",
+    "`elsewhere` 与 `retired` 装的是**落点不在 context/ 里**的那些段。没有它们，覆盖断言会把「有意搬去别处」与「拆分时漏搬」判成同一件事，而这两种的处理方向相反。",
+    "路径字段（`legacy_source_dir` / `lands_in`）一律写**插件根相对**（`rules/core`、`skills/signal-intake/`），不带仓内结构前缀——本文件随插件装到用户机器，那边没有本仓的目录层级，写了就是死引用。`core_assets_no_repo_internal_path` 钉这一条，连本条说明自己也要守（所以这里不举反例字面）。",
+    "本文件只回答『这一段有没有落点声明』，不回答『落点里的文字是否忠实承接了那一段』——后者没有机器判据，靠人工双检。"
+  ],
+  "legacy_source_dir": "rules/core",
+  "legacy_sections": [
+    "agent-protocols.md#1. 启动协议（每次被调度时首先执行）",
+    "agent-protocols.md#2. 协作边界",
+    "agent-protocols.md#3. 收尾协议（每次响应结束前执行）",
+    "agent-protocols.md#Step 0 — 判断是否需要收尾",
+    "agent-protocols.md#Step 1 — 事件流",
+    "agent-protocols.md#Step 2 — 经验沉淀（先分归属，再走 D/U/R/A 准入）",
+    "agent-protocols.md#Step 3 — 更新任务看板",
+    "agent-protocols.md#同消息内 rule 处理顺序",
+    "agent-protocols.md#task_blocked fallback dedup 的可执行检查",
+    "auto-update.md#排除条件（不触发更新）",
+    "auto-update.md#优先级定义",
+    "auto-update.md#通用触发类别（core-level）",
+    "auto-update.md#P0 — 立即处理（需确认后写入）",
+    "auto-update.md#安全问题",
+    "auto-update.md#Prompt 泄露风险",
+    "auto-update.md#需求变更（含范围 / 优先级 / 上线时间调整）",
+    "auto-update.md#线上故障",
+    "auto-update.md#P1 — 尽快处理",
+    "auto-update.md#技术决策（架构选型 / 数据库 / API 设计 / 依赖选择）",
+    "auto-update.md#Prompt 策略变更",
+    "auto-update.md#LLM 模型/成本（涨价 / 新模型 / API 变更 / 下线 / 降级链）",
+    "auto-update.md#质量标准调整（敏感词库 / 质量分权重等判定标准）",
+    "auto-update.md#工作方式/流程（\"以后 XX 要这样做\" 类指令、对产出的正负面评价）",
+    "auto-update.md#P2 — 常规记录",
+    "auto-update.md#行业动态 / 通用参考信息（趋势、市场、技术动向）",
+    "auto-update.md#项目级扩展",
+    "auto-update.md#Issue 模板",
+    "auto-update.md#受保护资产约束",
+    "auto-update.md#执行规范",
+    "auto-update.md#示例",
+    "closeout-discipline.md#改动闭环",
+    "closeout-discipline.md#跑什么闸",
+    "closeout-discipline.md#谁签发这次收口：四段闸门",
+    "closeout-discipline.md#否决项 6 的清单与判法",
+    "closeout-discipline.md#谁实现：与谁签发是两条互不干涉的轴",
+    "closeout-discipline.md#验证纪律",
+    "closeout-discipline.md#新增检查必须用它自己的失败方式打一遍",
+    "closeout-discipline.md#交给模型的判断点必须有明确标准",
+    "closeout-discipline.md#同一事实的多个表现层",
+    "closeout-discipline.md#收口时的归位",
+    "correction-detection.md#检测模式",
+    "correction-detection.md#排除条件（不触发本规则）",
+    "correction-detection.md#5 步处理流程",
+    "correction-detection.md#第 1 步：识别",
+    "correction-detection.md#第 2 步：确认回显",
+    "correction-detection.md#第 3 步：写入记忆高置信区（先分流落点，写前先查同主题）",
+    "correction-detection.md#第 4 步：同步 sidecar 与事件流",
+    "correction-detection.md#第 5 步：通用规则判断（受保护资产边界）",
+    "correction-detection.md#入口分流（避免与 self-iteration 冲突）",
+    "correction-detection.md#重要原则",
+    "correction-detection.md#执行位序",
+    "response-output.md#核心原则：响应消息优先于文件写入",
+    "response-output.md#执行过程中的自然澄清",
+    "response-output.md#选择题式澄清必须使用 AskUserQuestion 工具",
+    "response-output.md#确认信号识别",
+    "response-output.md#陈述可证伪",
+    "response-output.md#响应消息的结构建议（非强制模板）",
+    "response-output.md#例外：无需等待确认直接执行的操作"
+  ],
+  "elsewhere": [
+    {
+      "section": "auto-update.md#Issue 模板",
+      "lands_in": "skills/signal-intake/",
+      "note": "Issue 模板是落盘工序，消费方是真要建 issue 的那一轮，不是每会话必载面"
+    },
+    {
+      "section": "auto-update.md#执行规范",
+      "lands_in": "skills/signal-intake/",
+      "note": "八条里属于判据的两条（P0 回显顺序、关联任务粒度）已进 main/20-signal-intake.md，其余六条是写入工序"
+    },
+    {
+      "section": "auto-update.md#示例",
+      "lands_in": "skills/signal-intake/",
+      "note": "示例演的是工序，与工序同处一档才对得上"
+    },
+    {
+      "section": "correction-detection.md#第 4 步：同步 sidecar 与事件流",
+      "lands_in": "skills/signal-intake/",
+      "note": "entry_key 规范化与 sidecar 字段是工序；判据那半（scope 必须填实际值、三个保护字段）已进 main/20-signal-intake.md"
+    },
+    {
+      "section": "correction-detection.md#第 3 步：写入记忆高置信区（先分流落点，写前先查同主题）",
+      "lands_in": "skills/signal-intake/",
+      "note": "**这一段被拆成两半，两个落点都要登记**：判据那半（四分支落点分流表）已由 main/20-signal-intake.md 的 supersedes 声明；工序那半（`[纠正] {日期}：{正确信息}（用户纠正，原错误认知：…）` 的写入格式模板、supersede 三选一、写前查同主题）去 skill。写入格式模板在 9 份注入源里零命中，此前无人记录它的去向。用 elsewhere 而不是 note 记：本文件的 declared 是并集、不设「一段一个落点」，而 note 不进机器面——工序那半会因此在段级完全失去落点声明"
+    },
+    {
+      "section": "auto-update.md#需求变更（含范围 / 优先级 / 上线时间调整）",
+      "lands_in": "skills/task-management/",
+      "note": "这一段被拆成两半：判据半（什么算需求变更、P0、只出草稿不直接写）在 `main/20` 的触发类别表内；**board 必填字段口径**（`module` 二段式、`req_slug` + `sub_req_slug` 同进同出）下沉到 `task-management` skill 的 schema。此前只登记了前半，与台账里那条已登记为「拆成两半」的纠正段同形——**段声明了落点，落点只承接了它的一部分，剩下那部分的去向无人记录**。"
+    }
+  ],
+  "retired": [
+    {
+      "section": "response-output.md#响应消息的结构建议（非强制模板）",
+      "note": "自述「非强制模板」，且各角色契约与各 skill 都自带产物形态；留着它只是在每会话必载面上占字符"
+    }
+  ]
+}

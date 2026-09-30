@@ -35,17 +35,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
+    # stdin 也要包：Windows 上 PowerShell 起的 python 其 stdin 默认按本机 ANSI 代码页解码
+    # （`chcp 65001` 不改变它），载荷里含中文的 `cwd` 会变成另一串字符
+    sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 except Exception:
     pass
 
+# 同目录公共模块：运行态目录、harness 差异、追加写各只有一份实现
+# （见 _state_io.py / _harness.py 抬头）
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+import _harness  # noqa: E402
+from _harness import project_dir as _project_dir, session_id as _session_id  # noqa: E402
+from _state_io import append_line, event_json, state_dir_of  # noqa: E402
+
 EVENT_TYPE = "skill_invoked"
 
 
 def _state_dir():
-    proj = os.environ.get("CLAUDE_PROJECT_DIR") or "."
-    return Path(proj).resolve() / ".claude" / "workframe-state"
+    return state_dir_of(_project_dir())
 
 
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)?$")
@@ -136,6 +147,9 @@ def _is_dup(events_file, session_id, skill, minute):
 
 
 def main():
+    # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
+    if _harness.hook_outside_project():
+        return 0
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except ValueError:
@@ -147,7 +161,7 @@ def main():
 
     # ts 用 UTC + 秒级（见文件头 ts 口径说明）
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    session_id = payload.get("session_id") or os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
+    session_id = _session_id(payload)
 
     state = _state_dir()
     events_file = state / "events.jsonl"
@@ -162,12 +176,8 @@ def main():
     if payload.get("agent_type") or payload.get("subagent_type"):
         record["agent_type"] = payload.get("agent_type") or payload.get("subagent_type")
 
-    try:
-        state.mkdir(parents=True, exist_ok=True)
-        with events_file.open("a", encoding="utf-8", newline="") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except OSError:
-        return 0  # 写不进去也不能拦住用户
+    # 写不进去也不能拦住用户——append_line 任何情况都不抛（加锁与 spill 见其 docstring）
+    append_line(events_file, event_json(record))
     return 0
 
 

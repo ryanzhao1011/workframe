@@ -12,7 +12,7 @@ allowed-tools: [Read, Write, Edit, Glob, Bash, AskUserQuestion]
 
 由用户显式 `/core:onboard` 触发。**Claude 不会自动调用**（`disable-model-invocation: true`）。
 
-以**保守默认 + 显式 opt-in + local 优先 + 默认 skip + onboard 统一写入状态**原则，向用户呈现 workframe 推荐但不强求的可选环境配置（当前仅 1 项：Claude Code Agent Teams flag），完成后写入 `.claude/workframe-state/onboarded.json` 标记。
+以**保守默认 + 显式 opt-in + local 优先 + 默认 skip + onboard 统一写入状态**原则，向用户呈现 workframe 推荐但不强求的可选环境配置（当前仅 1 项：Claude Code Agent Teams flag），完成后写入 `.workframe/state/onboarded.json` 标记。
 
 完成此 skill 后，SessionStart hook 不再打印 onboarding 提示。
 
@@ -33,13 +33,13 @@ allowed-tools: [Read, Write, Edit, Glob, Bash, AskUserQuestion]
 
 ## 前置检查
 
-1. **是否已 onboarded**：Read `.claude/workframe-state/onboarded.json`
+1. **是否已 onboarded**：Read `.workframe/state/onboarded.json`
    - 文件存在且 `version` == 当前 SKILL.md 中 `ONBOARDING_VERSION` 常量 → 用 AskUserQuestion 问"已完成 onboarding，是否重走全流程"，拒绝则结束并打印当前 onboarded.json 摘要
    - 文件不存在 → 进入正式流程
    - `version` 落后 → 仅处理新增项（不动已有 status 为 enabled_* 的旧项）
 
 2. **找到 recommended-env.json**：
-   - 优先：Read `.claude/workframe-state/plugin-root.txt` 取插件根（SessionStart hook 每会话刷新）→ 拼接 `<插件根>/recommended-env.json`
+   - 优先：Read `.workframe/state/plugin-root.txt` 取插件根（SessionStart hook 每会话刷新）→ 拼接 `<插件根>/recommended-env.json`
    - 回退：`Glob **/plugins/core/recommended-env.json`（plugin-root.txt 缺失的开发场景）
    - 找不到 → 终止 skill，输出"plugin 安装可能不完整：core 插件根下缺 recommended-env.json"
 
@@ -193,7 +193,7 @@ cd "<project root>" && git check-ignore -q "{scope.path}" && echo IGNORED || ech
 
 ### Step A — 写 onboarded.json
 
-Write `.claude/workframe-state/onboarded.json`：
+Write `.workframe/state/onboarded.json`：
 
 ```json
 {
@@ -210,7 +210,7 @@ Write `.claude/workframe-state/onboarded.json`：
 }
 ```
 
-确保 `.claude/workframe-state/` 目录存在（Write 工具会自动创建父目录）。
+确保 `.workframe/state/` 目录存在（Write 工具会自动创建父目录）。
 
 ### Step B — 输出完成总结
 
@@ -234,9 +234,9 @@ Write `.claude/workframe-state/onboarded.json`：
 可随时重新运行 `/core:onboard` 调整选择。
 ```
 
-### Step C — Wrap-up（参考 agent-protocols.md Step 1）
+### Step C — Wrap-up（参考必载片 §Step 1 — 事件流）
 
-向 `.claude/workframe-state/events.jsonl` append 一行（文件不存在则创建）：
+向 `.workframe/state/events.jsonl` append 一行（文件不存在则创建）：
 
 ```json
 {"ts":"<ISO-8601>","type":"skill_used","skill":"onboard","role":"main","success":true}
@@ -249,7 +249,7 @@ Write `.claude/workframe-state/onboarded.json`：
 
 ## 受保护资产例外
 
-core rule `auto-update` 把 `.claude/settings*.json` 列为受保护资产。**`/core:onboard` 是该规则的唯一豁免入口**，前提：
+受保护资产片把 `.claude/settings*.json` 列为受保护资产。**该规则的豁免入口有两个**：本 skill（`/core:onboard`，可选环境配置）与装机链路（只写订阅声明那几个键；它有两个面——**经 launcher setup 走**时有确认页，**直接敲命令**时没有、授权是用户亲手敲了命令，`workframe-door --backfill` 与脱离 launcher 直接跑的 `project_scaffold.py --write-subscription` 都属后者）。**本 skill 这一侧**的前提：
 
 - 写入前必须用户当面交互式确认（Step 3 / Step 4）
 - 写入必须备份 + JSON merge + 失败兜底（Step 6）
@@ -257,14 +257,16 @@ core rule `auto-update` 把 `.claude/settings*.json` 列为受保护资产。**`
 
 不满足上述前提时，本 skill 自身**不写入**，输出手动补丁让用户处理。
 
+装机链路那一侧的前提不在本 skill 内，写在它自己的实现里（`_settings_io` 的备份 ＋ merge ＋ 回读 ＋ 失败回滚；结构闸对「会被修改的已存在文件」逐个点名**只在经 launcher setup 走的那条路径上**，直接敲命令那一面没有确认页、靠的是用户亲手敲命令）——两侧各管各的前提，本节只为「不是只有 onboard 能写」这件事留下指路。
+
 ## 与其他 skill / hook 协作
 
 | 触点 | 协作 |
 |---|---|
-| `session-start-prep.py` hook | 检测 `.claude/workframe-state/onboarded.json` 不存在时打印一行温和提示，零写入副作用 |
+| `session-start-prep.py` hook | 检测 `.workframe/state/onboarded.json` 不存在时打印一行温和提示，零写入副作用 |
 | `recommended-env.json` | 数据源；本 skill 唯一消费者 |
 
 ## 相关文档
 
 - 用户向文档：框架仓用户文档的 Onboarding 篇（在框架仓库 docs 目录下，不随插件分发）
-- 受保护资产规则：core rule [`auto-update`](../../rules/core/auto-update.md)
+- 受保护资产清单：[`40-protected-assets.md`](../../context/both/40-protected-assets.md)

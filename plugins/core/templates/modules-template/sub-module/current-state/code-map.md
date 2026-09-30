@@ -2,15 +2,15 @@
 type: current-state
 status: draft
 owner_role: dev
-updated: {{NOW_ISO}}
+updated: "{{NOW_ISO}}"
 module: "{{MODULE_PATH}}"
 description: ""                          # ★ 一句话摘要（1-2 句 ≤200 字，document-norms §2.1）；code-to-doc 解析后填写
 generator: manual
-source_repo: ""
+source_repo: ""                          # 空=本仓；项目内嵌套仓填其项目根相对路径；项目外填脱敏标识（对账整条跳过）
 source_ref: ""
-source_paths: []
+source_paths: []                         # 仓相对（坐标系由 source_repo 定）；与 code_paths 该仓内那部分同指一组文件；目录写 foo/** 不写 foo/
 source_exported_at: null
-verifier: ""
+verifier: ""                             # 这次核对了哪几项、不含哪几项；随基准一起重写
 confidence: medium
 related: []
 tags: []

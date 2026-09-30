@@ -2,8 +2,8 @@
 type: overview
 overview_level: req
 status: planning
-owner_role: {{OWNER_ROLE}}
-updated: {{NOW_ISO}}
+owner_role: "{{OWNER_ROLE}}"
+updated: "{{NOW_ISO}}"
 module: "{{MODULE_PATH}}"
 req_slug: "{{REQ_SLUG}}"
 description: ""                        # ★ 一句话摘要（1-2 句 ≤200 字，document-norms §2.1）；需求立项时填写

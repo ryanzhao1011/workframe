@@ -6,7 +6,8 @@ SessionStart Hook — 会话启动准备（v0.2.1 修订版）
   1. session_counter +1 并更新 last_session_at / active_sessions_30
   2. 读 activity-state.json 判 dormant / wake_up_pending（双字段语义）
   3. 读 session-digest-latest.md 打印简短上下文（非 dormant/wake_up 时）
-  4. pending_maintenance GC：移除 status=closed 且 closed_at < now-7d 的条目
+  4. pending_maintenance GC：移除 status=closed 且 closed_at 早于
+     PM_CLOSED_RETENTION_DAYS 天前的条目
 
 v0.2.1 修订：
   - 修复状态机反转（v0.2.0：首次超阈值直接写 dormant=true 导致 wake-up 推迟一次）
@@ -21,6 +22,7 @@ Dormant Profiles 阈值（与 reference/project-architecture.md §Dormant profil
 import io
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -35,17 +37,51 @@ except Exception:
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
-from _state_io import load_activity, save_activity, update_activity  # noqa: E402
+import _harness  # noqa: E402
+from _harness import project_dir as _project_dir  # noqa: E402
+from _state_io import (  # noqa: E402
+    append_line, event_json, load_activity, memory_dir_of, merge_spills,
+    save_activity,
+    state_dir_of, update_activity,
+)
 
 
-PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
+def _stdin_payload():
+    """hook 载荷（`session_id` / `cwd` / `transcript_path` …）；非管道 / 空 / 不合法一律当空字典。
+
+    **bytes 读 + 显式 UTF-8 解码**：Windows 上 PowerShell 起的 python 其 stdin 默认按本机
+    ANSI 代码页解码（`chcp 65001` 也不改变它），含中文的 `cwd` 会变成另一串字符。
+    本脚本此前不读 stdin——项目根来自 `CLAUDE_PROJECT_DIR`；Codex 门下没有那个变量，
+    `cwd` 与会话号只能从载荷取。
+    """
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return {}
+        raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+        return json.loads(raw) if raw.strip() else {}
+    except Exception:
+        return {}
+
+
+PAYLOAD = _stdin_payload()
+PROJECT_DIR = _project_dir(PAYLOAD)
+
+# 会话标记文件：`<state>/current-session-<harness>-<session_id>.json`，给 Codex 门下的
+# `workframe-event` 第三级兜底取会话号（那一门没有会话号环境变量）。**只有 Codex 门写**
+# ——CC 门有 `CLAUDE_CODE_SESSION_ID`，不需要，也不能让 CC 的状态目录多出一个文件。
+# 陈旧标记（SessionEnd 没跑到：进程被杀 / 崩溃）由下一次 Codex SessionStart 清掉，阈值 7 天：
+# 一个 Codex 会话很少跨天，7 天给「TUI 开过周末」留余量，又让 `session_marker_id` 要求的
+# 「恰好一个候选」在一周内自行恢复。**这是框架清理自己写的运行态文件，只作用于这个前缀。**
+SESSION_MARKER_PREFIX = "current-session-"
+SESSION_MARKER_STALE_DAYS = 7
+_SESSION_ID_SAFE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
 # pending_work 里 undecided（未定处置）批次的软提醒静默窗：记录后头几个会话提，之后闭嘴。
 # 3 是「够用户注意到、不至于变成每次开会话的噪音」的折中；信息不会丢（doctor 的
 # init_completeness 常驻可见，material-intake 可随时重新盘点）。relay 批次不受此窗约束
 # ——那是用户自己拍板要做的活，轻提示常驻、嫌烦可改 paused。
 PENDING_WORK_WINDOW = 3
-STATE_DIR = PROJECT_DIR / ".claude" / "workframe-state"
+STATE_DIR = state_dir_of(PROJECT_DIR)
 ACTIVITY_FILE = STATE_DIR / "activity-state.json"
 DIGEST_FILE = STATE_DIR / "session-digest-latest.md"
 EVENTS_FILE = STATE_DIR / "events.jsonl"
@@ -58,7 +94,14 @@ DORMANT_THRESHOLDS_DAYS = {
     "archive": 0,
 }
 
-PM_CLOSED_RETENTION_DAYS = 7  # 关闭 7 天后 GC
+# 关闭后保留天数，到期由本脚本的 gc_pending_maintenance 清理。
+# **不是自由参数**：那条 closed 条目同时是「驳回抑制」的唯一载体，被 GC 删掉抑制即失效，
+# 所以本常量也就是抑制能维持多久。两条约束由 validate 的
+# `pm_retention_matches_events_window` 对账（改这里之前先读那道闸的红灯文案）：
+#   == check-iteration-trigger.EVENTS_WINDOW_DAYS —— 基线消失与旧事件出窗同刻，交接无缝
+#   >= check-iteration-trigger.CADENCE_DAYS       —— 否则驳回 cadence 后条目先被删、
+#                                                    天数还超标，提醒当场复活
+PM_CLOSED_RETENTION_DAYS = 7
 
 # C+ drift check（v0.2.2 起）
 DRIFT_HISTORY_DAYS = 30        # recent_drift_repairs 只保留最近 30 天
@@ -99,18 +142,25 @@ def parse_iso(ts):
 
 
 def append_event(event_type, **fields):
-    """写一条事件到 events.jsonl；失败不阻塞 hook。"""
-    EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    """写一条事件到 events.jsonl；失败不阻塞 hook（加锁与 spill 见 _state_io.append_line）。"""
     event = {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "type": event_type,
         **fields,
     }
-    try:
-        with EVENTS_FILE.open("a", encoding="utf-8", newline="") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    append_line(EVENTS_FILE, event_json(event))
+
+
+def flush_event_spills():
+    """把上次锁超时落下的 `events.<pid>.spill.jsonl` 并回主文件。
+
+    为什么挂在 SessionStart：spill 是**锁抢不到**时产生的，而抢不到锁意味着当时正有别的
+    进程在写——那一刻并不适合重试。会话启动是并发压力最低、且必定会跑到的一点。
+    无 spill 时零输出、零副作用，所以它不影响任何既有会话的表现。
+    """
+    n = merge_spills(EVENTS_FILE)
+    if n:
+        print(f"[workframe] 并回 {n} 条上次锁超时落盘的事件。", file=sys.stderr)
 
 
 def check_summary_drift_and_repair(state, now):
@@ -228,6 +278,38 @@ def check_summary_drift_and_repair(state, now):
         )
         return
 
+    # recompute **正常返回但没修**（它自己的 strict 保护拦下了，如 parse_mismatch /
+    # unknown_statuses_in_tasks）→ 必须走 skipped 事件。信息本来就没丢（repair_status
+    # 一直是真值），丢的是**事件名**——而 audit 按事件名分组统计「自动修复 X 次 /
+    # 跳过 Y 次」，写错名就把「跳过」算进「修复」。上面三支早退分支用的正是这个事件名，
+    # 同形态分流即可。
+    #
+    # **这一支单次执行下不可达，保留它是防御性的**：上面 `:170` 已用**同一个**
+    # `count_task_statuses` 解析过**同一份文件**，recompute 能返回的每种 skipped 成因
+    # 都被各自的早退先拦下（解析失败 → `:174`；无 summary 块 → `:180`；有条目却一条
+    # status 都没解析出来 → `:203`；未知 status → `:214`），而 `{"status": "error"}`
+    # 只在 recompute 的 `main()` CLI 入口产生、本处直接调函数不经它。本支覆盖的是
+    # ①将来 recompute 新增未被上面预过滤的 skipped 成因 ②两次读盘之间 board.yaml
+    # 被并发改写（`:160` 读到的与 recompute 重读到的不是同一份）。
+    # **别把它当热路径**：正常运行时它一次都不会命中。
+    if result.get("status") != "ok":
+        append_event(
+            "summary_drift_repair_skipped",
+            reason="recompute_skipped",
+            # 本文件的 reason 只用自己那套词表，recompute 的原因塞 detail——与上面
+            # `reason="recompute_failed"` + detail 那支同形态，recompute 将来加新 reason
+            # 也不用回来改本文件与 schema。
+            detail=str(result.get("reason") or "")[:100],
+            repair_status=result.get("status"),
+            drift_fields=drift_fields,
+        )
+        print(f"[drift-check] board.yaml 有 {len(drift_fields)} 项 summary drift，但重算被跳过"
+              f"（{result.get('reason') or result.get('status')}）——**未修改任何字段**；"
+              "详情见 /core:audit")
+        # 不记 drift 修复历史：什么都没修，计入 30 天频次会把告警阈值攒虚（同上面三支
+        # 早退分支——它们也都在 _record_repair 之前 return）。
+        return
+
     append_event(
         "summary_drift_repaired",
         drift_fields=drift_fields,
@@ -278,7 +360,7 @@ def run_first_session_acceptance():
     """首个会话的运行时验收：内联跑 doctor 第 0 组，结果打进启动上下文。
 
     为什么放这里而不是让模型自觉跑：安装是否成功必须由**代码**确定性地回答一次。
-    落盘验收（launcher 在重启前跑）只能查文件；hooks 是否真的活着、rules 镜像有没有被
+    落盘验收（launcher 在重启前跑）只能查文件；hooks 是否真的活着、必载纪律有没有被
     SessionStart 同步出来，只有重启后才有答案——这就是那一半。
 
     只在 `session_counter == 1` 触发（装完的第一个会话），之后不再打扰；
@@ -304,7 +386,7 @@ def run_first_session_acceptance():
         return
     problems = summarize(results)
     if problems is None:
-        print("[workframe] 安装验收通过 —— 骨架 / 配置 / 订阅 / rules 镜像 / hook 链路全部就位。")
+        print("[workframe] 安装验收通过 —— 骨架 / 配置 / 订阅 / hook 链路全部就位。")
     else:
         n_err = sum(1 for r in results if r["status"] == "error")
         print(f"[workframe] 安装验收发现 {n_err} 个错误、"
@@ -334,7 +416,7 @@ def check_pending_work(session_counter=None):
 
     批次完成 → 模型删除对应条目；全部销账 → 删除整个 `pending_work` 键。
     """
-    f = PROJECT_DIR / ".claude" / "workframe-state" / "setup-state.json"
+    f = STATE_DIR / "setup-state.json"
     if not f.exists():
         return
     try:
@@ -391,7 +473,10 @@ def check_pending_work(session_counter=None):
 
 
 def gc_pending_maintenance(items, now):
-    """移除 status=closed 且 closed_at < now - 7d 的条目。就地返回新列表。"""
+    """移除 status=closed 且 closed_at 早于 PM_CLOSED_RETENTION_DAYS 天前的条目。
+
+    就地返回新列表。
+    """
     if not isinstance(items, list):
         return []
     cutoff = now - timedelta(days=PM_CLOSED_RETENTION_DAYS)
@@ -443,7 +528,7 @@ def print_memory_map():
     为什么需要：SessionStart 的其余脚本无一注入 role/shared MEMORY，SubagentStart
     的注入又只在委派时发生——主 Claude 直做时对角色记忆的暴露为零，连"有哪些域、
     该读哪份"都无从得知。这里每个 scope 打一行定位语，承担**领域发现**；具体内容
-    仍按 `agent-protocols.md` §1 由主 Claude 显式 Read。
+    仍按主会话必载片 §直做前恒走显式 Read 由主 Claude 显式 Read。
 
     扫两处 agents 目录：plugin 内置 + 项目 `.claude/agents/`（自定义角色），
     **同名以项目为准**（与 Claude Code 官方的同名覆盖优先级一致）。
@@ -464,13 +549,15 @@ def print_memory_map():
                 mark = ""
             roles[f.stem] = (f, mark)
 
-    mem_dir = PROJECT_DIR / ".claude" / "agent-memory"
+    mem_dir = memory_dir_of(PROJECT_DIR)
     if not roles and not mem_dir.is_dir():
         return
 
+    # 记忆目录问 `_state_io` 现算，不写死字面——目录位置只有那一个事实源
+    mem_rel = mem_dir.relative_to(PROJECT_DIR).as_posix()
     print("[memory-map] 角色域一览——直做该域工作前，读其契约 + MEMORY.md（内容不在此注入）")
     print("  路径：契约 <plugin>/agents/<role>.md，项目侧角色在 .claude/agents/（同名则覆盖 core）"
-          "｜记忆 .claude/agent-memory/<role>/MEMORY.md")
+          f"｜记忆 {mem_rel}/<role>/MEMORY.md")
     for role in sorted(roles):
         path, mark = roles[role]
         tag = _agent_tagline(path) or "（该 agent 未声明 description）"
@@ -484,7 +571,7 @@ def print_memory_map():
 
 
 def write_plugin_root():
-    """把当前插件根路径写进 workframe-state，供 skill / agent 在 Bash 中定位插件内脚本。
+    """把当前插件根路径写进运行态状态目录，供 skill / agent 在 Bash 中定位插件内脚本。
 
     背景：CC 官方的 plugin bin/ PATH 注入在部分环境不生效（Windows + directory 订阅
     实测 2.1.225 未注入），且模型的 Bash 环境没有 ${CLAUDE_PLUGIN_ROOT}。本脚本自定位
@@ -492,22 +579,179 @@ def write_plugin_root():
     自动跟上（官方文档明确 PLUGIN_ROOT 随版本更新而变化，不能持久化假设不变）。
 
     消费方统一配方（Git Bash / macOS 通用）：
-        python "$(cat .claude/workframe-state/plugin-root.txt)/bin/workframe-xxx"
+        python "$(cat <状态目录>/plugin-root.txt)/bin/workframe-xxx"
+    `<状态目录>` 即 `_state_io.state_dir_of(项目根)`；skill / reference 里的字面配方
+    写的是出厂形态的状态目录（`_state_io.new_rel("state")`）。
+
+    **按门分文件 ＋ 兼容位**：两扇门各有自己的安装缓存根（CC 在 `~/.claude/plugins/cache/…`，
+    Codex 在 `<CODEX_HOME>/plugins/cache/…`），同一个项目同时挂两扇门时，单文件会被轮流覆盖
+    写成「最后一个起会话的那扇门」的根——一边升级一边没升时，另一门的 skill 配方会静默执行
+    另一个安装里的旧脚本。所以本门的根另写一份 `plugin-root.<门>.txt`（门标识来自命令行
+    `--harness`，取不到就不写这份）；`plugin-root.txt` 保留为「最后一个写的」兼容位，存量
+    `$(cat …/plugin-root.txt)` 配方零改动。doctor 读两份分文件、断言两根的插件版本相等。
 
     写 bytes 避免 Windows 文本模式把 LF 改写成 CRLF。失败不阻塞会话启动。
     """
     try:
         root = Path(__file__).resolve().parents[1]
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        (STATE_DIR / "plugin-root.txt").write_bytes(
-            (str(root).replace("\\", "/") + "\n").encode("utf-8")
-        )
+        line = (str(root).replace("\\", "/") + "\n").encode("utf-8")
+        (STATE_DIR / "plugin-root.txt").write_bytes(line)
+        door = _harness.harness()
+        if door in _harness.HARNESSES:
+            (STATE_DIR / f"plugin-root.{door}.txt").write_bytes(line)
     except Exception:
         pass
 
 
+def write_session_marker(payload):
+    """Codex 门：写本会话的标记文件，并清掉过期的旧标记。失败不阻塞会话启动。"""
+    if _harness.harness() != _harness.CODEX:
+        return
+    sid = _harness.session_id(payload)
+    if not sid or not _SESSION_ID_SAFE.match(sid):
+        return
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        (STATE_DIR / f"{SESSION_MARKER_PREFIX}{_harness.CODEX}-{sid}.json").write_bytes(
+            json.dumps({"harness": _harness.CODEX, "session_id": sid,
+                        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+                       ).encode("utf-8"))
+    except Exception:
+        return
+    cutoff = datetime.now(timezone.utc).timestamp() - SESSION_MARKER_STALE_DAYS * 86400
+    for p in STATE_DIR.glob(f"{SESSION_MARKER_PREFIX}*.json"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink()
+        except OSError:
+            continue
+
+
+def ensure_agents_md_present():
+    """已装项目的 `AGENTS.md` 补建入口——**这一条不接，模板就等于没落地**。
+
+    注入片从本版起把「项目自有判据」的落点指向项目根 `AGENTS.md`。新建项目由装机脚本铺，
+    **已装项目不会再跑一次装机**，所以补建必须挂在每次会话启动这条路径上。判定式只有一份
+    （`project_scaffold.ensure_agents_md`），这里只是第二个调用点。
+
+    **记步的触发条件是「确认文件在位」，不是「刚创建了它」。** 补建每次会话都跑，但文件
+    已在就跳过——只在创建那一支记步的话，升级到本版的存量项目会落进「文件有了、步没记」，
+    而 `check_setup_state` 把 `agents_md` 列为必查步 ⇒ **恒 error 且永不自愈**
+    （下一次会话仍然跳过创建，仍然不记）。幂等赋值，重复写同一个值无副作用。
+
+    **但记步只在已经有一份可用的 `setup-state.json` 时落笔**（`only_if_present=True`）：
+    运行态状态目录整个不进 git，所以 `git clone` 下来的项目必然**没有**这份文件——无条件
+    记步会给它凭空造出一份只含 `agents_md` 的记录，`check_setup_state` 随即把它读成
+    「初始化未走完，已完成 1/3 步」。那是**加入项目的同事在首个会话里被念出来的**第一句话，
+    且此后每个会话原样重复；而文件不存在时 doctor 本来报 info 放行。判据（能不能解析出
+    dict）与写入共用同一次读取，所以落在 `mark_setup_step` 里而不是这里，理由见那边。
+
+    延迟 import：`project_scaffold` 不是本脚本的常规依赖，模块级 import 会让它的任何
+    导入期问题都变成 SessionStart 的问题。失败不阻塞会话启动。
+    """
+    try:
+        from project_scaffold import ensure_agents_md, mark_setup_step  # noqa: E402
+        created = []
+        if ensure_agents_md(PROJECT_DIR, created, []):
+            print("[workframe] 已补建 AGENTS.md（项目自有判据落点，两扇门共用）"
+                  "——按你的项目改写它，框架不覆盖已存在的内容。"
+                  + ("项目根 CLAUDE.md 里已有的项目内容（项目目标 / 业务背景 / 项目特殊约束等）不会自动搬过来："
+                     "按 core 插件 reference/claude-md-merge-guide.md 逐段归位，别把 CLAUDE.md 整段复制过去；"
+                     "改 AGENTS.md 要用户本人确认，模型不代填。"
+                     if (PROJECT_DIR / "CLAUDE.md").is_file() else ""))
+        # 在位即记步——**不放进上面的 if 里**，见 docstring
+        # `only_if_present=True`：没有可用的 setup-state.json 就不记、也不建，见 docstring
+        if (PROJECT_DIR / "AGENTS.md").is_file():
+            mark_setup_step(PROJECT_DIR, "agents_md", only_if_present=True)
+    except Exception as e:
+        print(f"[warn] AGENTS.md 补建跳过: {type(e).__name__}: {e}", file=sys.stderr)
+
+
+def ensure_project_skills_link_present():
+    """clone 侧的 `.claude/skills` 链接补建——**没有这一条，clone 出来的项目在 Claude Code 门下看不到项目 skill**。
+
+    新建项目的项目 skills 真实源在 `.agents/skills/`，`.claude/skills` 是指向它的目录链接且被
+    `.gitignore` 忽略，所以 `git clone` 带来的只有真实源；CC 只读 `.claude/skills`，而 doctor 按
+    真实源解析、全绿。形态判定只有一份（`_harness.skills_cc_form`），两个动作都在 `project_scaffold`：
+      - 位置上什么都没有、`.agents/skills/` 是目录 ⇒ 补建（`ensure_project_skills_link`）；
+      - 链接的目标不存在、本项目 `.agents/skills/` 是目录（Windows 上项目整体改名 / 移动后 junction 仍指旧位置）
+        ⇒ 解掉这根悬空链接、重指到本项目（`repoint_dangling_skills_link`，用户 2026-09-18 授权的唯一删除动作）；
+      - 其余只报不动的形态（普通文件 / 指向别处 / 真目录副本 / 真实源不在）每会话打一行（`skills_form_note`）。
+    每次会话都跑，所以它必须窄且幂等。两扇门都跑：链接是仓形态的一部分，不按门分（Codex 会话里补上它，
+    下一个用 CC 打开的人就直接可用）。补建或重指之后 CC 门请求 `reloadSkills`（见 `_harness.hook_json_stdout`）：
+    CC 的 skill 发现通常在 SessionStart hook 跑完之前，不请求的话本会话看不到项目 skill。
+    延迟 import 与失败不阻塞会话启动，同 `ensure_agents_md_present`。
+    """
+    try:
+        from project_scaffold import ensure_project_skills_link, repoint_dangling_skills_link  # noqa: E402
+        codex = _harness.harness() == _harness.CODEX
+        # 改变了 `.claude/skills` 的解析目标之后怎么说，按门分：Codex 直接读 `.agents/skills`，这根链接对它无影响；
+        # CC 门由 hook_json_stdout 在退出时改投带 reloadSkills 的 JSON，让本会话重扫 skill 清单
+        after = ("（Codex 门直接读 .agents/skills，不受这根链接影响）" if codex else
+                 "已请 Claude Code 在本次启动后重扫 skill 清单；若本会话仍看不到项目 skill，"
+                 "执行 /reload-skills 或重开会话。")
+        created, skipped = [], []
+        old = repoint_dangling_skills_link(PROJECT_DIR, created, skipped)
+        if old:
+            print(f"[workframe] 已把悬空的 .claude/skills 链接（原指向 {old}）重指到本项目 .agents/skills"
+                  f"（项目整体改名 / 移动后，Windows junction 仍指着旧位置）。{after}")
+            _harness.request_skills_reload()
+        elif ensure_project_skills_link(PROJECT_DIR, created, skipped):
+            print("[workframe] 已补建 .claude/skills → .agents/skills 目录链接"
+                  f"（项目 skills 的真实源随仓走，链接不进 git；clone 后首个会话补建）。{after}")
+            _harness.request_skills_reload()
+        else:
+            note = skills_form_note(PROJECT_DIR, codex)
+            if note:
+                print(note)
+        for s in skipped:
+            print(f"[warn] {s}", file=sys.stderr)
+    except Exception as e:
+        print(f"[warn] .claude/skills 链接补建跳过: {type(e).__name__}: {e}", file=sys.stderr)
+
+
+def skills_form_note(project, codex):
+    """`.claude/skills` 处于只报不动的形态时每会话一行（形态判定只在 `_harness.skills_cc_form`）；其余返回 None。
+
+    复制出来的项目通常带着 counter>1 的运行态，首会话安装验收不会触发——所以这一行不等 doctor，每会话都打。
+    """
+    form = _harness.skills_cc_form(project)
+    cc, neu = _harness.SKILLS_DIR_CC.as_posix(), _harness.SKILLS_DIR_NEUTRAL.as_posix()
+    tail = "（Codex 门直接读 .agents/skills，不受影响）" if codex else ""
+    if form == _harness.SKILLS_FILE:
+        return (f"[workframe] {cc} 是一个普通文件、不是指向 {neu} 的链接——Claude Code 读不到任何项目 skill。"
+                f"常见成因：macOS / Linux 上误提交的链接对象在 Windows 上 clone 出来。确认它不是你的文件后移走它"
+                f"（它若被 git 跟踪，先 `git rm --cached {cc}`），下一次会话会补建链接。{tail}")
+    two = _harness.skills_two_copies(project)      # 「两份不是同一目录」只问这一处（反向链接不算）
+    if two is not None:
+        what = "是指向别处的链接" if two == _harness.SKILLS_LINK_ELSEWHERE else "是一个真目录（通常是复制项目时展开的副本）"
+        return (f"[workframe] {cc} {what}，与 {neu} 不是同一个目录——Claude Code 读前者，框架脚本与 Codex 读后者，"
+                f"内容会分叉。先比对两边（副本里可能有人改过），合并进 {neu} 后再把 {cc} 换成指向它的链接；"
+                f"细节见 workframe-doctor --group install。{tail}")
+    if form == _harness.SKILLS_LINK_NEUTRAL_MISSING:
+        return (f"[workframe] {cc} 是链接，但本项目的 {neu} 不在——项目 skills 的真实源没了。"
+                f"从 git 恢复 {neu}（链接随即恢复），或解掉链接（Windows `rmdir .claude\\skills`、"
+                f"POSIX `rm .claude/skills`，都只解链接）。{tail}")
+    return None
+
+
 def main():
+    # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
+    if _harness.hook_outside_project(PAYLOAD):  # 载荷已在模块顶层读过
+        return
+    # 接管 stdout，退出时一次写出。Codex 清单带 `--output hook-json`：本脚本的 stdout 以 `[workframe]` /
+    # `[memory-map]` 起头，Codex 按 JSON 解析失败后整条丢弃；该模式下把全部输出收成一条 hookSpecificOutput。
+    # CC 不带此参数：原样写回，只有本次补建 / 重指了 `.claude/skills` 时改投带 reloadSkills 的 JSON。
+    _harness.hook_json_stdout("SessionStart")
     write_plugin_root()
+    write_session_marker(PAYLOAD)
+    ensure_agents_md_present()
+    ensure_project_skills_link_present()
+    try:
+        flush_event_spills()
+    except Exception as e:
+        print(f"[warn] event spill flush failed: {type(e).__name__}: {e}", file=sys.stderr)
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
 

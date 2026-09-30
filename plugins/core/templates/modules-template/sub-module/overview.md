@@ -2,8 +2,8 @@
 type: overview
 overview_level: sub-module
 status: planning
-owner_role: {{OWNER_ROLE}}
-updated: {{NOW_ISO}}
+owner_role: "{{OWNER_ROLE}}"
+updated: "{{NOW_ISO}}"
 module: "{{MODULE_PATH}}"
 description: ""                        # ★ 一句话摘要（1-2 句 ≤200 字，document-norms §2.1）；写完「定位」段后回填
 related: []
@@ -28,7 +28,7 @@ auto_sections:
 - **API**：_（待 code-to-doc 生成 api-surface.md 后摘要）_
 - **数据模型**：_（待 code-to-doc 生成 data-model.md 后摘要）_
 - **代码索引**：_（待 code-to-doc 生成 code-map.md 后摘要）_
-- **最近同步**：_（last_synced_at）_
+- **最近同步**：_（last_synced_at；已同步后在日期后附「基准 commit <last_synced_ref>」括注）_
 
 <!-- WORKFRAME:AUTO-INDEX:END:current-state-summary -->
 

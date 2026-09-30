@@ -1,0 +1,24 @@
+{
+  "name": "core",
+  "version": "1.1.0",
+  "description": "Workframe 核心插件：4 个 baseline 角色（PM / Dev / QA / Prompt-Eng）、37 个 skills（13 domain + 9 system/maintenance + 8 docs/publishing + 7 modules-system）、Codex 清单 17 条 hook（7 个事件）、按主线程与子线程切分的必载纪律注入片，以及让需求与代码保持同步的 modules/ 文档体系。",
+  "author": {
+    "name": "Zhao Jiahao"
+  },
+  "homepage": "https://github.com/ryanzhao1011/workframe",
+  "repository": "https://github.com/ryanzhao1011/workframe",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "codex-plugin",
+    "product-management",
+    "prd",
+    "agents",
+    "skills",
+    "hooks",
+    "project-memory",
+    "chinese"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.codex.json"
+}

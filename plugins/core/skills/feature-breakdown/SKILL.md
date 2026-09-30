@@ -1,10 +1,6 @@
 ---
 name: feature-breakdown
-description: 将需求拆解为可执行开发任务，支持 Epic→Story→Task 三层结构与5种拆分技术，INVEST 验证，≤4小时粒度
-when_to_use: |
-  用于已有 PRD / Spec 后，把需求拆为可开发的 Epic/Story/Task 时调用。
-  典型触发："拆任务" / "Story 怎么拆" / "做 sprint 计划" / "INVEST 检查"。
-  不用于：需求识别本身（应先用 requirement-analysis）/ 验收标准（用 acceptance-criteria 在拆解后）/ 测试用例（用 test-case-design 在 qa 阶段）。
+description: '将需求拆解为可执行开发任务，支持 Epic→Story→Task 三层结构与5种拆分技术，INVEST 验证，≤4小时粒度。用于已有 PRD / Spec 后把需求拆为可开发的 Epic/Story/Task。典型触发："拆任务" / "Story 怎么拆" / "做 sprint 计划" / "INVEST 检查"。不用于：需求识别本身（应先用 requirement-analysis）/ 验收标准（用 acceptance-criteria 在拆解后）/ 测试用例（用 test-case-design 在 qa 阶段）。'
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Glob, Grep]
 ---
@@ -123,6 +119,9 @@ Epic: EPIC-{序号}
   status: pending
   priority: P1
   assigned_to: dev        # 实现类 → dev；Prompt 变更 → prompt-eng；需求/调研 → pm；测试/签发 → qa
+                          # `assigned_to` 是**领域归属**，不是签发档：签发档在收口那一刻由
+                          # 四段闸门现算（closeout-discipline §谁签发这次收口），拆解阶段
+                          # 算不出来也不要预先写死——拆解时还不知道届时有没有独立结论
   created_at: "YYYY-MM-DD"
   updated_at: "YYYY-MM-DD"
   deadline: null

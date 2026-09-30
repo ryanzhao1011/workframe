@@ -2,11 +2,11 @@
 
 本文档定义如何在项目内扩展或定制 skill。
 
-## 36 通用 skill（来自 core plugin）
+## 37 通用 skill（来自 core plugin）
 
 订阅 core plugin 后自动可用，无需项目本地重复定义。分四类：
 
-### Domain skills（13 个，按需 preload 给 agent）
+### Domain skills（13 个；按各自 description 经 `Skill` 工具调用，`task-management` 另由子 agent 必载片固定植入）
 
 | 类别 | Skill 列表 |
 |---|---|
@@ -15,20 +15,21 @@
 | 研发支持 | `technical-design`, `systematic-debugging`, `test-case-design`, `code-review` |
 | Prompt 工程 | `prompt-design`, `prompt-evaluation` |
 
-### Maintenance/system skills（8 个，内部 / 命令触发，不 preload）
+### Maintenance/system skills（9 个，内部 / 命令触发，不绑任何角色）
 
 | Skill | 触发方式 | 用途 |
 |---|---|---|
 | `librarian` | **SessionStart 询问式开场卡**（主通道）/ `workframe-maintenance` 批处理工单 / `/core:maintenance-review` | 记忆整理；skill-metrics.yaml 由 `recompute_skill_metrics.py` 重算 |
 | `self-iteration` | 内部调用（hook 触发 pending_maintenance → /core:maintenance-review 执行） | 模式识别 + 多候选提案 |
 | `session-digest` | **下次 SessionStart** 见骨架简陋时二次填充 | 会话摘要（SessionEnd hook 只写骨架且**无条件覆盖**，会话末尾预写必被盖掉——详见该 skill §执行模型说明） |
-| `audit` | 用户 `/core:audit` | 维护活动审计 + pending_maintenance 展示（只读） |
+| `audit` | 用户 `/core:audit` | 维护活动审计 + pending_maintenance 展示 + 纪律抽查（默认只读；带 `--record` 时追加一条抽查事件） |
 | `rollback` | 用户 `/core:rollback` | 回滚 L1/L2 自动变更 |
 | `memory-log` | 用户 `/core:memory-log` | 记忆层活动流水 |
 | `maintenance-review` | 用户 `/core:maintenance-review` | Dormant 唤醒 / 手动维护入口 |
 | `onboard` | 用户 `/core:onboard`（未 onboarded 的项目 SessionStart 提示一行） | 一次性可选配置引导（默认 skip；详见 `onboard/SKILL.md`） |
+| `signal-intake` | 主会话按必载纪律判定「要落盘」之后调用 | 信号入账的落盘工序：Issue 模板与编号、记忆条目写入格式与 supersede、memory-index sidecar 字段（判据在必载纪律里，本 skill 只管怎么写） |
 
-写入型维护操作由 `maintenance-review` 承担，例如 `/core:maintenance-review --dismiss <PM-ID>` 关闭 pending_maintenance 条目；`audit` 保持只读。`onboard` 是受保护资产 `.claude/settings*.json` 的唯一豁免写入入口（详见 [`auto-update.md`](../rules/core/auto-update.md) §受保护资产例外）。
+写入型维护操作由 `maintenance-review` 承担，例如 `/core:maintenance-review --dismiss <PM-ID>` 关闭 pending_maintenance 条目；`audit` 默认只读（带 `--record` 时只追加一条抽查事件，不改任何状态）。`onboard` 是受保护资产 `.claude/settings*.json` 的两个豁免写入入口之一——另一个是装机链路（只写订阅声明那几个键；两个面的授权形态不同——**经 launcher setup 走**时由确认页逐个点名要改的文件，**直接敲命令**时没有确认页、授权就是用户亲手敲了命令，`workframe-door --backfill` 与脱离 launcher 直接跑的 `project_scaffold.py --write-subscription` 都属后者）（详见 [`40-protected-assets.md`](../context/both/40-protected-assets.md) 的受保护资产例外段）。
 
 ### 文档/发布工具（8 个）
 
@@ -59,7 +60,7 @@
 
 modules/ 体系随项目骨架恒启用（`projects/modules/` 总是存在），7 个 skill 开箱即用。详见 `module-architecture.md`。
 
-**合计：13 domain + 8 system/maintenance + 8 docs/publishing + 7 modules-system = 36 skills**。
+**合计：13 domain + 9 system/maintenance + 8 docs/publishing + 7 modules-system = 37 skills**。
 
 ## 何时写 skill vs rule vs agent
 
@@ -96,18 +97,36 @@ modules/ 体系随项目骨架恒启用（`projects/modules/` 总是存在），
 ```yaml
 ---
 name: <skill-name>                     # 必填，小写+短横线
-description: <一句话描述 skill 做什么、产物是什么>  # 必填
-when_to_use: |                          # 推荐填，路由准确性的关键
-  用于 <典型触发场景> 时调用。
-  典型触发："<关键词 1>" / "<关键词 2>" / "<关键词 3>"。
-  不用于：<反例 1>（用 <其他 skill>）/ <反例 2>。
+description: '<做什么、产物是什么>。用于 <典型触发场景>。典型触发："<关键词 1>" / "<关键词 2>"。不用于：<反例 1>（用 <其他 skill>）/ <反例 2>。'  # 必填
 user-invocable: true                    # 可选，默认 true；设为 false 则用户不能 /<skill-name> 直接调用
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]  # 可选，skill 执行时可用的工具白名单
 argument-hint: "[<参数提示>]"          # 可选，用户调用时显示的参数提示
 ---
 ```
 
-> `description` + `when_to_use` 合计字符上限 1536（官方 Skills 文档约定）。`description` 偏"是什么"，`when_to_use` 偏"什么时候调"，二者配合让主 Claude 路由更准；只写 `description` 时容易触发 routing 摇摆（如多个 skill 描述都覆盖同一关键词）。
+> **`description` 字符上限 1024**——这是 Agent Skills spec 对**该字段本身**的上限
+> （spec 另要求它必填非空，且 `name` ≤64、小写字母数字连字符、**与父目录名相同**）。
+>
+> **它必须一次装下四类信息，缺一类就会被别的 skill 抢路由**：①是什么 ②典型触发场景
+> ③典型触发词 ④不用于 / 边界反例。④ 最容易被当成冗余删掉——`technical-design` 与
+> `systematic-debugging` 的区分就全靠它。
+>
+> **为什么四类都挤在一个字段里**：Agent Skills spec 认的字段是
+> `name` / `description` / `license` / `compatibility` / `metadata` / `allowed-tools`——
+> **描述「什么时候该调它」的信息只有 `description` 这一个落点**。写进自定义字段的
+> 触发条件与边界反例，对只读 spec 字段的 runtime 不可见。
+>
+> **本框架仍有若干字段不在 spec 内**（`user-invocable` / `disable-model-invocation`，
+> 以及 `allowed-tools` 用的是 YAML list 而 spec 写的是空格分隔字符串）。走 plugin
+> 分发不触发校验，但**别把「合 spec」说过头**——把 `description` 写全，收益是让
+> 触发条件在更多 runtime 上可见，不等于整份 frontmatter 已经合 spec。
+>
+> **写法**：**单行、单引号包裹**（`description: '...'`）。单引号标量没有转义语义，
+> 触发词里的半角双引号可以直接写；内容里若出现半角单引号，写成两个连续单引号。
+> 不要写成裸标量——正文里一个「冒号+空格」就会让 YAML 把整份 frontmatter 判成解析
+> 失败并**静默丢弃**，那个 skill 从此在模型侧彻底不可见，而文件看着完全正常。
+> 一个「空格+井号」更阴：它能解析，只是井号之后被当注释悄悄截掉半句。
+> 这两类由 `validate.py` 的 `frontmatter_scalar_forms` 拦。
 
 ## SKILL.md 正文
 

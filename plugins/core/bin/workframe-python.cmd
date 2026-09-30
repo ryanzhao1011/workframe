@@ -1,5 +1,6 @@
 @echo off
 chcp 65001 >nul
+set "PYTHONUTF8=1"
 REM Workframe python launcher (Windows)
 REM Selection order: python -> py -3 -> python3
 REM Each candidate must satisfy sys.version_info[0] == 3 (probe before exec),
@@ -9,6 +10,9 @@ REM   - Legacy Python 2.x on PATH
 REM chcp 65001 switches the console code page to UTF-8 so Python scripts that
 REM emit Chinese / non-ASCII output (via TextIOWrapper utf-8) render correctly
 REM in cmd.exe instead of becoming mojibake under the default cp936/cp1252.
+REM PYTHONUTF8=1 is the second layer for stdin: chcp does not change the codec
+REM Python picks for a piped stdin, so hook payloads with non-ASCII paths would
+REM still be decoded with the ANSI code page. Scripts wrap stdin themselves too.
 REM Falls back to exit 0 with stderr message when no Python 3 is found, so
 REM hooks do not block the Claude session.
 

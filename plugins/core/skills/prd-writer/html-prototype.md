@@ -1,6 +1,6 @@
 # HTML 原型生成规范（能力库）
 
-> **适用条件**：项目 PRD 框架（`.claude/skills/prd-style/SKILL.md` §1）声明启用 HTML
+> **适用条件**：项目 PRD 框架（`.agents/skills/prd-style/SKILL.md` 或 `.claude/skills/prd-style/SKILL.md` §1，两个候选按存在性解析，规则见 SKILL.md）声明启用 HTML
 > 原型工序、且 V1 开启时，由 SKILL.md S5 引用。原型生成保留在 prd-writer，截图能力
 > 委托给 `screenshot` skill。
 >
@@ -134,7 +134,7 @@ S2 已确认页面骨架（区域布局 + 核心元素），S3 已写出交互�
 screenshot skill 随 core plugin 分发，脚本位于插件目录内（项目 `.claude/skills/` 下没有副本）；插件根从 `plugin-root.txt` 取：
 
 ```bash
-node "$(cat .claude/workframe-state/plugin-root.txt)/skills/screenshot/scripts/screenshot.js" \
+node "$(cat .workframe/state/plugin-root.txt)/skills/screenshot/scripts/screenshot.js" \
   --config "<iteration-dir>/prototypes/screenshot-config.json"
 ```
 
@@ -142,7 +142,7 @@ node "$(cat .claude/workframe-state/plugin-root.txt)/skills/screenshot/scripts/s
 
 - PNG 文件 → `tmp/screenshots/<task_id>/section-{功能A}.png` 等
 - manifest → `tmp/screenshots/<task_id>/_manifest.json`
-- 任务日志 → `.claude/workframe-state/logs/screenshot/<task_id>.json`
+- 任务日志 → `.workframe/state/logs/screenshot/<task_id>.json`
 
 > screenshot skill 自动处理：浏览器探测、puppeteer-core 自动安装到 `tmp/screenshot-deps/`、截图后清理控制由调用方决定。
 

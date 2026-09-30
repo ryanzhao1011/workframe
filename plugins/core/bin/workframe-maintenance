@@ -14,10 +14,9 @@ Usage:
 Two-phase run (2026-08-06 live-test findings):
   1. judge  — `claude -p --maintenance --permission-mode acceptEdits --add-dir <plugin>`:
      Setup hook aggregates the workorder; the model does content work
-     (agent-memory writes are allowed) and writes its bookkeeping requests to
-     logs/maintenance-commit.json. Headless sessions CANNOT write
-     .claude/workframe-state/** (Claude Code sensitive-file gate; Edit() allow
-     rules do not override it), and the Skill tool does not inject skill bodies
+     (role-memory files) and writes its bookkeeping requests to
+     logs/maintenance-commit.json; bookkeeping is applied by code in step 2,
+     not by the model. The Skill tool does not inject skill bodies
      in -p, so the workorder tells the model to Read librarian SKILL.md directly
      (hence --add-dir for the plugin directory).
   2. commit — `maintenance_workorder.py --commit` applies the manifest in code:
@@ -30,10 +29,23 @@ import sys
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
+
+from _harness import project_dir  # noqa: E402
+from _state_io import runtime_rel  # noqa: E402
+
+# 工单目录问 `_state_io` 现算。这里**不能写字面路径**——运行态目录的位置只有 `_state_io`
+# 一个源，写死了就是第二个源，挪目录那天这里漏改（validate 的 `paths_single_source` 钉住这一条）。
+# 文件名 `maintenance-workorder.md` 的定义点在 `scripts/maintenance_workorder.py`
+# 的 `WORKORDER_FILE`；这里不 import 那个模块，因为它在 import 期重绑 sys.stdout/stderr，
+# 会改掉本 launcher 自己的输出流。两处文件名由 validate 的
+# `maintenance_workorder_wired` 各自钉住。
+STATE_REL = runtime_rel(project_dir(), "state")
+WORKORDER_REL = STATE_REL + "/maintenance-workorder.md"
 
 PROMPT = (
-    "读 .claude/workframe-state/maintenance-workorder.md 维护工单，"
-    "先读「执行规约」再逐项执行（记账诉求写 manifest，勿直接写 workframe-state），"
+    f"读 {WORKORDER_REL} 维护工单，"
+    f"先读「执行规约」再逐项执行（记账诉求写 manifest，勿直接写 {STATE_REL}），"
     "最后输出执行摘要。"
 )
 

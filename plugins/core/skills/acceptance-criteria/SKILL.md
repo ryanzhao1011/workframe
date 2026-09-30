@@ -1,10 +1,6 @@
 ---
 name: acceptance-criteria
-description: 使用 GWT 场景式或规则式清单编写验收标准，含质量核查、复杂度分级与边界覆盖
-when_to_use: |
-  用于已拆解的 Story/Task 写验收标准、明确上线条件时调用。
-  典型触发："写验收标准" / "GWT 场景" / "上线条件是什么" / "AC 怎么写"。
-  不用于：需求范围讨论（用 requirement-analysis）/ 测试用例设计（用 test-case-design 在 qa 阶段，AC 是输入它是产物）。
+description: '使用 GWT 场景式或规则式清单编写验收标准，含质量核查、复杂度分级与边界覆盖。用于已拆解的 Story/Task 写验收标准、明确上线条件。典型触发："写验收标准" / "GWT 场景" / "上线条件是什么" / "AC 怎么写"。不用于：需求范围讨论（用 requirement-analysis）/ 测试用例设计（用 test-case-design 在 qa 阶段，AC 是输入它是产物）。'
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Glob, Grep]
 ---

@@ -3,7 +3,7 @@ type: overview
 overview_level: requirements
 status: planning
 owner_role: pm
-updated: {{NOW_ISO}}
+updated: "{{NOW_ISO}}"
 module: "{{MODULE_PATH}}"
 description: ""                        # ★ 一句话摘要（1-2 句 ≤200 字，document-norms §2.1）；子模块需求方向明确后回填
 related: []

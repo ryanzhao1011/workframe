@@ -1,10 +1,6 @@
 ---
 name: migrate-to-modules
-description: 将老项目（无 modules/ 体系）一次性迁移到 modules/ 体系。四步流程：模块树设计（人工+AI 推荐）→ dry-run 输出 file→target 映射 → 用户 review + 调整 → 用户确认后自动搬 + 写元数据 + 全量索引重建。前置必须做 grep + 文件清单 + 引用替换 SOP。触发词：迁移到 modules、迁移老项目、migrate-to-modules、modules 体系迁移。
-when_to_use: |
-  存量项目（散落 PRD / spec / decisions）首次启用 modules/ 体系时；
-  现有 docs/ 或散落需求资产需统一收编到 modules/ 时；
-  用户主动调用 `/core:migrate-to-modules` 时。
+description: '将老项目（无 modules/ 体系）一次性迁移到 modules/ 体系。四步流程：模块树设计（人工+AI 推荐）→ dry-run 输出 file→target 映射 → 用户 review + 调整 → 用户确认后自动搬 + 写元数据 + 全量索引重建。前置必须做 grep + 文件清单 + 引用替换 SOP。触发词：迁移到 modules、迁移老项目、migrate-to-modules、modules 体系迁移。用于存量项目（散落 PRD / spec / decisions）首次启用 modules/ 体系时、现有 docs/ 或散落需求资产需统一收编到 modules/ 时、用户主动调用 `/core:migrate-to-modules` 时。'
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 ---
@@ -127,7 +123,7 @@ file → target 映射 dry-run（103 文件）：
 参考 `document-norms` §8.3 删除/重命名 SOP，**对每个待删除路径**执行：
 
 ```bash
-grep -rln "<old-path-or-keyword>" .claude/ projects/ company-context/ my-workspace/
+grep -rln "<old-path-or-keyword>" .claude/ .workframe/ projects/ company-context/ my-workspace/
 ```
 
 报告所有引用：
@@ -215,7 +211,7 @@ docs/auth/login-flow.md 被以下文件引用（4 处）：
 
 对每个新建子模块且 `code_paths` 非空，跑 CLI：
 ```bash
-python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/check-stale-modules.py" init-submodule <basic>/<sub>
+python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" init-submodule <basic>/<sub>
 ```
 （与 module-init Step 2a 中脚本内部的反向索引初始化语义一致；不要直接 `from check_stale_modules import ...`，本 skill `allowed-tools` 不含 Python import 能力）
 
@@ -224,7 +220,7 @@ python "$(cat .claude/workframe-state/plugin-root.txt)/scripts/check-stale-modul
 迁移是断链最高发的操作（批量挪位 + 引用改写），索引重建后必须全库巡检验收：
 
 ```bash
-python "$(cat .claude/workframe-state/plugin-root.txt)/skills/doc-graph-health/scripts/graph_health.py"
+python "$(cat .workframe/state/plugin-root.txt)/skills/doc-graph-health/scripts/graph_health.py"
 ```
 
 - 断链 / 孤儿指向**本次迁移涉及的文件** → 当场修复（引用漏改 / 映射错位），修完重跑确认

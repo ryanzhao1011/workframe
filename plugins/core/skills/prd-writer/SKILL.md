@@ -1,12 +1,6 @@
 ---
 name: prd-writer
-description: 写需求文档 / PRD 的主力工具：读模块 overview 与历史需求推导功能范围，按项目 PRD 框架（.claude/skills/prd-style/）的工序形态与章节结构，草稿分步确认后自动填充详情，产出 modules/ 体系下的 prd.md 及项目框架声明的附属产物（流程图件 / HTML 原型等）。
-when_to_use: |
-  用户说「写需求文档 / 写 PRD / 新建需求 / 把这个需求写成文档」时；
-  需求已有共识、要落成正式文档时；demo 先行流程中 demo 拍板后补写 PRD 时；
-  用户要建立 / 更新本项目 PRD 风格（「按我的风格写」「总结我的 PRD 规范」）时（§风格定制与萃取）。
-  边界：需求本身还模糊、范围未定 → 先走 requirement-analysis；只要拆功能点 → feature-breakdown。
-  项目若配了发布器（`<platform>-publish`），发布是用户明确触发的独立动作，不在本 skill 内。
+description: '写需求文档 / PRD 的主力工具：读模块 overview 与历史需求推导功能范围，按项目 PRD 框架（项目 skills 目录下的 prd-style/；`.agents/skills/` 在则用它，否则 `.claude/skills/`）的工序形态与章节结构，草稿分步确认后自动填充详情，产出 modules/ 体系下的 prd.md 及项目框架声明的附属产物（流程图件 / HTML 原型等）。用于需求已有共识要落成正式文档时、demo 先行流程中 demo 拍板后补写 PRD 时、用户要建立 / 更新本项目 PRD 风格时（§风格定制与萃取）。典型触发：「写需求文档 / 写 PRD / 新建需求 / 把这个需求写成文档」「按我的风格写」「总结我的 PRD 规范」。边界：需求本身还模糊、范围未定 → 先走 requirement-analysis；只要拆功能点 → feature-breakdown。项目若配了发布器（`<platform>-publish`），发布是用户明确触发的独立动作，不在本 skill 内。'
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 ---
@@ -20,13 +14,16 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
    `projects/modules/<basic>/<sub>/requirements/<req_slug>/<sub_req_slug>/prd.md`，
    frontmatter `type: prd` + `module` + `req_slug` + `sub_req_slug` 必填（`version` 字段
    已废除——版本演进进 `prd.md` 正文「变更与决策记录」）。
-2. **项目 PRD 框架**：Read `.claude/skills/prd-style/SKILL.md`——本项目 PRD 的工序形态
+2. **项目 PRD 框架**：Read `<项目 skills 目录>/prd-style/SKILL.md`——本项目 PRD 的工序形态
    （§1）、维度开关（§2）、章节结构（§3）、各章写法（§4）、标注习惯（§5）的唯一事实源。
+   **`<项目 skills 目录>` 按存在性解析**（与 `_harness.project_skills_dir()` 同一规则）：项目根下
+   有 `.agents/skills/` 就是它（新建项目的真实源，`.claude/skills` 是指向它的目录链接，两条路径
+   读到同一份文件；链接在而目标目录暂缺时也按 `.agents/skills/` 算），否则是 `.claude/skills/`（已装项目的真目录）。
    **缺失时 fallback**：读框架默认模板
    `<插件根>/templates/project-skills/prd-style/SKILL.md`（插件根 =
-   `cat .claude/workframe-state/plugin-root.txt`）照用，并提示用户
+   `cat .workframe/state/plugin-root.txt`）照用，并提示用户
    「本项目未配置 PRD 框架，本次按框架默认执行；正常装机会自动放入，可跑 doctor 检查，
-   或从上述模板复制到项目 `.claude/skills/prd-style/` 后按需修改」。
+   或从上述模板复制到 `<项目 skills 目录>/prd-style/` 后按需修改」。
 3. `writing-guide.md`（S3 填充前读）：core 通用写作纪律。与项目框架冲突时**以项目为准**
    （机器契约除外，见项目框架 §0）。
 
@@ -166,7 +163,7 @@ projects/modules/<basic>/<sub>/requirements/<req_slug>/*/prd.md       ← 同需
      子需求 `main/` 与 `prd.md` 占位骨架）；落盘时覆盖占位骨架
    - **新增子需求**（已有 `<req_slug>/main/` 想拆新子需求）：从
      `<插件根>/templates/modules-template/requirement/main/`（插件根 =
-     `cat .claude/workframe-state/plugin-root.txt`）复制整个子需求
+     `cat .workframe/state/plugin-root.txt`）复制整个子需求
      骨架到 `<req_slug>/<sub_req_slug>/`，逐文件替换 `{{SUB_REQ_SLUG}}` / `{{REQ_SLUG}}` /
      `{{MODULE_PATH}}` / `{{REQ_TITLE}}` / `{{NOW_ISO}}` / `{{TODAY}}`（子需求骨架共 6 个占位符；`{{OWNER_ROLE}}` 只在 req 级 meta.yaml/overview.md 与模块级 yaml 里，不在本流程的复制范围）
      占位符；不挪已有子需求内容
@@ -246,7 +243,7 @@ PM 类文档完成后允许一次**弱提醒**（项目配备发布器时，固�
    覆盖，但必须让用户知情逐条拍，不静默替用户选）；机器契约项（模板 §0）不参与对照、
    不可定制
 4. **过目**：以「你的风格 vs 框架默认，差这几点」的差异对照表在响应中呈现，用户确认
-5. **写入**：基于默认模板改写 `.claude/skills/prd-style/SKILL.md`（§0 机器契约红线整段
+5. **写入**：基于默认模板改写 `<项目 skills 目录>/prd-style/SKILL.md`（§0 机器契约红线整段
    原样保留；§1-§6 按拍板结果改），已有该文件时走更新（保留项目补充口径 §6 内容）
 
 ---
@@ -267,7 +264,7 @@ PM 类文档完成后允许一次**弱提醒**（项目配备发布器时，固�
 
 | 对象 | 关系 |
 |---|---|
-| 项目 `.claude/skills/prd-style/` | 本项目 PRD 框架唯一事实源（工序/章节/写法/习惯）；缺失 fallback 读 core 模板 |
+| 项目 `<项目 skills 目录>/prd-style/`（`.agents/skills/` 在则是它，否则 `.claude/skills/`） | 本项目 PRD 框架唯一事实源（工序/章节/写法/习惯）；缺失 fallback 读 core 模板 |
 | `writing-guide.md` / `diagram-guide.md` / `html-prototype.md` | core 通用纪律 / 图件能力库 / 原型能力库（后两者按框架声明启用） |
 | `document-norms` §1 §2 | 归属与 frontmatter 机器契约 |
 | `module-init` / `module-index-refresh` | 建需求资产包 / 索引同步 |

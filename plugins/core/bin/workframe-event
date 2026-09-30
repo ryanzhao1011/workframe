@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""
+模型手写事件的统一写入入口（workframe-event）— 调用 plugins/core/scripts/workframe_event.py
+
+通过 Claude Code plugin bin/ 机制自动加入 Bash tool 的 PATH（不依赖 ${CLAUDE_PLUGIN_ROOT}
+在 agent Bash 上下文是否可用）。
+
+用法（在 workframe 项目内任意位置）：
+    workframe-event skill-used --skill <name> --role <role> [--success true|false] [--harness cc]
+    workframe-event user-correction --scope <shared|role|main> [--role r] [--summary "..."]
+    workframe-event task-blocked --task-id TASK-123 --role qa
+    workframe-event discipline-spotcheck --sessions-sampled cc=3,codex=0 --criterion S1=4/1 --criteria-version 1
+
+它替模型做掉的四件事（ts 口径 / 反斜杠转义 / entry_key 归一 / task_blocked 去重）与
+各自的能力边界，见 scripts/workframe_event.py 的模块 docstring——那里是唯一说明。
+
+跨平台说明：
+    - Linux / macOS / git bash: 直接执行（依赖 shebang 找 python3）
+    - Windows cmd / powershell: 调用同目录下的 .cmd 包装文件（自动 dispatch）
+"""
+
+import sys
+from pathlib import Path
+
+# bin/ 与 scripts/ 是 plugin root 下的兄弟目录
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from workframe_event import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

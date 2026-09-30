@@ -2,8 +2,8 @@
 type: overview
 overview_level: basic-module
 status: planning
-owner_role: {{OWNER_ROLE}}
-updated: {{NOW_ISO}}
+owner_role: "{{OWNER_ROLE}}"
+updated: "{{NOW_ISO}}"
 # 注：basic-module overview 不设 module 字段（document-norms §2.6 二段式 module 仅适用于 <basic>/<sub> 及以下层级）
 basic_name: "{{BASIC_NAME}}"
 description: ""                        # ★ 一句话摘要（1-2 句 ≤200 字，document-norms §2.1）；写完「定位」段后回填

@@ -1,10 +1,6 @@
 ---
 name: prompt-design
-description: Prompt 设计与迭代，含场景分析、分层架构、变量接口、版本管理、风险评估的完整设计流程
-when_to_use: |
-  用于 Prompt 设计、迭代、分层架构（system/user/few-shot）、版本管理、变量接口设计时调用。
-  典型触发："设计 prompt" / "迭代 prompt" / "prompt 改一下" / "分层架构" / "Prompt 模板"。
-  不用于：Prompt 效果对比测试（用 prompt-evaluation）/ AI 策略调研 / 模型动态跟踪（暂走 notes/MEMORY）。
+description: 'Prompt 设计与迭代，含场景分析、分层架构、变量接口、版本管理、风险评估的完整设计流程。用于 Prompt 设计、迭代、分层架构（system/user/few-shot）、版本管理、变量接口设计。典型触发："设计 prompt" / "迭代 prompt" / "prompt 改一下" / "分层架构" / "Prompt 模板"。不用于：Prompt 效果对比测试（用 prompt-evaluation）/ AI 策略调研 / 模型动态跟踪（暂走 notes/MEMORY）。'
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Glob, Grep, WebSearch, WebFetch]
 ---
@@ -167,7 +163,8 @@ variables:
 
 - **prompt-evaluation**：设计完成后必须评估
 - **@qa test-case-design**：基于风险评估设计对抗性测试
-- **board.yaml**：Prompt 变更任务需经 pending_qa
+- **board.yaml**：Prompt 变更任务需经 pending_qa。签发档由四段闸门判定（必载片 §谁签发这次收口）——Prompt 变更的默认起点同样是 @qa 完整验证，**自签档默认开启**（`signoff.self_signoff_enabled` 缺键即 true），降档要有覆盖本轮 delta 的通行证
+- **注意 Prompt 变更的爆炸半径容易被判低**：改一句提示词看着像档 1，但**如果这句话是在告诉模型「什么算通过」**，它就是判据本身、落档 4，地板卡在完整验证。判据见 skill `test-case-design` 的 `reference/test-scoping.md` §档 4
 
 ## 反模式
 

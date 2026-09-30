@@ -7,7 +7,7 @@ status: active                          # planning | active | done | dropped
 # ↑ 这是 **yaml 实体**的词表，与同目录 overview.md 的 markdown status（planning/draft/
 #   in_progress/...）是两套独立枚举，见 document-norms §2.2。出厂值不同不是笔误：
 #   yaml 讲模块生命周期（在用），overview 讲文档成熟度（刚建的空骨架）。
-owner: {{OWNER_ROLE}}
+owner: "{{OWNER_ROLE}}"
 created_at: "{{TODAY}}"
 
 # 技术栈（数组对象，支持 monorepo / 跨技术栈；stack 取值见 reference/module-architecture.md §6.3）
@@ -33,7 +33,18 @@ api_dependencies: []
 #   api: createOrder
 
 # current-state 同步状态
+code_map_coverage: required             # required | exempt
+# ↑ exempt = 本子模块**有意不设 code-map**（纯文档档等裁量）。module-close-check 的检查 6
+#   （code-map 覆盖率对账）会跳过它并报一条 info——豁免因此永远是可见的，不是静默的。
+#   写 exempt 时把理由写进本子模块 overview；code-to-doc 看到 exempt 就不为它生成 current-state/。
+#   只接受这两个值：写错的值会报 error 而不是被当成 required——否则拼错的人以为
+#   自己声明了豁免、实际没有。
 last_synced_at: null                    # 由 code-to-doc 写入
+last_synced_ref: ""                     # 由 code-to-doc 写入：本次同步所基于的 commit
+# ↑ 与 current-state/*.md frontmatter 的 `source_ref` 是**同一个基准的两个落点**，
+#   必须同值——module-close-check 的检查 3 对账它俩（外加 overview 的「基准 commit」行）。
+#   留空表示尚未同步过，不参与对账。填 commit 短 hash（≥7 位）；分支名 / tag 是可变
+#   引用，钉不住「文档基于哪份代码」。
 sync_method: manual                     # auto | manual | dev-paste
 
 # 关联资产

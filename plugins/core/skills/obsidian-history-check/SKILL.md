@@ -1,10 +1,6 @@
 ---
 name: obsidian-history-check
-description: 用 Obsidian 官方 CLI 做文档历史与 diff 的**只读**检查。默认不执行 history:restore——恢复必须单独确认。
-when_to_use: |
-  怀疑文档被误改、想看改动前后差异时；大改之前先看近期历史时；
-  用户问「这个文档之前是什么样 / 什么时候改的 / 改了什么」时。
-  边界：要回滚框架资产（agents/rules/skills）→ rollback skill，本 skill 只看不改。
+description: '用 Obsidian 官方 CLI 做文档历史与 diff 的**只读**检查。默认不执行 history:restore——恢复必须单独确认。用于怀疑文档被误改、想看改动前后差异时，以及大改之前先看近期历史时。典型触发：「这个文档之前是什么样 / 什么时候改的 / 改了什么」。边界：要回滚框架资产（agents/rules/skills）→ rollback skill，本 skill 只看不改。'
 user-invocable: true
 allowed-tools: [Bash, Read, Grep]
 ---
@@ -32,7 +28,7 @@ allowed-tools: [Bash, Read, Grep]
 
 ## CLI Probe
 
-优先读取 `.claude/workframe-state/obsidian-cli-status.json`（schema 权威定义见 skill: `obsidian-doc-structure` §status.json schema）：
+优先读取 `.workframe/state/obsidian-cli-status.json`（schema 权威定义见 skill: `obsidian-doc-structure` §status.json schema）：
 
 - `do_not_probe: true` → **永不重新 probe**（不设 TTL、不做过期自判），直接按 `cli_available` 决定走 CLI 还是 fallback；重新启用 CLI 的唯一入口 = 用户手动删除该文件
 - 缓存缺失 → 执行**非执行检测**（全程不运行任何 obsidian 命令）：定位命令（`Get-Command obsidian` / `command -v obsidian`）→ 判定是否 GUI 启动器（所在目录存在 `Obsidian.exe` / `resources.pak` 特征文件）→ 不可用则写入 status.json（`cli_available: false`、`do_not_probe: true`、`reason`）并 fallback
@@ -95,7 +91,7 @@ git show <sha>:<file>
 
 ## Workframe Event
 
-使用后按 `agent-protocols.md` 记录 `skill_used` 事件，至少包含：
+使用后按必载片 §Step 1 — 事件流 记录 `skill_used` 事件，至少包含：
 
 ```json
 {

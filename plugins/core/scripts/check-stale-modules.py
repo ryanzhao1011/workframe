@@ -14,7 +14,8 @@ PostToolUse Hook — modules/ stale 检测 + 反向索引维护
 
 子命令：
   rebuild-index              全量重建 code-paths-index（trigger=manual）
-  scan-git-diff              SessionStart 补扫 hook 缺席期间的改动
+  scan-git-diff              SessionStart 补扫 hook 缺席期间的改动（根仓 + code_paths
+                             指到的嵌套 git 仓；tracked/staged/untracked 三类并集）
   init-submodule <basic/sub> 初始化单个子模块的索引段
   clear-stale <basic/sub>    清掉该子模块的 stale 标记（code-to-doc Step 7 调用；
                              锁内读改写，幂等，条目不存在也返回 0）
@@ -36,6 +37,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -52,10 +54,19 @@ except Exception:
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
-from _state_io import FileLock, LOCK_TIMEOUT_SEC, atomic_write  # noqa: E402,F401
+import _harness  # noqa: E402
+from _harness import project_dir as _project_dir, strip_harness  # noqa: E402
+from _state_io import (  # noqa: E402,F401
+    FileLock, LOCK_TIMEOUT_SEC, append_line, atomic_write, event_json, state_dir_of,
+)
+from _git_scan import (  # noqa: E402
+    collect_changed_files as _collect_changed_files,
+    discover_nested_repos as _discover_nested_repos,
+    flatten as _flatten_by_repo,
+)
 
-PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
-STATE_DIR = PROJECT_DIR / ".claude" / "workframe-state"
+PROJECT_DIR = _project_dir()
+STATE_DIR = state_dir_of(PROJECT_DIR)
 INDEX_FILE = STATE_DIR / "code-paths-index.json"
 STALE_FILE = STATE_DIR / "stale-modules.yaml"
 LOCK_FILE = STATE_DIR / "modules-index.lock"
@@ -74,14 +85,9 @@ def now_iso():
 
 
 def append_event(event_type, **fields):
-    """写一条事件到 events.jsonl；失败不阻塞 hook。"""
-    EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    """写一条事件到 events.jsonl；失败不阻塞 hook（加锁与 spill 见 _state_io.append_line）。"""
     event = {"ts": now_iso(), "type": event_type, **fields}
-    try:
-        with EVENTS_FILE.open("a", encoding="utf-8", newline="") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    append_line(EVENTS_FILE, event_json(event))
 
 
 def is_modules_project():
@@ -247,6 +253,11 @@ def parse_code_paths(yaml_path):
     只识别顶层 `code_paths:` 后的 `- xxx` 列表项，不支持嵌套 mapping 形式。
     支持值后的行尾注释 `# ...`，整行注释和空行会跳过。
     引号包裹的值会去引号。
+
+    **另有一个调用方不 import 本模块**：`workframe_migrate._code_paths_parser` 只把本函数的源码抽出来单独执行，
+    命名空间里只有 `re`（本模块在 import 期替换 `sys.stdout`，被 door 进程二次包装会关掉底层 buffer）。所以本函数
+    **只能依赖 `re`、名字与签名（一个带 `read_text(encoding=...)` 的路径参数）不能改**。改了之后那边的自检会在 plan 里
+    报「算不出来」，不会静默漏列，但迁移工具的模块清单就此失效。
     """
     paths = []
     in_code_paths = False
@@ -340,13 +351,17 @@ def mark_stale(submodule_path, reason):
         save_stale(stale)
 
 
-def clear_stale(submodule_path):
+def clear_stale(submodule_path, reason=None):
     """清掉一个子模块的 stale 标记，锁内读改写。返回是否真的清掉了。
 
     给 code-to-doc 用：它此前被要求「读 stale-modules.yaml、移除条目、写回（用
     fcntl/msvcrt 文件锁，参考 check-stale-modules.py）」——可 LLM 手里只有 Edit 工具，
     持不了 msvcrt 锁，那条指令按字面根本没法执行，并发安全的声明形同虚设；
     残留的 stale 还会让下次会话重复触发解析。
+
+    真的清掉时 append 一条 `stale_cleared` 事件作处置留痕（reason 可选）——
+    清除后条目即消失，「处理过才清」与「没处理直接清」在清单上长得一样，
+    事件流是唯一能区分二者的地方。条目本来就不存在时不写事件（没清除任何东西）。
     """
     with FileLock(LOCK_FILE):
         stale = load_stale()
@@ -354,7 +369,10 @@ def clear_stale(submodule_path):
         if existed:
             del stale["submodules"][submodule_path]
             save_stale(stale)
-        return existed
+    if existed:
+        extra = {"reason": reason} if reason else {}
+        append_event("stale_cleared", submodule=submodule_path, **extra)
+    return existed
 
 
 # ---------- 反向 lookup ----------
@@ -459,56 +477,152 @@ def process_postool_use(tool_input):
 
 # ---------- SessionStart 扫 git diff ----------
 
+GIT_SCAN_TIMEOUT_SEC = 10
+
+
+def _git_ok(repo_abs, args):
+    """探测性 git 命令：只关心 rc 是否为 0，失败不留痕。
+
+    探测的是**合法状态**（目录不是 git 仓 / 仓尚无 HEAD），失败不算故障；
+    每次 SessionStart 都为这类状态记事件只会刷出噪声。
+    """
+    try:
+        return (
+            subprocess.run(
+                ["git", "-C", str(repo_abs)] + args,
+                capture_output=True,
+                timeout=GIT_SCAN_TIMEOUT_SEC,
+            ).returncode
+            == 0
+        )
+    except Exception:
+        return False
+
+
+def _git_lines(repo_abs, args, repo_label):
+    """跑一条扫描用 git 命令，返回 stdout 行列表；失败（异常/超时/rc 非零）记事件返回 None。
+
+    逐命令、逐仓独立失败：多仓扫描后「一仓坏、全体停」不可接受——任何一条命令的
+    故障只损失它自己那份结果，其余仓与命令照常。
+    显式 utf-8 + replace：路径含中文/CJK 时不会因系统默认 codec（cp936）解码失败崩溃。
+
+    `-c core.quotepath=off`：只解码正确还不够。git 默认 `quotepath=true`，会把输出路径
+    里的非 ASCII **字节**转成八进制转义并给整行加引号（实测 `.../装机与初始化/...` →
+    `"projects/modules/\\350\\243\\205..."`）。这类路径喂给 `lookup_submodules` 匹配不上
+    任何 code_paths pattern，于是**中文路径的改动被静默漏标 stale**——没有报错、没有
+    事件，只是那次改动从此不存在。modules 体系明确允许中文模块名与中文路径
+    （reference/module-architecture.md §5.1「name 允许中文」），这不是边角形态。
+    **`-c` 必须放在子命令之前**：写成 `ls-files -c core.quotepath=off` 不会报错——
+    `-c` 是 `ls-files` 自己的 `--cached` 短选项，于是开关被静默吃掉、转义照旧。
+    """
+    cmd = ["git", "-C", str(repo_abs), "-c", "core.quotepath=off"] + args
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=GIT_SCAN_TIMEOUT_SEC,
+        )
+    except Exception as e:
+        append_event(
+            "modules_check_stale_error",
+            error=f"scan_git_failed: {repo_label} {' '.join(args)}: "
+            f"{type(e).__name__}: {str(e)[:120]}",
+        )
+        return None
+    if result.returncode != 0:
+        append_event(
+            "modules_check_stale_error",
+            error=f"scan_git_failed: {repo_label} {' '.join(args)}: "
+            f"rc={result.returncode}: {result.stderr.strip()[:120]}",
+        )
+        return None
+    return result.stdout.splitlines()
+
+
+def discover_nested_repos(patterns):
+    """嵌套 git 仓发现——实现在 `_git_scan`，这里只绑定本模块当前的 PROJECT_DIR。
+
+    保留本函数是因为它有第二批调用方（`module_close_check` 的检查 2/4/5/7 与单测按
+    `csm.discover_nested_repos(patterns)` 调用），签名不能变；实现移出去是因为判定类
+    脚本要吃同一份扫描面，两处手写必漂（见 `_git_scan` 抬头）。
+    """
+    return _discover_nested_repos(PROJECT_DIR, patterns)
+
 
 def scan_git_diff_for_stale():
-    """SessionStart 段调用：扫 git diff 找未通过 PostToolUse 触发的改动。
+    """SessionStart 段调用：扫 git 改动找未通过 PostToolUse 触发的改动。
 
     用例：外部工具改代码（IDE / VS Code 直接改），未走 Claude Edit/Write，PostToolUse 未触发。
+    覆盖：根仓 + code_paths 指到的嵌套 git 仓，每仓取未提交 tracked（diff HEAD）+
+    staged（diff --cached）+ 未跟踪（ls-files --others --exclude-standard）三类并集。
+    **不覆盖**跨会话已 commit 改动的基线比较——已 commit 的改动不在上述三类差异里，
+    这是有意的验收边界。
+
+    扫描面本身实现在 `_git_scan.collect_changed_files`（另一个消费方是签发档判定脚本）；
+    本函数负责索引保障、留痕策略与 stale 落盘。
     """
     if not is_modules_project():
         return
-    import subprocess
 
+    # 入口索引保障：嵌套仓发现依赖索引里的 patterns，首次会话索引未构建时 buckets 为空，
+    # 不先构建就会漏扫嵌套仓（rebuild 原本只在第一次 lookup 时才触发，晚于发现步）。
+    # 判据与 lookup_submodules 同款；锁超时留痕后按现状降级（本次可能漏发现嵌套仓，
+    # 但不能让 SessionStart hook 因此崩掉）。
     try:
-        # 取 unstaged + staged 改动并集——覆盖外部工具（IDE/Cursor/VS Code）改后未走 PostToolUse、
-        # 以及用户已 git add 但未 commit 的场景
-        # 显式 utf-8 + replace：路径含中文/CJK 时不会因系统默认 codec（cp936）解码失败崩溃
-        files = set()
-        for cmd in (
-            ["git", "-C", str(PROJECT_DIR), "diff", "--name-only", "HEAD"],
-            ["git", "-C", str(PROJECT_DIR), "diff", "--name-only", "--cached"],
-        ):
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=10,
-            )
-            for line in result.stdout.splitlines():
-                line = line.strip()
-                if line:
-                    files.add(line)
-    except Exception:
-        return
+        index = load_index()
+        if index is None or not index.get("built_at"):
+            rebuild_full_index()
+            index = load_index()
+    except TimeoutError:
+        append_event("modules_check_stale_error", error="scan_ensure_index_lock_timeout")
+        index = load_index()
+    if not isinstance(index, dict):
+        index = {"buckets": {}}
+    patterns = [pat for bucket in index.get("buckets", {}).values() for pat in bucket]
 
-    for rel in sorted(files):
+    # 扫描面（仓集合 × 三类改动 × 路径拼接）在 `_git_scan` 里，本函数只注入 git 调用与
+    # 留痕策略：坏嵌套仓照旧写 `modules_check_stale_error`，逐命令失败的事件仍由
+    # `_git_lines` 自己写，因此这里的 on_note 只接坏仓那一类，不重复记。
+    def _note(kind, label, detail):
+        if kind == "broken_nested_repo":
+            append_event(
+                "modules_check_stale_error",
+                error=f"scan_git_failed: {label} rev-parse --git-dir: "
+                "broken nested repo (probe failed), repo skipped",
+            )
+
+    by_repo, _notes = _collect_changed_files(
+        PROJECT_DIR, patterns, _git_ok, _git_lines, on_note=_note
+    )
+
+    for rel in sorted(_flatten_by_repo(by_repo)):
         try:
             hits = lookup_submodules(rel)
         except TimeoutError:
+            # 与 PostToolUse 路径对齐留痕：此前是静默 continue，stale 悄悄丢失无信号
+            append_event(
+                "modules_stale_write_skipped_lock_timeout",
+                file=rel,
+                reason="index_lookup_lock_timeout",
+            )
             continue
         for sub in hits:
             try:
                 mark_stale(sub, f"git_diff_at_session_start:{rel}")
             except TimeoutError:
-                pass
+                append_event("modules_stale_write_skipped_lock_timeout", submodule=sub, file=rel)
 
 
 # ---------- main ----------
 
 
 def main():
+    # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
+    if _harness.hook_outside_project():
+        return 0
     if not is_modules_project():
         sys.exit(0)
 
@@ -518,7 +632,11 @@ def main():
     # 永远到不了 scan-git-diff）。改为先看 argv：
     #   - 有子命令 → 走子命令；stdin 不读，忽略
     #   - 无子命令 → 默认 PostToolUse 模式：读 stdin JSON 并 process_postool_use
-    args = sys.argv[1:]
+    # `--harness <门>` 先剥掉再分派：hooks.json 给**每条**命令都带了它，而本脚本的
+    # PostToolUse 那条没有子命令——不剥的话 `args[0]` 就是 `--harness`，落进下面的
+    # 「用法错误」分支并 exit 2，按 CC 官方语义那是**阻断 PostToolUse**。
+    # 值本身由 `_harness.harness()` 直接读 sys.argv，与这里剥不剥无关。
+    args = strip_harness(sys.argv[1:])
     if args:
         cmd = args[0]
         if cmd == "rebuild-index":
@@ -526,13 +644,26 @@ def main():
             rebuild_full_index(trigger="manual")
             print("[modules] code-paths-index 已全量重建")
         elif cmd == "scan-git-diff":
-            scan_git_diff_for_stale()
+            try:
+                scan_git_diff_for_stale()
+            except Exception as e:
+                # SessionStart hook 不能因扫描故障非零退出（入口 rebuild 的锁超时已在
+                # 函数内留痕降级，这里兜的是未预期异常）——留痕后照常 exit 0
+                append_event(
+                    "modules_check_stale_error",
+                    error=f"scan_git_diff_crashed: {type(e).__name__}: {str(e)[:200]}",
+                )
             # 静默：SessionStart hook stdout 会注入上下文，无操作时不污染
         elif cmd == "init-submodule" and len(args) >= 2:
             init_index_for_submodule(args[1])
             print(f"[modules] {args[1]} 索引段已初始化")
         elif cmd == "clear-stale" and len(args) >= 2:
-            if clear_stale(args[1]):
+            # 可选 --reason "<一句话>"：处置理由随 stale_cleared 事件留痕
+            reason = None
+            if "--reason" in args[2:]:
+                ri = args.index("--reason")
+                reason = args[ri + 1] if ri + 1 < len(args) else None
+            if clear_stale(args[1], reason=reason):
                 print(f"[modules] {args[1]} 的 stale 标记已清除")
             else:
                 print(f"[modules] {args[1]} 本来就没有 stale 标记，无需清理")
@@ -540,7 +671,7 @@ def main():
             print(
                 f"用法：{Path(sys.argv[0]).name} "
                 f"[rebuild-index | scan-git-diff | init-submodule <basic/sub> "
-                f"| clear-stale <basic/sub>]",
+                f"| clear-stale <basic/sub> [--reason <一句话>]]",
                 file=sys.stderr,
             )
             # hook 只走 scan-git-diff 与默认 stdin 两条路径，到不了这里；

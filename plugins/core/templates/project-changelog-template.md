@@ -16,7 +16,7 @@
 - verified: null（待下次自迭代闭环验证）
 
 ## 2026-04-29 rollback 回滚 MEMORY 条目 shared:2026-04-25:用户偏好...
-- target: .claude/agent-memory/shared/MEMORY.md
+- target: .workframe/agent-memory/shared/MEMORY.md
 - source: logs/librarian-snapshots/2026-04-29/12-00-00-shared-memory.md
 - entry_keys_restored:
   - shared:2026-04-25:用户偏好...

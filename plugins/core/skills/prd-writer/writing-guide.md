@@ -2,7 +2,8 @@
 
 > 本文件由 SKILL.md S3（填充）执行前读取，承载 core 层的**通用写作纪律**——与产品形态、
 > 个人方法论无关的沉淀，core 持续迭代维护。**章节结构、各章写法、范式表、标注习惯不在
-> 本文件**——那些属于项目层，见项目 `.claude/skills/prd-style/SKILL.md`（PRD 框架）。
+> 本文件**——那些属于项目层，见项目 PRD 框架 `.agents/skills/prd-style/SKILL.md` 或
+> `.claude/skills/prd-style/SKILL.md`（两个候选按存在性解析，规则见 SKILL.md）。
 >
 > 分工与冲突：本文件的纪律默认适用于所有项目；与项目 PRD 框架冲突时**以项目为准**。
 > 唯一例外是机器契约（frontmatter / 落盘路径 / 资产包结构 / AC 编号 / 变更留痕存在性，

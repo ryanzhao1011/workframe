@@ -1,6 +1,6 @@
 # Onboarding（可选配置引导）
 
-> Workframe 提供一个**可选**的配置引导命令 `/core:onboard`，用来呈现一些 Claude Code 实验功能的开关。**workframe 本身不依赖任何此类配置**——什么都不开，所有 agents / skills / rules / hooks 仍正常工作。
+> Workframe 提供一个**可选**的配置引导命令 `/core:onboard`，用来呈现一些 Claude Code 实验功能的开关。**workframe 本身不依赖任何此类配置**——什么都不开，所有 agents / skills / hooks 与必载纪律注入仍正常工作。
 
 ## TL;DR
 
@@ -42,7 +42,7 @@
 4. 选项 1 写入前会检查 `.gitignore` 是否覆盖 `.claude/settings.local.json`，未覆盖会询问是否补
 5. 写入前自动备份目标文件为 `<file>.bak.<unix-ts>`
 6. 写入采用 JSON merge，**保留所有原有字段**
-7. 写入完成后写 `.claude/workframe-state/onboarded.json`，SessionStart 提示静默
+7. 写入完成后写 `.workframe/state/onboarded.json`，SessionStart 提示静默
 8. 提示重启 Claude Code 会话使 env 配置生效
 
 写入失败（权限不足 / JSON 解析错误等）会输出手动补丁让你自己加，**不会留下半成品**。
@@ -112,7 +112,7 @@ $j | ConvertTo-Json -Depth 20 | Set-Content $f -Encoding UTF8
 
 ### 重新触发 onboard 引导
 
-删除 `.claude/workframe-state/onboarded.json`，下次 SessionStart 会重新提示。或直接跑 `/core:onboard`，它会询问是否重走全流程。
+删除 `.workframe/state/onboarded.json`，下次 SessionStart 会重新提示。或直接跑 `/core:onboard`，它会询问是否重走全流程。
 
 ## 与其他 workframe 命令的关系
 
@@ -127,11 +127,11 @@ $j | ConvertTo-Json -Depth 20 | Set-Content $f -Encoding UTF8
 | 现象 | 处理 |
 |---|---|
 | SessionStart 一直打印 onboarding 提示 | 跑一次 `/core:onboard`（即使全部选 skip 也会写 `onboarded.json` 终止提示） |
-| `/core:onboard` 找不到 `recommended-env.json` | plugin 安装可能不完整，重新执行 `claude plugin install core@workframe` 后重启会话 |
+| `/core:onboard` 找不到 `recommended-env.json` | plugin 安装可能不完整，**在项目目录里**重新执行 `claude plugin install core@workframe -s project`（`-s project` 按当前目录解析；不带它会装到用户作用域）后重启会话 |
 | 写入 settings 后没生效 | 重启 Claude Code 会话；或检查 settings.json 是否被多个层级（项目 / 用户 / settings.local）相互覆盖 |
-| 想看 onboard 当时做了什么决策 | Read `.claude/workframe-state/onboarded.json` 查看 `items[].status` |
+| 想看 onboard 当时做了什么决策 | Read `.workframe/state/onboarded.json` 查看 `items[].status` |
 
 ## 相关文档
 
-- 受保护资产例外：[`plugins/core/rules/core/auto-update.md`](../plugins/core/rules/core/auto-update.md) §"受保护资产例外"
+- 受保护资产例外：[`plugins/core/context/both/40-protected-assets.md`](../plugins/core/context/both/40-protected-assets.md) §"受保护资产例外"
 - onboard skill 完整规范：[`plugins/core/skills/onboard/SKILL.md`](../plugins/core/skills/onboard/SKILL.md)

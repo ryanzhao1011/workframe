@@ -35,7 +35,12 @@ except Exception:
 
 # 状态文件的锁 / 原子写 / 损坏隔离只有一份实现（见 _state_io.py 抬头）。
 # 这个不做 None fallback——没有它就没有可用的退路，而它与本脚本同包分发。
-from _state_io import load_activity, save_activity as _save_activity  # noqa: E402
+import _harness  # noqa: E402
+from _harness import project_dir as _project_dir  # noqa: E402
+from _state_io import (  # noqa: E402
+    append_line, event_json, load_activity, save_activity as _save_activity,
+    state_dir_of,
+)
 
 try:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -49,8 +54,8 @@ except Exception:
 SESSION_END_REASONS = ("clear", "resume", "logout", "prompt_input_exit",
                        "bypass_permissions_disabled", "other")
 
-PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
-STATE_DIR = PROJECT_DIR / ".claude" / "workframe-state"
+PROJECT_DIR = _project_dir()
+STATE_DIR = state_dir_of(PROJECT_DIR)
 DIGEST_FILE = STATE_DIR / "session-digest-latest.md"
 ROLLBACK_INDEX = STATE_DIR / "rollback-index.json"
 ACTIVITY_FILE = STATE_DIR / "activity-state.json"
@@ -70,15 +75,13 @@ def save_state(state):
 
 
 def append_event(ev_type, **extra):
-    if not EVENTS_FILE.parent.exists():
-        EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    """加锁与 spill 见 _state_io.append_line。"""
     ev = {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "type": ev_type,
         **extra,
     }
-    with EVENTS_FILE.open("a", encoding="utf-8", newline="") as f:
-        f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+    append_line(EVENTS_FILE, event_json(ev))
 
 
 def write_digest_skeleton(reason):
@@ -268,12 +271,16 @@ def _stage(name, fn, *args, **kwargs):
 
 
 def main():
+    # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
+    if _harness.hook_outside_project():
+        return 0
     # 官方 SessionEnd stdin JSON 的字段名是 `reason`（核实于 code.claude.com/docs/en/hooks.md，
     # 取值：clear / resume / logout / prompt_input_exit / bypass_permissions_disabled / other）
     # v0.2.0 误用 exit_reason 导致永远拿到 unknown，v0.2.1 修正。
     # 回退值必须落在 schema 枚举内：`unknown` 是自造值，按枚举精确匹配的消费方会漏掉它。
     # 官方枚举里 `other` 正是为「说不上是哪种」准备的兜底档。
     reason = "other"
+    payload = {}
     try:
         # Windows 下 sys.stdin 默认走 locale codec；强制 utf-8 解码跨平台一致
         raw = ""
@@ -281,6 +288,7 @@ def main():
             raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
         if raw:
             data = json.loads(raw)
+            payload = data if isinstance(data, dict) else {}
             # **白名单校验**，不是只兜缺失：schema 的 reason 是固定枚举，而这里收的是
             # 外部输入。CC 将来新增退出原因、或 stdin 传了意外值时，原样写入就会造出
             # 枚举外的事件，严格按枚举匹配的消费方全部漏掉（实测 {"reason":"bogus"}
@@ -339,6 +347,17 @@ def main():
         _stage("last_digest_at", _touch_digest_at)
     else:
         print("[warn] digest 未写成，last_digest_at 保持原值", file=sys.stderr)
+
+    # Codex 门：删掉本会话自己的标记文件（session-start-prep 写的那份，只删自己这一个）。
+    # 它是 `workframe-event` 第三级兜底的来源；会话结束后留着，下一个会话就有两个候选、
+    # 兜底按「分不清」省略 session_id。文件名只含本会话号，删错别的会话不可能。
+    if _harness.harness() == _harness.CODEX:
+        sid = _harness.session_id(payload)
+        if sid:
+            try:
+                (STATE_DIR / f"current-session-{_harness.CODEX}-{sid}.json").unlink()
+            except OSError:
+                pass
 
     sys.exit(0)
 

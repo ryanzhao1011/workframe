@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "core",
   "displayName": "Workframe Core",
-  "version": "1.0.0",
-  "description": "Workframe core plugin: 4 baseline agents (PM / Dev / QA / Prompt-Eng), 36 skills (13 domain + 8 system/maintenance + 8 docs/publishing + 7 modules-system), an 11-stage hook pipeline, 4 auto-loaded rules, and the modules/ documentation system that keeps requirements and code in sync.",
+  "version": "1.1.0",
+  "description": "Workframe 核心插件：4 个 baseline 角色（PM / Dev / QA / Prompt-Eng）、37 个 skills（13 domain + 9 system/maintenance + 8 docs/publishing + 7 modules-system）、11 段 hook 链路、按主会话与子 agent 切分的必载纪律注入片，以及让需求与代码保持同步的 modules/ 文档体系。",
   "author": {
     "name": "Zhao Jiahao"
   },

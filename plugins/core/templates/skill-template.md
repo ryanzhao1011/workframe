@@ -1,8 +1,9 @@
 ---
-name: {{SKILL_NAME}}
-description: {{SKILL_DESCRIPTION}}
-when_to_use: |
-  {{SKILL_WHEN_TO_USE_FRONTMATTER}}
+name: "{{SKILL_NAME}}"
+# description 一次装下四类：①是什么 ②触发场景 ③典型触发词 ④不用于·边界。
+# 单行、单引号包裹（触发词里的半角双引号可直接写）；≤1024 字符。
+# ④ 最易被当冗余删掉，删了 skill 之间会互相抢路由。详见 reference/skill-customization-guide.md
+description: '{{SKILL_DESCRIPTION}}'
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 ---
