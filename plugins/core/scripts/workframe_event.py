@@ -4,6 +4,7 @@
 **承接哪几类**：`skill_used` / `user_correction` / `task_blocked`——事件注册表里
 `protocol_expected` 的那三个，由模型照注入片的收尾协议 / 纠正处理追加；外加
 `discipline_spotcheck`（`model_mediated`），只在用户显式 `/core:audit --record` 时由模型追加。
+`memory_moved_out`（`model_mediated`）承接条目迁出记忆体系的留痕，保留来源 scope 与原 key。
 手拼 JSON 有四个已实证的翻车点，本模块一次做掉（第 3、4 条只对应用到的那一类）：
 
   1. **ts 口径**：必须 UTC + 秒级。手写实测出过 `+08:00` 与微秒两种变体，而消费方按
@@ -26,13 +27,15 @@
     那是 agent-protocols / correction-detection 的判据，模型仍要自己过一遍。
   - `--session-id` 不给时按三级兜底取：显式参数 > `_harness.session_id()` > 会话标记文件。
     **中间那一级在 CC 门下可用**（`CLAUDE_CODE_SESSION_ID`），所以 CC 侧的 `skill_used`
-    带得上 session_id；**Codex 门下那个变量不存在**，落到第三级——会话标记文件由
+    带得上 session_id；**Codex 不提供自己的这个变量**（嵌套在 CC 里起 Codex 时能看到继承来的父 CC 值，
+    那个值不采信，见 `_harness.session_id()`），落到第三级——会话标记文件由
     `session-start-prep.py --harness codex` 写、`session-end-flush.py` 删（实测：不带
     `--session-id` 跑本命令，落行的 `session_id` 等于标记里的线程号）。**恰好一个标记才采信**：
     同一项目下有两个候选（上一个会话没跑到 SessionEnd、标记还没被 7 天清理）时省略
     `session_id`，消费方回退到按 ts 分桶、per-session cap 对那些行失效。
   - 本模块不写 memory-index sidecar，也不动 MEMORY.md：它只管事件流那一半。纠正类条目的
-    sidecar 与 MEMORY 写入仍按 correction-detection 第 3、4 步由模型完成。
+    sidecar 与 MEMORY 写入仍按 correction-detection 第 3、4 步由模型完成；scope=module
+    的纠正只记录模块、完整目标路径与事实快照，不生成 entry_key、不写 sidecar。
 """
 
 import argparse
@@ -55,6 +58,7 @@ EVENT_TYPES = {
     "user-correction": "user_correction",
     "task-blocked": "task_blocked",
     "discipline-spotcheck": "discipline_spotcheck",
+    "memory-moved-out": "memory_moved_out",
 }
 
 # `discipline-spotcheck` 收的判据 id。**判据表在 `skills/audit/SKILL.md`「纪律抽查」一节，本常量是它
@@ -147,8 +151,8 @@ def build_event(args):
     elif args.event_type == "user_correction":
         ev["scope"] = args.scope
         # scope=main 是主 Claude 层纠正、落 auto-memory：无 sidecar ⇒ 省略 entry_key，
-        # 且 correction-detection 明写该情形一并省略 role。这两条不是风格选择。
-        if args.scope != "main":
+        # 且 correction-detection 明写该情形一并省略 role；scope=module 同样无 sidecar。
+        if args.scope not in ("main", "module"):
             if args.role:
                 ev["role"] = args.role
             key = args.entry_key
@@ -156,8 +160,14 @@ def build_event(args):
                 key = f"{args.scope}:{_today()}:{normalize_key_fragment(args.summary)}"
             if key:
                 ev["entry_key"] = key
+        if args.scope == "module":
+            ev["module"] = args.module
+            ev["target_path"] = args.target_path
         ev["summary"] = (args.summary or "")[:80]
         ev["source"] = args.source
+    elif args.event_type == "memory_moved_out":
+        ev.update(scope=args.scope, entry_key=args.entry_key, archive_path=args.archive_path,
+                  target_path=args.target_path, summary=args.summary)
     elif args.event_type == "task_blocked":
         ev["task_id"] = args.task_id
         ev["role"] = args.role
@@ -179,6 +189,20 @@ def _bool(value):
     if s in ("false", "0", "no", "n"):
         return False
     raise argparse.ArgumentTypeError(f"要 true / false，收到 {value!r}")
+
+
+def _nonempty(value):
+    if not value.strip():
+        raise argparse.ArgumentTypeError("值不能为空")
+    return value
+
+
+def _scope(value):
+    """scope 是实际域名；拒绝占位符，不把自定义角色收窄成出厂名录。"""
+    _nonempty(value)
+    if value in ("role", "<role>"):
+        raise argparse.ArgumentTypeError("scope 要填实际角色名，不能填 role / <role> 占位符")
+    return value
 
 
 def _door_counts(value):
@@ -220,7 +244,7 @@ def _add_common(sub):
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="workframe-event",
-        description="把模型手写的三类事件按统一口径写进 events.jsonl",
+        description="把模型手写事件按统一口径写进 events.jsonl",
     )
     subs = ap.add_subparsers(dest="cmd", required=True)
 
@@ -232,12 +256,16 @@ def build_parser():
 
     p2 = _add_common(subs.add_parser("user-correction",
                                      help="correction-detection 的 user_correction"))
-    p2.add_argument("--scope", required=True, help="shared | <role> | main")
-    p2.add_argument("--role", default=None, help="scope != shared 时的角色名；scope=main 时省略")
+    p2.add_argument("--scope", required=True, type=_scope, help="shared | 实际角色名 | main | module")
+    p2.add_argument("--role", default=None, help="角色域的角色名；scope=main/module 时省略")
     p2.add_argument("--summary", default=None, help="正确信息摘要（入库截前 80 字）")
     p2.add_argument("--entry-key", dest="entry_key", default=None,
-                    help="sidecar key；不给则由 scope + 日期 + summary 前 20 字现算")
+                    help="角色/shared 的 sidecar key；不给则由 scope + 日期 + summary 前 20 字现算；main/module 省略")
     p2.add_argument("--source", default="[纠正]")
+    p2.add_argument("--module", type=_nonempty, default=None,
+                    help="scope=module 必填：模块标识 basic 或 basic/sub")
+    p2.add_argument("--target-path", dest="target_path", type=_nonempty, default=None,
+                    help="scope=module 必填：目标文档或模块记忆的完整路径（不截断）")
 
     p3 = _add_common(subs.add_parser("task-blocked", help="任务转 blocked 的 task_blocked"))
     p3.add_argument("--task-id", dest="task_id", required=True)
@@ -252,6 +280,16 @@ def build_parser():
     p4.add_argument("--criterion", action="append", type=_criterion, required=True,
                     help="每条判据一次：<id>=<适用次数>/<违规次数>，如 S1=4/1")
     p4.add_argument("--role", default="main", help="执行抽查的一方；/core:audit 在主会话跑，填 main")
+
+    p5 = _add_common(subs.add_parser("memory-moved-out", help="条目迁出记忆体系的可恢复留痕"))
+    p5.add_argument("--scope", required=True, type=_scope, help="来源域：shared | 实际角色名")
+    p5.add_argument("--entry-key", dest="entry_key", required=True, type=_nonempty,
+                    help="来源 sidecar 的原 key，原样保留、不重新归一")
+    p5.add_argument("--archive-path", dest="archive_path", required=True, type=_nonempty,
+                    help="原文归档位置")
+    p5.add_argument("--target-path", dest="target_path", required=True, type=_nonempty,
+                    help="目标文档或模块记忆的完整路径（不截断）")
+    p5.add_argument("--summary", required=True, type=_nonempty, help="迁出事实的完整快照（不截断）")
     return ap
 
 
@@ -270,6 +308,13 @@ def main(argv=None):
     ap = build_parser()
     args = ap.parse_args(argv)
     args.event_type = EVENT_TYPES[args.cmd]
+    if args.event_type == "user_correction" and args.scope == "module":
+        for flag, value in (("--module", args.module), ("--target-path", args.target_path)):
+            if not value:
+                ap.error(f"scope=module 时必填 {flag}，模块纠正不生成 sidecar key")
+    if args.event_type == "memory_moved_out":
+        if args.scope in ("main", "module") or args.entry_key.split(":", 1)[0] != args.scope:
+            ap.error("--entry-key 必须是 --scope 指定来源记忆域的原 key（shared 或实际角色名）")
     if args.event_type == "discipline_spotcheck":
         ids = [cid for cid, _, _ in args.criterion]
         dup = sorted({cid for cid in ids if ids.count(cid) > 1})

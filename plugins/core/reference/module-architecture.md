@@ -234,7 +234,7 @@ related_issues: []                      # issues 文件名（不含 .yaml）
 
 **别用第二条去豁免第一条**：`{{OWNER_ROLE}}`（枚举）与 `{{NOW_ISO}}`（时间戳）确实没有类型推断风险，但它们同样是占位符，同样让整份文件解析不了——曾按「framework-hardcoded 无类型推断风险」豁免这两个，代价是框架自带的 16 份模板 `safe_load` 全部失败。
 
-不含占位符的**字面**硬编码值（`status: active` / `owner: pm` / `sync_method: manual`）两条都不沾，可保持不加引号。`tools/validate.py` 有 `check_modules_template_placeholders_quoted` 防回潮检查。
+不含占位符的**字面**硬编码值（`status: active` / `owner: pm` / `sync_method: manual`）两条都不沾，可保持不加引号。框架仓的 `validate.py` 有 `check_modules_template_placeholders_quoted` 防回潮检查。
 
 ### 5.2 需求资产包 `meta.yaml` 字段命名差异
 
@@ -422,7 +422,7 @@ PostToolUse 可能并发触发（多文件批量 Edit / 并发 subagent），需
 
 ## 9. PostToolUse 触发条件
 
-PostToolUse hook 段（11 段链路之一）触发条件：
+PostToolUse hook 段（完整挂载见 hooks 清单）触发条件：
 
 ```
 触发 = (Edit/Write/NotebookEdit 命中代码路径) ∪ (同上命中 **/submodule.yaml)
@@ -442,7 +442,7 @@ PostToolUse hook 段（11 段链路之一）触发条件：
   python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" init-submodule <basic>/<sub>
   ```
 
-实现：`plugins/core/scripts/check-stale-modules.py`。
+实现：插件的 `scripts/check-stale-modules.py`。
 
 ## 10. issues / tasks 字段叠加策略
 

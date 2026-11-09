@@ -163,8 +163,8 @@ variables:
 
 - **prompt-evaluation**：设计完成后必须评估
 - **@qa test-case-design**：基于风险评估设计对抗性测试
-- **board.yaml**：Prompt 变更任务需经 pending_qa。签发档由四段闸门判定（必载片 §谁签发这次收口）——Prompt 变更的默认起点同样是 @qa 完整验证，**自签档默认开启**（`signoff.self_signoff_enabled` 缺键即 true），降档要有覆盖本轮 delta 的通行证
-- **注意 Prompt 变更的爆炸半径容易被判低**：改一句提示词看着像档 1，但**如果这句话是在告诉模型「什么算通过」**，它就是判据本身、落档 4，地板卡在完整验证。判据见 skill `test-case-design` 的 `reference/test-scoping.md` §档 4
+- **board.yaml**：Prompt 变更任务需经 pending_qa。要不要独立验证按必载片 §谁签发这次收口 的两类签发判（自理默认开启：`signoff.self_signoff_enabled` 缺键即 true）
+- **注意 Prompt 变更容易被判成自理**：改一句提示词看着无关紧要，但**如果这句话是在告诉模型「什么算通过」**，它就是判据本身——命中「需要独立验证」第 1 条，测试深度也落 skill `test-case-design` 的 `reference/test-scoping.md` §档 4
 
 ## 反模式
 

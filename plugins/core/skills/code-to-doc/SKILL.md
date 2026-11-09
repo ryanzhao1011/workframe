@@ -130,7 +130,7 @@ status: in_progress                      # 固定值,照抄
 owner_role: dev                          # 固定值,照抄
 updated: <NOW_ISO>                       # 产出时间
 module: <basic>/<sub>                    # PM 补(模块归属;跨仓研发不一定知道)
-description: <一句话摘要>                 # ★ 必填：本文件讲什么（如"话术管理子模块的 API 面：xx 个接口按 xx 分组"），口径见 document-norms §2.1
+description: <一句话摘要>                 # ★ 必填：本文件讲什么（如"订单管理子模块的 API 面：xx 个接口按 xx 分组"），口径见 document-norms §2.1
 generator: code-to-doc-skill             # 本仓自跑填 code-to-doc-skill;跨仓研发反解填 dev-paste
 source_repo: ""                          # 跨仓填(可脱敏标识如"内部仓/项目名";内部 URL 可能敏感),本仓留空;三态见下
 source_ref: <commit-or-branch-or-tag>    # ★必填,反解基于哪个版本(可复现关键);跨仓研发必给

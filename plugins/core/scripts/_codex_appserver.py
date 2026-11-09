@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Codex app-server 的最小客户端：起进程、`initialize`、发请求收响应、杀进程树。
 
-为什么单独成模块：装机器（`workframe-door`）、种信任 hook（`codex-trust-seed.py`）与
+为什么单独成模块：装机器（`workframe-door`）、只读信任诊断与
 探针都要问 Codex 同几个问题（`hooks/list` / `config/batchWrite` / `config/read`），
 各写一份 JSON-RPC 收发就会各踩一遍同一批坑：
   - 顶层键是 `data` 不是 `hooks`，读错键会把「有 N 条」读成「0 条」；
@@ -20,7 +20,7 @@
     exe 的路径形态是本机读数，别的安装方式（brew / 官方安装器）走 `WF_CODEX_EXE` 或 PATH。
   - 不处理服务端发起的请求（审批类），本模块的调用方都是不起 turn 的只读 / 配置写路径；
     `thread/start` + `turn/start` 可以发，但审批请求会被忽略（探针用途）。
-  - 不判断该不该写用户配置——那是调用方（装机器 / 种信任 hook）的事。
+  - 不判断该不该写用户配置——那是调用方（装机器等显式写入入口）的事。
 
 被 CLI 脚本与 hook 以同目录 import 方式使用，因此：
   - 模块 import 必须无副作用（不碰 stdout、不读环境、不建目录）

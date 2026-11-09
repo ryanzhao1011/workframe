@@ -171,7 +171,7 @@ def _role_memory_placeholder(role: str) -> str:
     return (
         f"# {role} MEMORY\n"
         f"\n"
-        f"> 高置信关键事实区（先过归属分流：业务知识落 modules/ 文档、此处至多留指针，见 agent-protocols Step 2；再满足 D/U/R/A 准入），由 librarian 从 notes.md 提升。\n"
+        f"> 高置信关键事实区（先过归属分流：业务知识落 modules/ 权威文档，模块作业提醒落对应 module-memory.md，此处只收跨模块执行经验，见必载片 Step 2；再满足 D/U/R/A 准入），由 librarian 从 notes.md 提升。\n"
         f"> 总量 ≤ 8000 字符；超出由 librarian 生成容量候选，经用户确认后降级为 notes。\n"
         f"> [纠正] 标记的条目永不清理。\n"
     )

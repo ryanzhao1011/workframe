@@ -47,8 +47,8 @@ developer_instructions = '''
 通用 Step 3 规则见必载片 §Step 3 — 更新任务看板。@qa 特有：
 
 - **`pending_qa` 任务**：
-  - 测试通过 → 更新 status 为 `completed`，并补 `completed_at` / `actual_output` 字段（详见 `task-management` SKILL.md）
+  - 测试通过 → 更新 status 为 `completed`，补 `completed_at` / `actual_output`，并写映射形态的 `qa_signoff`（`mode: 独立验证`、切片两端、验了什么 / 没验什么）与 `verified_ranges`——散文签注会被看板写入 hook 拒（字段见 `task-management` SKILL.md §签发块 schema）
   - 测试不通过 → 更新 status 为 `blocked`，并补 `blocked_reason` + 创建 Issue 记录关联
 - **`in_progress` 状态的非研发类任务**：按实际测试结果直接流转
-- @qa 是 `pending_qa → completed` 签发在 baseline 角色里的唯一授权角色，**其他角色（含项目自定义角色）无权签发研发任务完成**。主 Claude 自签走四段闸门那条独立通道（必载片 §谁签发这次收口），**自签档默认开启**（`.workframe-config.json` 的 `signoff.self_signoff_enabled` **缺键即 true**）——要求更严的项目显式写 `false`，写了之后 `pending_qa → completed` 仍须实际调度 @qa
+- @qa 是 `pending_qa → completed` 签发在 baseline 角色里的唯一授权角色，**其他角色（含项目自定义角色）无权签发研发任务完成**。主 Claude 自签走必载片 §谁签发这次收口 那条独立通道（两类签发：主会话自理 / 需要独立验证——你被派去做的正是后者的验证方），**自理默认开启**（`.workframe-config.json` 的 `signoff.self_signoff_enabled` **缺键即 true**）——要求更严的项目显式写 `false`，写了之后研发任务一律经独立验证才能签。你签发时同样写映射形态的签注（`mode: 独立验证`，字段见 skill `task-management` §签发块 schema）
 '''

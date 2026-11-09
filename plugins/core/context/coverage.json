@@ -97,6 +97,26 @@
       "section": "auto-update.md#需求变更（含范围 / 优先级 / 上线时间调整）",
       "lands_in": "skills/task-management/",
       "note": "这一段被拆成两半：判据半（什么算需求变更、P0、只出草稿不直接写）在 `main/20` 的触发类别表内；**board 必填字段口径**（`module` 二段式、`req_slug` + `sub_req_slug` 同进同出）下沉到 `task-management` skill 的 schema。此前只登记了前半，与台账里那条已登记为「拆成两半」的纠正段同形——**段声明了落点，落点只承接了它的一部分，剩下那部分的去向无人记录**。"
+    },
+    {
+      "section": "agent-protocols.md#同消息内 rule 处理顺序",
+      "lands_in": "skills/signal-intake/",
+      "note": "这一段被拆成两半：判据半（消息事实处理与本轮收尾分两层记、同一事实只记一次按更早那层、skill 已记的事件收尾不补）留在 main/10 §一条消息触发多条纪律时的处理顺序——普通任务收尾也要用，不能按需；逐步位序表下沉到 skill §9"
+    },
+    {
+      "section": "correction-detection.md#执行位序",
+      "lands_in": "skills/signal-intake/",
+      "note": "与上一条同一次拆分：判据半在 main/10，位序表在 skill §9"
+    },
+    {
+      "section": "auto-update.md#受保护资产约束",
+      "lands_in": "skills/onboard/",
+      "note": "这一段被拆成两半：清单本体与「settings 只有 onboard 与装机链路两个豁免写入入口」这条硬约束留在 both/40；两个入口各自的前提、授权形态（经 launcher 有确认页 / 直接敲命令没有）与写入面下沉到 skill §受保护资产例外——只有走这两个入口的执行者用得到"
+    },
+    {
+      "section": "closeout-discipline.md#谁签发这次收口：四段闸门",
+      "lands_in": "skills/task-management/",
+      "note": "这一段被拆成两半：判据半（要不要独立验证、否决项、「没验什么」恒真自查、把关 hook 不判什么）留在 both/10 §谁签发这次收口；签注字段与把关 hook 的检查项在 skill §签发块 schema——签发要动看板，动看板前必调该 skill"
     }
   ],
   "retired": [

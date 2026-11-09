@@ -20,7 +20,10 @@
        (2) `CC − Codex ⊆ G`，G = 注册表 `codex: none` 减去两门都 none 的（现算），多出任一即红；
        (3) 本脚本自声明的确定性事件集 S ⊆ 两门各自的产出集。S 只放固定脚本**必然**产出的：SessionEnd
            链上的 `session_ended` / `summary_recomputed` / `skill_metrics_recomputed`（三者在看板缺失、
-           重算失败时仍以 skipped / error 状态写同类型的行）。`skill_used` 是模型半、不进 S：零 `skill_used`
+           重算失败时仍以 skipped / error 状态写同类型的行）。**能力边界**：「必然」只在 SessionEnd 链跑完时成立——
+           Codex 门下 `codex exec` 退出时 SessionEnd 偶发没跑完（实测 5 次里 1 次 `session-end-flush` 起了却零事件、
+           会话标记残留，根因未查）。(3) 在 Codex 侧报缺 S 里的类型时，先看本轮是否残留了 `current-session-codex-*.json`
+           标记：残留即是这一态，重跑一次会话再判，别当成对等回归；比较规则不因此放宽。`skill_used` 是模型半、不进 S：零 `skill_used`
            可能是模型没调，也可能是投递没到（注册表 `__delivery_established__.codex` 仍 false）——先怀疑投递。
 
 用法：
@@ -464,8 +467,15 @@ RECIPE = """两门固定脚本（带凭据；本节未在零凭据下实测，�
   (b) 用一个**全新的 fixture 项目**（两门装完、零会话），每门**恰跑一次**会话。
 每门各跑一次会话，提示词相同（一段就够）：
   「1) 派一个 dev 子 agent 回答 1+1；2) 调用 core:task-management 读一遍看板并按收尾协议写 skill_used 事件；
-    3) 我纠正你一次：时间戳一律现取——请按纠正流程写一条 user_correction 事件；4) 结束会话。」
-  Claude Code：  cd <P> && claude -p --plugin-dir <本仓>/plugins/core "<提示词>"
+    3) 我纠正你一次：时间戳一律现取——请用 workframe-event 写一条 user_correction 事件，**只写这条事件、
+    不改任何记忆文件**；4) 结束会话。」
+  第 3 步为什么不许改记忆：② 采集时按记忆文件**此刻**的内容现算 memory_sha256，而子 agent 收到记忆在第 1 步；
+    第 3 步改了 shared/MEMORY.md，到达面就与采集值对不上（两门各改一次，两份采集也互相对不上）。
+  Claude Code：  cd <P> && echo "<提示词>" | claude -p --allowedTools "Agent Skill Bash Read"
+                 提示词经 stdin 喂：`--allowedTools` 是变长参数，写在它后面的位置参数（提示词）会被当成工具名吞掉。
+                 <P> 已订阅 core（前提里的「已装两门」）时**别再加 `--plugin-dir`**：两者并用会同时加载两份 core
+                 （订阅那份 ＋ 目录那份），注入与事件按两份算，这一形态的行为未实测；要测框架开发版，让 <P> 的订阅
+                 指向本仓的工作树（目录源）。
   Codex：        cd <P> && codex exec "<提示词>"
 跑完各采集一份（`--since` 两门用同一个 T0；走 (b) 时可省，JSON 里会记「全历史」）：
   python tools/twin_parity_probe.py --collect --door cc    --project <P> --since T0 --out cc.json
@@ -476,6 +486,8 @@ RECIPE = """两门固定脚本（带凭据；本节未在零凭据下实测，�
          以「[workframe] 角色记忆注入」起头的那段，sha256 与 cc.json 的 memory_sha256 比
   Codex：<CODEX_HOME>/sessions/<日期>/rollout-*.jsonl，子线程里 content_item_kinds 含
          hooks.additional_context 的项，取其正文同法比
+③(3) 在 Codex 侧报缺 SessionEnd 那三类时：先看运行态目录里本轮的 current-session-codex-*.json 是否残留——
+  残留即是「codex exec 退出时 SessionEnd 没跑完」这一已知态（见文件头 ③(3) 的能力边界），重跑一次 Codex 会话再判。
 失败方式打一遍：往 plugins/core/context/sub/ 加一个只让一门读到的文件（例如只在一门的插件根副本里加），
   重跑两门 → ①[sub] 必 FAIL。
 """

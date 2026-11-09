@@ -1,5 +1,5 @@
 {
-  "__doc__": "Codex hook 清单的冻结基线（人维护）。每条的 hash 覆盖面字段与 hooks.codex.json 逐字段相等、key 序为其前缀（只许末尾追加），由 validate 的 check_codex_hook_lines_frozen 钉住。有意改动：跑 gen_codex_hooks.py --accept-manifest 重新接受，并在对外 CHANGELOG 未发布段写「升级后需重批 N 条」。frozen: true 的条目是种信任 hook 本身，其命令行任何变化都要单独审。",
+  "__doc__": "Codex hook 配置审查基线，由维护者显式接受。fields 是跨平台配置审查字段的并集；entries 与 hooks.codex.json 按字段及 key 顺序对账。本基线不覆盖插件内容 hash，不代表用户侧信任，也不预测需恢复信任的条数。有意改动须运行 gen_codex_hooks.py --accept-manifest。用户升级运行 workframe-door --upgrade，成功后重开会话。对外升级说明在发版时统一编写。",
   "fields": [
     "matcher",
     "type",
@@ -72,17 +72,28 @@
       "async": null
     },
     {
-      "key": "hooks/hooks.codex.json:session_start:0:5",
+      "key": "hooks/hooks.codex.json:session_start:1:0",
       "event": "SessionStart",
-      "matcher": "",
+      "matcher": "compact",
       "type": "command",
-      "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/codex-trust-seed.py\" --harness codex",
-      "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/codex-trust-seed.py\" --harness codex",
+      "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/role-memory-restore.py\" --harness codex --output hook-json",
+      "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/role-memory-restore.py\" --harness codex --output hook-json",
       "timeout": null,
       "statusMessage": null,
       "additionalContextLimit": 0,
-      "async": null,
-      "frozen": true
+      "async": null
+    },
+    {
+      "key": "hooks/hooks.codex.json:post_compact:0:0",
+      "event": "PostCompact",
+      "matcher": "",
+      "type": "command",
+      "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/module-memory-inject.py\" --harness codex",
+      "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/module-memory-inject.py\" --harness codex",
+      "timeout": null,
+      "statusMessage": null,
+      "additionalContextLimit": null,
+      "async": null
     },
     {
       "key": "hooks/hooks.codex.json:user_prompt_submit:0:0",
@@ -117,7 +128,7 @@
       "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-stale-modules.py\" --harness codex",
       "timeout": null,
       "statusMessage": null,
-      "additionalContextLimit": null,
+      "additionalContextLimit": 8000,
       "async": null
     },
     {
@@ -129,7 +140,7 @@
       "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/signoff-guard.py\" --harness codex",
       "timeout": null,
       "statusMessage": null,
-      "additionalContextLimit": null,
+      "additionalContextLimit": 8000,
       "async": null
     },
     {
@@ -141,7 +152,7 @@
       "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/signoff-guard.py\" --harness codex",
       "timeout": null,
       "statusMessage": null,
-      "additionalContextLimit": null,
+      "additionalContextLimit": 8000,
       "async": null
     },
     {
@@ -153,7 +164,19 @@
       "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-skill-invoked.py\" --harness codex",
       "timeout": null,
       "statusMessage": null,
-      "additionalContextLimit": null,
+      "additionalContextLimit": 8000,
+      "async": null
+    },
+    {
+      "key": "hooks/hooks.codex.json:post_tool_use:3:0",
+      "event": "PostToolUse",
+      "matcher": "Read|Edit|Write|NotebookEdit|Bash|PowerShell",
+      "type": "command",
+      "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/module-memory-inject.py\" --harness codex",
+      "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/module-memory-inject.py\" --harness codex",
+      "timeout": null,
+      "statusMessage": null,
+      "additionalContextLimit": 8000,
       "async": null
     },
     {

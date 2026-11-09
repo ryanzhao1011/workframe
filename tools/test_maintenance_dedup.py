@@ -277,6 +277,41 @@ def test_sidecar_guards():
                   (sorted([key, key + "-2"]), [key + "-2"]))
 
 
+def test_into_existing_entry():
+    print("[into] 写进已有条目：沿用 key、不写 sidecar、只补事件；重跑不重复；key 不对 fail-closed")
+    now = datetime(2026, 9, 17, 3, 0, tzinfo=timezone.utc)
+    old = "dev:2026-08-01:已有条目的前二十字示例片段"
+    entry = {"scope": "dev", "created_at": "2026-08-01", "provenance": "user-confirmed", "protected": False,
+             "source": "notes.md"}
+    promo = dict(PROMO, into=old)
+    with Fixture(now) as fx:
+        fx.sidecar({old: dict(entry)})
+        fx.manifest([promo])
+        side0 = mw.SIDECAR_FILE.read_bytes()
+        rc, _ = fx.commit()
+        check("into 有效 ⇒ rc 0", rc, 0)
+        check("… sidecar 字节不变（不新建条目）", mw.SIDECAR_FILE.read_bytes() == side0, True)
+        check("… memory_promoted 一条、沿用旧 key", [e["entry_key"] for e in fx.events("memory_promoted")], [old])
+        check("… 另记 skill_used 一条", len(fx.events("skill_used")), 1)
+        fx.manifest([promo])                    # 重跑同一份 manifest
+        fx.commit()
+        check("… 重跑不重复记事件", len(fx.events("memory_promoted")), 1)
+    for label, side, bad in (
+            ("into 不在 sidecar", {}, old),
+            ("into 的 scope 不符", {old: dict(entry, scope="qa")}, old),
+            ("into 是 protected 条目", {old: dict(entry, protected=True, provenance="user-decree", source="[纠正]")}, old),
+            ("into 不是字符串", {old: dict(entry)}, ["x"])):
+        with Fixture(now) as fx:
+            fx.sidecar(side)
+            fx.manifest([PROMO, dict(PROMO, summary=SUMMARY + "另一条", into=bad)])
+            side0 = mw.SIDECAR_FILE.read_bytes()
+            rc, out = fx.commit()
+            check(f"{label} ⇒ rc 1", rc, 1)
+            check(f"{label} ⇒ 同批的普通 promotion 也不落（sidecar 字节不变、零事件）",
+                  (mw.SIDECAR_FILE.read_bytes() == side0, fx.events()), (True, []))
+            check(f"{label} ⇒ manifest 保留可重跑", mw.MANIFEST_FILE.exists(), True)
+
+
 def test_event_key_identity():
     print("[恒等] workframe-event user-correction 的 entry_key")
     with Fixture(datetime(2026, 9, 17, 3, 0, tzinfo=timezone.utc)) as fx:
@@ -295,6 +330,7 @@ def main():
         run_clock("本地 08:00 之后", datetime(2026, 9, 17, 3, 0, tzinfo=timezone.utc))
         test_cross_midnight()
         test_sidecar_guards()
+        test_into_existing_entry()
         test_event_key_identity()
     except Exception as e:  # noqa: BLE001
         import traceback

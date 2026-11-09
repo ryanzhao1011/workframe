@@ -567,6 +567,9 @@ def compute_plan(project):
                 data["old_session_counter"] = _session_counter(old_p)
                 data["new_session_counter"] = _session_counter(new_p)
                 lines.append(f"session_counter：旧 {data['old_session_counter']} / 新 {data['new_session_counter']}")
+            # 出路必须在这里说：退出码 8 的收尾只写「没做完」，用户读到的是这一条（与 doctor `legacy_state_dir` 同口径）
+            lines.append(f"怎么处理：确认 {new} 里没有要留的内容（多半是没迁移就开会话时 hook 建的、只有那几次会话的数据）"
+                         f"后把它挪出项目或改名，再重出 plan；文件少、计数小的多半是多余的那一侧")
             items.append(_item("R-conflict", "conflict", f"冲突（需人工判断）：{old} 与 {new} 同时存在，这一类不动",
                                lines, data))
         elif os.path.lexists(old_p):

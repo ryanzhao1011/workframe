@@ -1,60 +1,72 @@
 #!/usr/bin/env python3
-"""签发档判定 — 吃 diff，吐「本次签发档 = X」及其四段依据。
+"""签发否决项判定 — 吃一段钉死两端的 diff，吐「否决项命中没有、要不要交用户拍板」。
 
-四段闸门（默认起点 → 通行证 → 地板 → 封顶）中三段机器可算，通行证那段机器只验
-**声明格式与 hash 可解析**。本脚本把机器能算的那部分算出来，把算不出来的**显式标成
-「待裁决」而不是「未命中」**——静默未命中就是假绿，而假绿与真绿在终端里长得一样。
+签发分两类（必载片 §谁签发这次收口）：**主会话自理**与**需要独立验证**，类别由模型按
+那一节的三条判据判，**本脚本不判类别**。它只算两类共用、且机器算得出来的那一半——
+**否决项**：命中任一条（或产出了待裁决项）即交用户拍板，不论签发类别。算不出来的那几条
+**显式标成「待裁决」或「恒有的模型裁量项」，而不是「未命中」**——静默未命中就是假绿，
+而假绿与真绿在终端里长得一样。
 
 用法：
-    python signoff_tier_check.py [--project-dir DIR] [--radius {1,2,3,4}]
-                                 [--since REF] [--passport FILE|-] [--task ID]
-                                 [--size-cap N] [--json]
+    python signoff_tier_check.py [--project-dir DIR] --since REF[,LABEL=REF...]
+                                 [--diff-ref REF[,LABEL=REF...]] [--size-cap N] [--json]
 
-退出码（**不承载档位**，档位在输出里；挂 hook 时的阻断策略由调用方定）：
+切片按仓给两端：单个 hash 指项目根那个仓；多仓写 `LABEL=hash`，LABEL 是仓相对项目根的
+路径（根仓写 `.`），逗号分隔，例 `--since .=c302f74b,claude-workframe=ed230267`。
+`--diff-ref` 缺省为各仓当前 HEAD。两端都只收**十六进制 commit**——符号引用（`HEAD`、
+分支名）是可变的，钉不住「签发时判的是哪一段」。
+
+退出码：
     0  判定已产出（可能带「待裁决」标注）
-    1  拒绝判定——输入或扫描面不足以给出可信结论
+    1  拒绝判定——切片声明不合法、仓不存在或 hash 解析不到
     2  用法错误（argparse）
 
-**本脚本自己就是「判断别的东西对不对」的东西**，改它按爆炸半径档 4 处置：先跑基线、
+**本脚本自己就是「判断别的东西对不对」的东西**：改它属于「需要独立验证」，并且要先跑基线、
 用它自己的失败方式打一遍、每条红灯分支各配一个真的走到它的探针。
 
 ## 能力边界（读输出前先读这段）
 
-1. **通行证只验格式与 hash 可解析，验不了「这份独立结论真的覆盖了本轮 delta」**——那是
-   模型判的，且它出过错。这是本流程最软的一环。
+1. **签发类别（自理 / 独立验证）是模型判的**，本脚本与看板写入 hook 都不判：把一处该独立
+   验证的改动判成自理，机器一无所知。用户 2026-11-01 拍板不加按路径的机器下限。
 2. **六条否决项里只有部分是机器可判的**：V1 内容级可判、V2 只判得了版本号字段（推 main /
    打 tag / 对外 CHANGELOG 已发布段不在 diff 里）、V6 只判路径面（契约变更 vs 表述变更
-   由模型判）、V3/V4/V5 纯模型。凡机器判不了的一律标「待裁决」。
-3. **爆炸半径是模型判的**，本脚本只读 `--radius` 的取值；未声明时按最严地板处理。
-4. **切片起点**：给了 `--since` 就用它，没给就退回「未提交改动」。签注记录的 hash 是切片
-   起点的最终形态，那个字段还不存在，所以此刻的起点由调用方自划——输出里会写明。
-   **多仓项目下 `--since` 是单个 ref，寻址不了两个仓**：起点在某个仓解析不到时该仓只贡献
-   未提交改动，这被归为**扫描面缺口**（因而禁止降档），不是「照常判定＋一行提示」。
-5. **尺寸上限过滤的是「大而浅」，漏的是「小而不可逆」**：行数与风险量纲正交，改 31 份
+   由模型判）、V3/V4/V5 纯模型。凡机器判不了的一律标「待裁决」或列进恒有裁量项。
+3. **切片只含已提交的改动**：每个声明的仓取 `since..diff_ref`，未提交改动不在内——签发前先
+   提交。**没声明的仓不在切片里**：改了两个仓却只给一个仓的两端，另一个仓的改动对本判定
+   不可见，且不产生任何提示（声明由签发方写，漏写没有机器面）。
+4. **尺寸上限过滤的是「大而浅」，漏的是「小而不可逆」**：行数与风险量纲正交，改 31 份
    文档里同一个术语只有 62 行却是 31 个表现层。这一格没有判据。
-6. **不判「机器闸全绿」**：本脚本不跑 validate / doctor / close-check，别把它的绿读成那三道的绿。
-7. **尺寸上限可被调用方自己抬掉**：`--size-cap` 无下限、放大后**不产生任何缺口或提示**，
-   于是这条唯一的纯机器否决项生效与否取决于被约束者本人（实测 5001 行改动：默认判
-   `你拍板`，加 `--size-cap 999999999` 判 `自签`）。默认值是 2026-09-09 用户拍板的产品
-   决策，用户同日就这条判「先不管」——**这是被知情接受的风险，不是被覆盖掉的风险**。
-8. **共享对象的仓会让 `--since` 跑出跨树 diff**：`git clone --shared` / worktree / 配了
-   `alternates` 的仓里，属于**外仓**的 commit 也解析得到，脚本据此算出的 diff 会凭空造出
-   该仓从未有过的改动（实测：一条整文件删除，并因此封顶到 `你拍板`），**且不产生任何缺口**
+5. **不判「机器闸全绿」**：本脚本不跑 validate / doctor / close-check，别把它的绿读成那三道的绿。
+6. **尺寸上限可被调用方自己抬掉**：`--size-cap` 无下限、放大后**不产生任何缺口或提示**，
+   于是这条唯一的纯机器否决项生效与否取决于被约束者本人（看板写入 hook 不读这个参数，
+   恒用默认值）。默认值是 2026-09-09 用户拍板的产品决策，用户同日就这条判「先不管」——
+   **这是被知情接受的风险，不是被覆盖掉的风险**。
+7. **共享对象的仓会让切片跑出跨树 diff**：`git clone --shared` / worktree / 配了
+   `alternates` 的仓里，属于**外仓**的 commit 也解析得到，据此算出的 diff 会凭空造出
+   该仓从未有过的改动（实测：一条整文件删除，并因此封顶到用户拍板），**且不产生任何提示**
    ——「解析得到」被当成「起点属于本仓」。两个独立仓、无 alternates 的拓扑不触发；
    vendored clone 与 worktree 会。
-9. **diff 解析器认不出内容本身以 `-- ` / `++ ` 开头的行**：它们在 unified diff 里长成
+8. **diff 解析器认不出内容本身以 `-- ` / `++ ` 开头的行**：它们在 unified diff 里长成
    `--- xxx` / `+++ xxx`，与文件头同形，于是被当成文件头。两种后果：`-- ` 那条删除行被
    **整行吞掉（deletions 少算，方向是漏而不是多，正好是尺寸上限该看住的方向）**；
    `++ ` 那条新增行造出一个**幻影文件**，并且**其后的加减行都改挂在幻影名下**，真实文件
-   那侧同时少算。SQL 注释（`-- comment`）是最常见的形态。真实资产命中 0 处，故本批只登记；
-   修法（给 `---` / `+++` 的文件头判定加「必须紧跟 `diff --git` 之后」的状态约束）与其余
-   寻址/解析类问题同批处理。`tools/test_signoff_tier_check.py` 有一条**现状用例**钉住它，
-   修好之后那条会报红——那是提醒去更新它，不是回归。
-10. **V6 路径命中只进「待裁决」，不封顶**——这是**判定的中间态，不是终局**。必载段
-   （`closeout-discipline` §否决项 6 的清单与判法）已把方向钉死：路径命中后由模型判
-   契约变更还是表述变更，**拿不准一律算契约变更**（⇒ 封顶到用户）。所以本脚本报
-   `自签` 而 `pending` 里挂着 V6 那条时，**那不是「可以自签」，是「等人裁」**。
-   会静默失效的形态：有人只读 `tier` 不读 `pending`。消费方（board 写入 hook）必须两个都读。
+   那侧同时少算。SQL 注释（`-- comment`）是最常见的形态。真实资产命中 0 处，故只登记；
+   修法是给 `---` / `+++` 的文件头判定加「必须紧跟 `diff --git` 之后」的状态约束。
+   `tools/test_signoff_tier_check.py` 有一条**现状用例**钉住它，修好之后那条会报红——
+   那是提醒去更新它，不是回归。
+9. **V6 路径命中只进「待裁决」，不直接封顶**——这是**判定的中间态，不是终局**。必载段
+   （§否决项 6 的清单与判法）已把方向钉死：路径命中后由模型判契约变更还是表述变更，
+   **拿不准一律算契约变更**（⇒ 交用户拍板）。所以本脚本报「未命中」而 `pending` 里挂着
+   V6 那条时，**那不是「可以签」，是「等人裁」**。会静默失效的形态：有人只读
+   `needs_user` 不读 `pending`。看板写入 hook 两个都读：有待裁决项时，签注要么写
+   「你拍板」，要么在 `ruling` 里逐条写出裁决。
+10. **V1 在同一个 hunk 里把同键的新行当成原地改写**（`entry_key`）：同一处连续改动里删掉
+   一条带键条目、又新增一条同键而内容无关的条目，判成改写、不命中。隔开的两处改动不配对；
+   逐字匹配与同键配对都按个数一对一，净少掉的条目仍命中。被抵掉的逐条进 `v1_rewrites`
+   并印在「按同键改写放行」那段里，**只提示、不封顶**，是不是同一条目由签发方核。
+   不进 `pending` 是 2026-11-03 用户拍板（备选是进待裁决、签注逐条写 `ruling`）：
+   **这是被知情接受的风险**，`tools/test_signoff_tier_check.py` 有一条锁定用例钉住它。
+   反方向的假红：标签本身被改写（键变了）、改写无键的行，仍判删除。
 """
 
 import argparse
@@ -62,6 +74,7 @@ import json
 import re
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 # 用 `reconfigure` 而不是新建 `TextIOWrapper`：后者在「本脚本被另一个脚本 import」时
@@ -77,31 +90,15 @@ except Exception:
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
-from _git_scan import collect_changed_files  # noqa: E402
 from _harness import project_dir as _project_dir  # noqa: E402
-from _state_io import runtime_rel, state_dir_of  # noqa: E402
+from _state_io import runtime_rel  # noqa: E402
 
 GIT_TIMEOUT_SEC = 30
 
-# ---------- 档位格 ----------
-# 排序即严格程度，索引越大越严；一切合成用 `stricter()`，不许在别处再写一遍比较。
-TIER_SELF = "自签"
-TIER_LIGHT = "轻签注"
-TIER_FULL = "完整验证"
-TIER_USER = "你拍板"
-TIER_ORDER = (TIER_SELF, TIER_LIGHT, TIER_FULL, TIER_USER)
-
-# 爆炸半径只当地板（往上抬，不发通行证）：档 4 降不下去，档 3 最低到轻签注，档 1-2 可到自签。
-# **档 4 那一格是整套闸门的承重面**——「改的东西自己就是判据」，本脚本自己正是这类资产；
-# 它被改成可降档的话，档 4 资产就能自签，而这件事没有别的东西看得住。四格逐格由
-# `tools/test_signoff_tier_check.py` 的承重语义组守着（每格各配一条变异反证）。
-RADIUS_FLOOR = {1: TIER_SELF, 2: TIER_SELF, 3: TIER_LIGHT, 4: TIER_FULL}
-
-# 默认起点：没有任何独立视角看过的东西，默认就该被独立看一次。
-# **收成一个常量**——这个事实此前在 `evaluate()` 里被手写了三份（`result["tier"]` 初值、
-# `segments.default_start`、局部变量 `tier`），改其中一份另外两份不跟着动、也没有任何东西
-# 会报红（实测：把 `default_start` 那份改掉，整套单测仍绿）。同一事实不留第二份。
-DEFAULT_START = TIER_FULL
+# 切片两端只收十六进制 commit。符号引用（`HEAD`、分支名、tag）是可变的：签注里写
+# `since: HEAD`，下一次提交之后同一条签注就指向另一段 diff，而它在写入那一刻恰好让
+# 已提交的工作对否决项整段不可见（2026-11-01 预审实测）。
+HEX_REF_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
 # 尺寸上限：`additions + deletions`，**不是净变化**——净变化正是删除逃逸的那个量。
 # 2000 是 2026-09-09 用户拍板的值，理由：框架仓的改动基线天然偏大（单个脚本就可能
@@ -158,7 +155,7 @@ AUTO_UPDATE_BASENAME = VETO6_BASENAME
 
 # 会分发给所有项目的框架源。**不参与封顶**——否决项 6 的清单（上面 `VETO6_*`）里没有
 # 框架源这一类，用户拍板缩窄清单时明确排除了它。列在这里只为把「本次动了会分发的
-# 资产」这个事实说出来：「谁实现」那条轴据此定为恒 @dev，而那条轴不是本脚本的判定对象。
+# 资产」这个事实说出来：这类改动由主对话实现、交新上下文验证；「谁实现」那条轴不是本脚本的判定对象。
 # **别把这段读回成「清单 = auto-update 原表」**——那是缩窄之前的口径，与上面
 # 「VETO6 是 AUTO_UPDATE 的真子集」直接矛盾。这两处在同一个文件里分叉过一次，
 # 成因是改注释时只改了被搜到的那半。
@@ -173,15 +170,11 @@ VERSION_BEARING_BASENAMES = ("plugin.json", "marketplace.json", "package.json")
 RELEASE_NOTE_BASENAMES = ("CHANGELOG.md",)
 
 
-def stricter(a, b):
-    return TIER_ORDER[max(TIER_ORDER.index(a), TIER_ORDER.index(b))]
-
-
 # ---------- git 薄封装（纯读，不写事件） ----------
 # 不复用 csm 的 `_git_lines`：那个的失败路径会 append `modules_check_stale_error`，
 # 而本命令是判定用的只读入口，往运行态里写噪声事件不合适（`module_close_check` 同款取舍：
 # 它同样不写事件，写入只有它自己的计数日志及其锁文件）。
-# 扫描面本身仍复用 `_git_scan`，两者是不同的东西：口径共用，留痕策略各自负责。
+# 本脚本不走 `_git_scan` 的扫描面：切片由签注按仓声明两端，不需要发现嵌套仓。
 
 
 def _git(repo_abs, args):
@@ -202,14 +195,6 @@ def _git(repo_abs, args):
 
 def git_ok(repo_abs, args):
     return _git(repo_abs, args)[0] == 0
-
-
-def git_lines(repo_abs, args, label):
-    """`_git_scan` 的注入点：成功返回行列表，失败返回 None（由它记 note）。"""
-    rc, out, _err = _git(repo_abs, args)
-    if rc != 0:
-        return None
-    return out.splitlines()
 
 
 # ---------- diff 解析 ----------
@@ -235,6 +220,10 @@ class FileDelta:
         self.path = path
         self.added = []
         self.removed = []
+        # 与 added / removed 逐项对齐的 hunk 序号：V1 只在同一个 hunk 里认「同键改写」
+        self.added_hunk = []
+        self.removed_hunk = []
+        self.hunk = 0
         self.binary = False
         self.deleted_whole = False
 
@@ -298,12 +287,17 @@ def parse_unified_diff(text, into=None):
             if cur is not None:
                 cur.binary = True
             continue
-        if cur is None or line.startswith("@@") or line.startswith("\\"):
+        if cur is None or line.startswith("\\"):
+            continue
+        if line.startswith("@@"):
+            cur.hunk += 1
             continue
         if line.startswith("+"):
             cur.added.append(line[1:])
+            cur.added_hunk.append(cur.hunk)
         elif line.startswith("-"):
             cur.removed.append(line[1:])
+            cur.removed_hunk.append(cur.hunk)
     return out
 
 
@@ -346,11 +340,48 @@ def structured_kind(content):
 def normalize_entry(content):
     """归一化：去首尾空白 + 内部连续空白折叠成一个空格。
 
-    「有没有对应的 `+` 行」按归一化后**逐字相等**判。改写措辞会被判成删除（假红，
-    方向 fail-safe，按假红处置分档登记不阻断）；判据故意不做模糊匹配——相似度阈值
-    是拍脑袋的数，而这条判定的下游是「要不要惊动用户」。
+    「有没有对应的 `+` 行」先按归一化后**逐字相等**判，判不上再按 `entry_key` 的键判。
+    判据故意不做模糊匹配——相似度阈值是拍脑袋的数，而这条判定的下游是「要不要惊动用户」。
     """
     return " ".join(content.split())
+
+
+# 无序列表项正文开头的标签：`**加粗**` 或 `` `代码段` ``
+_ENTRY_LABEL_RE = re.compile(r"^(?:\*\*(.+?)\*\*|`([^`]+)`)")
+# 表格首格是纯序号（`3` / `#`）时它是位置不是身份
+_ORDINAL_CELL_RE = re.compile(r"^(?:#|\d+)$")
+
+
+def entry_key(content):
+    """条目的身份：`(类别, 键)`；拿不出键返回 None。
+
+    V1 防的是**条目消失**，不是**行变了**（删除判据：条目还在不在）。只比行，原地改写
+    一个表格行或一条带标签的列表项就被判成删除——模块文档每次同步都要改写 code-map
+    的行与 overview 的「最近同步」行，于是凡同步过模块文档的签发 V1 恒命中，红灯失去
+    区分度。键让「同一个条目换了内容」与「条目没了」分得开，且是逐字相等、没有阈值。
+
+    - 表格行：第一格（code-map 是文件路径）；分隔行（只含 `-` `:` 空格）、空首格与
+      纯序号首格（`1` / `#`）无键
+    - 无序列表项 / YAML 序列项：正文开头的 `**标签**` 或 `` `代码段` ``；没有标签的无键
+    - **有序列表项无键**：删掉一步后重新编号，编号就不再指原来那一条——纯序号的表格
+      首格同理，编号是位置不是身份
+
+    无键的行照旧只按逐字相等判，即改写它仍判删除（假红，方向 fail-safe）。键只在**同一个
+    hunk** 里配对（见 `evaluate_vetoes`）：同键不等于同一条目，原地改写才在同一处。
+    """
+    kind = structured_kind(content)
+    if kind is None or kind == "有序列表项":
+        return None
+    s = content.strip()
+    if kind == "表格行":
+        first = s.strip("|").split("|", 1)[0].strip()
+        if not first or set(first) <= set("-: ") or _ORDINAL_CELL_RE.match(first):
+            return None
+        return (kind, first)
+    m = _ENTRY_LABEL_RE.match(s[2:].lstrip())
+    if not m:
+        return None
+    return (kind, (m.group(1) or m.group(2)).strip())
 
 
 # ---------- 受保护资产路径判定 ----------
@@ -408,195 +439,118 @@ def is_framework_asset(rel):
     return any(p.startswith(pre) for pre in FRAMEWORK_ASSET_PREFIX)
 
 
-# ---------- 输入模型 ----------
+# ---------- 切片：按仓钉死两端 ----------
 
 
-def load_index_patterns(project_dir):
-    """读 code-paths-index 的 patterns。返回 (patterns, gap_reason|None)。
+ROOT_LABEL = "."
 
-    patterns 是嵌套仓发现的**唯一输入**：读不到它，被主仓 ignore 的嵌套仓就一个都发现
-    不了，而那正是尺寸上限与路径类判定在框架仓侧恒为 0 的成因。所以读不到不是「没有
-    嵌套仓」，是**扫描面有缺口**，必须让调用方看见。
+
+def parse_refs(raw, field):
+    """把签注 / 命令行里的一端解析成 `{仓标签: hash}`。返回 (dict, errors)。
+
+    两种形态：单个字符串 = 项目根那个仓；映射 = `{仓相对项目根的路径: hash}`（根仓写 `.`）。
+    命令行的 `LABEL=hash,LABEL=hash` 在 `main()` 里先转成映射再进这里，两条入口共用一份校验。
     """
-    idx = state_dir_of(Path(project_dir)) / "code-paths-index.json"
-    if not idx.is_file():
-        return [], f"code-paths-index 不存在（{idx.name}）"
-    try:
-        data = json.loads(idx.read_text(encoding="utf-8"))
-    except Exception as e:
-        return [], f"code-paths-index 解析失败：{type(e).__name__}"
-    buckets = data.get("buckets")
-    if not isinstance(buckets, dict) or not buckets:
-        return [], "code-paths-index 的 buckets 为空"
-    # bucket 的值是 `{pattern: [submodule,...]}`，遍历它取到的是 pattern——与
-    # `scan_git_diff_for_stale` 取 patterns 的写法逐字相同。**别加 `isinstance(b, list)`
-    # 这类守卫**：值是 dict 不是 list，守卫会把 104 条 pattern 全过滤掉，然后嵌套仓
-    # 一个都发现不了，而现象只是「扫描面缺口」这条提示——首跑实测就撞了这一下。
-    try:
-        pats = [p for b in buckets.values() for p in b]
-    except TypeError:
-        return [], "code-paths-index 的 buckets 结构异常（值不可遍历）"
-    if not pats:
-        return [], "code-paths-index 的 buckets 里没有任何 pattern"
-    return pats, None
+    if isinstance(raw, str):
+        raw = {ROOT_LABEL: raw}
+    if not isinstance(raw, dict) or not raw:
+        return {}, [f"`{field}` 必须是一个 commit hash，或 `{{仓路径: hash}}` 映射（根仓写 `.`），"
+                    f"实为 {raw!r}"]
+    out, errs = {}, []
+    for label, ref in raw.items():
+        lab = str(label).replace("\\", "/").strip().rstrip("/") or ROOT_LABEL
+        val = str(ref).strip() if ref is not None else ""
+        if not HEX_REF_RE.match(val):
+            errs.append(f"`{field}` 里仓 `{lab}` 的值 {ref!r} 不是十六进制 commit"
+                        "——符号引用（HEAD / 分支名 / tag）会随提交移动，钉不住签发时判的是哪一段")
+            continue
+        out[lab] = val
+    return out, errs
 
 
-def collect_delta(project_dir, patterns, since_ref):
-    """把扫描面转成内容级 delta。返回 dict。
+def _repo_abs(project_dir, label):
+    return Path(project_dir) if label == ROOT_LABEL else Path(project_dir) / label
 
-    扫描面（哪些仓 × 哪几类改动）来自 `_git_scan.collect_changed_files`——与 stale 扫描
-    **同一份实现**。本函数只做它不管的那半：把文件名换成加减行。
+
+def _is_repo_root(repo_abs):
+    """这个目录**自己**是不是一个仓的根。
+
+    只问 `git -C dir rev-parse` 不够：普通子目录会被它往上找到外层仓，于是「声明了一个不是仓的
+    目录」静默变成「对外层仓取 diff」。比对 `--show-toplevel` 与目录本身，两者一致才算。
     """
-    by_repo, notes = collect_changed_files(
-        project_dir, patterns, git_ok, git_lines, since_ref=since_ref
-    )
-    unresolved = {label for kind, label, _ in notes if kind == "since_ref_unresolved"}
+    rc, out, _ = _git(repo_abs, ["rev-parse", "--show-toplevel"])
+    if rc != 0 or not out.strip():
+        return False
+    try:
+        return Path(out.strip()).resolve() == Path(repo_abs).resolve()
+    except OSError:
+        return False
+
+
+def collect_slice(project_dir, since, diff_ref=None):
+    """取每个声明仓的 `since..diff_ref` 内容级 delta。返回 (delta, errors)。
+
+    `diff_ref` 缺省为各仓当前 HEAD（解析成 hash 后写进 delta，输出里看得到实际用的是哪个）。
+    两端的仓集合必须一致；任一仓不是仓根、任一端解析不到 commit 都进 errors——**调用方据此
+    拒绝判定，不降级成「少看一个仓照常判」**：少看的那个仓里的删除与尺寸会被静默漏算。
+    """
+    errors = []
+    s_map, e1 = parse_refs(since, "since")
+    errors.extend(e1)
+    if diff_ref is None:
+        d_map, e2 = {}, []
+    else:
+        d_map, e2 = parse_refs(diff_ref, "diff_ref")
+        errors.extend(e2)
+        if not e1 and not e2 and set(s_map) != set(d_map):
+            errors.append(f"`since` 与 `diff_ref` 声明的仓不一致（since：{sorted(s_map)}；"
+                          f"diff_ref：{sorted(d_map)}）——每个仓都要两端齐全")
+    if errors:
+        return None, errors
 
     repos = {}
-    for repo_rel, names in by_repo.items():
-        repo_abs = Path(project_dir) / repo_rel if repo_rel else Path(project_dir)
-        label = repo_rel or "."
-        files = {}
-        errs = []
-        has_head = git_ok(repo_abs, ["rev-parse", "--verify", "--quiet", "HEAD"])
-        # 与 `_git_scan` 的三类一一对应，只是把 `--name-only` 换成内容：
-        #   有 HEAD → `diff HEAD` 已含 staged + unstaged，不能再叠 `--cached`（会重复计数）
-        #   无 HEAD → 一切改动落在 staged 与 untracked 两条里
-        base = ["diff", "--unified=0", "--no-color", "--no-ext-diff"]
-        cmds = [base + ["HEAD"]] if has_head else [base + ["--cached"]]
-        if since_ref and has_head and label not in unresolved:
-            cmds.append(base + [f"{since_ref}..HEAD"])
-        for args in cmds:
-            rc, out, err = _git(repo_abs, args)
-            if rc != 0:
-                errs.append(f"{' '.join(args)}: rc={rc} {err.strip()[:120]}")
-                continue
-            parse_unified_diff(out, into=files)
-
-        # 未跟踪文件没有 diff：整份都是新增。二进制不按行算，只登记。
-        tracked = set(files)
-        for name in sorted(names):
-            if name in tracked:
-                continue
-            f = repo_abs / name
-            if not f.is_file():
-                continue
-            fd = FileDelta(name)
-            try:
-                raw = f.read_bytes()
-            except OSError as e:
-                errs.append(f"读未跟踪文件失败 {name}: {type(e).__name__}")
-                continue
-            if b"\x00" in raw[:8192]:
-                fd.binary = True
+    for label in sorted(s_map):
+        repo_abs = _repo_abs(project_dir, label)
+        if not repo_abs.is_dir() or not _is_repo_root(repo_abs):
+            errors.append(f"仓 `{label}` 不存在或不是一个 git 仓的根目录（{repo_abs}）")
+            continue
+        ends = {}
+        for end, ref in (("since", s_map[label]), ("diff_ref", d_map.get(label, "HEAD"))):
+            rc, out, _ = _git(repo_abs, ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"])
+            if rc != 0 or not out.strip():
+                errors.append(f"仓 `{label}` 里 `{end}` = `{ref}` 解析不到 commit")
             else:
-                fd.added = raw.decode("utf-8", errors="replace").splitlines()
-            files[name] = fd
-        repos[label] = {"repo_rel": repo_rel, "files": files, "errors": errs}
-    return {"repos": repos, "notes": notes, "since_unresolved": sorted(unresolved)}
-
-
-# ---------- 通行证 ----------
-
-PASSPORT_FIELDS = ("task", "round", "covered", "ref")
-
-
-def check_passport(raw, delta, current_task):
-    """验通行证的**声明格式与 hash 对应**。返回 (ok, lines)。
-
-    **验不了的那件事必须说出来**：这份独立结论有没有真的覆盖本轮 delta 是模型判的，
-    机器在这里一个字都判不了（脱敏一族就是「上轮结论以为覆盖了、实际没有」）。
-    """
-    lines = []
-    if not isinstance(raw, dict):
-        return False, ["通行证不是 JSON 对象 → 声明不合法，不得降档"]
-    missing = [k for k in PASSPORT_FIELDS
-               if not isinstance(raw.get(k), str) or not raw[k].strip()]
-    if missing:
-        return False, [f"通行证缺字段或为空：{'、'.join(missing)}"
-                       f"（四段必填：{'、'.join(PASSPORT_FIELDS)}）→ 不得降档"]
-
-    ref = raw["ref"].strip()
-    hit = []
-    # ref 逐仓解析：多仓下同一个 hash 通常只属于一个仓，只要有一个仓认得它就算可解析
-    for label, repo_abs in delta["_repo_abs"].items():
-        if git_ok(repo_abs, ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"]):
-            hit.append(label)
-    if not hit:
-        return False, [f"通行证 ref `{ref}` 在扫描到的任何一个仓里都解析不到 commit"
-                       " → 声明的被验对象不存在，不得降档"]
-    lines.append(f"ref `{ref}` 可解析（仓：{'、'.join(hit)}）")
-
-    declared_task = raw["task"].strip()
-    if not current_task:
-        # **`--task` 缺失时不许静默放行。** 本轮任务未知 ⇒ 判不出这份通行证是不是跨任务
-        # 继承，而跨任务那条门被真实绕过过一次，本判定的目的正是把暗门改明路。
-        # 早先写作 `if current_task and ...`，于是少传一个可选参数就把整段校验关掉了——
-        # 而**省略这个参数的人正是降档的受益人**，与 §5.3「切片的人正是受益的人」同构。
-        # 处置复用既有的「通行证不成立 ⇒ 停在默认档」，不另造机制。
-        return False, lines + [
-            f"本轮任务未声明（缺 `--task`），无从判断这份通行证（声明 {declared_task}）"
-            "是不是跨任务继承 → **通行证不成立，不得降档**。"
-            "跨任务继承本身不禁止，但必须写明哪个任务、哪一轮、覆盖了什么，且可核"]
-    if declared_task != current_task:
-        if raw.get("cross_task") is not True:
-            return False, lines + [
-                f"通行证来自别的任务（声明 {declared_task}，本轮 {current_task}）却未写"
-                " `\"cross_task\": true` → 跨任务继承必须显式声明，不得降档"]
-        lines.append(f"跨任务继承已显式声明：{declared_task} / {raw['round'].strip()}")
-    else:
-        lines.append(f"任务与轮次：{declared_task} / {raw['round'].strip()}")
-    lines.append(f"声明覆盖了：{raw['covered'].strip()[:160]}")
-    lines.append("⚠ 机器只验到这里——「这份独立结论是否真的覆盖本轮 delta」验不了（§12-07）")
-    return True, lines
+                ends[end] = out.strip()
+        if len(ends) < 2:
+            continue
+        files, errs = {}, []
+        args = ["diff", "--unified=0", "--no-color", "--no-ext-diff",
+                f"{ends['since']}..{ends['diff_ref']}"]
+        rc, out, err = _git(repo_abs, args)
+        if rc != 0:
+            errs.append(f"{' '.join(args)}: rc={rc} {err.strip()[:120]}")
+        else:
+            parse_unified_diff(out, into=files)
+        repos[label] = {"repo_rel": "" if label == ROOT_LABEL else label,
+                        "since": ends["since"], "diff_ref": ends["diff_ref"],
+                        "files": files, "errors": errs}
+    if errors:
+        return None, errors
+    # diff 本身失败与「解析不到」同级：那个仓的改动没被看见，据此报「未命中」就是假绿
+    for label, r in repos.items():
+        errors.extend(f"仓 `{label}` 取 diff 失败：{e}" for e in r["errors"])
+    if errors:
+        return None, errors
+    return {"repos": repos}, []
 
 
 # ---------- 判定 ----------
 
 
-def evaluate(delta, radius, size_cap, passport_raw, current_task, scan_gaps, runtime):
-    # ① 默认起点——三处同值全部取自 `DEFAULT_START`，不再各写一份
-    tier = DEFAULT_START
-    result = {
-        "tier": tier,
-        "segments": {"default_start": tier},
-        "pending": [],
-        "gaps": list(scan_gaps),
-    }
-
-    # ② 通行证
-    if passport_raw is None:
-        passport_ok, passport_lines = False, ["未提供通行证（--passport）→ 停在默认档"]
-    else:
-        passport_ok, passport_lines = check_passport(passport_raw, delta, current_task)
-    result["segments"]["passport"] = {"ok": passport_ok, "lines": passport_lines}
-
-    # ③ 地板
-    if radius is None:
-        floor = TIER_FULL
-        floor_note = "爆炸半径未声明（--radius）→ 按最严处理，地板 = 完整验证"
-    else:
-        floor = RADIUS_FLOOR[radius]
-        floor_note = f"爆炸半径档 {radius} → 地板 = {floor}"
-    result["segments"]["floor"] = {"tier": floor, "note": floor_note}
-
-    if passport_ok:
-        tier = floor
-    # 通行证不成立时 tier 保持默认档——地板只往上抬，不发通行证。
-
-    # 扫描面有缺口时不许降档：缺口那半的改动没被看见，据此降档就是拿看不见的东西换权限。
-    if scan_gaps:
-        tier = stricter(tier, TIER_FULL)
-
-    # ④ 封顶
+def evaluate(delta, size_cap, runtime):
+    """否决项判定。`needs_user` = 机器可判的命中任一条；`pending` 非空时判定不是终局（等人裁）。"""
     veto = evaluate_vetoes(delta, size_cap, runtime)
-    result["segments"]["veto"] = veto
-    if veto["hit"]:
-        tier = TIER_USER
-    result["pending"] = veto["pending"]
-
-    result["tier"] = tier
-    return result
+    return {"needs_user": bool(veto["hit"]), "veto": veto, "pending": veto["pending"]}
 
 
 def evaluate_vetoes(delta, size_cap, runtime):
@@ -606,6 +560,7 @@ def evaluate_vetoes(delta, size_cap, runtime):
     auto_update_only = []
     framework = []
     v1_hits = []
+    v1_rewrites = []
     v2_version = []
     v2_release_notes = []
 
@@ -639,12 +594,36 @@ def evaluate_vetoes(delta, size_cap, runtime):
                 v1_hits.append((prefix + path, "整文件删除",
                                 f"（{fd.deletions} 行）"))
                 continue
-            # V1：结构化条目的 `-` 行，同文件内无归一化等价的 `+` 行即命中。
-            added_norm = {normalize_entry(x) for x in fd.added}
-            for line in fd.removed:
-                kind = structured_kind(line)
-                if kind and normalize_entry(line) not in added_norm:
-                    v1_hits.append((prefix + path, kind, line.strip()[:100]))
+            # V1：结构化条目的 `-` 行，先在同文件内找归一化等价的 `+` 行（挪动），再在同一个
+            # hunk 里找同键的新内容 `+` 行（原地改写），都找不到即命中。两步都**按个数一对一**
+            # 抵：删两条只补回一条，净少的那条照样命中。被逐字匹配用掉的 `+` 行不再参与同键
+            # 配对，否则「挪了一条、删了一条同键的」会被整个放过。
+            removed = [(ln, h) for ln, h in zip(fd.removed, fd.removed_hunk)
+                       if structured_kind(ln)]
+            exact = Counter(normalize_entry(x) for x in fd.added)
+            unmatched = []
+            for ln, h in removed:
+                n = normalize_entry(ln)
+                if exact[n] > 0:
+                    exact[n] -= 1
+                else:
+                    unmatched.append((ln, h))
+            new_keys = Counter()
+            for ln, h in zip(fd.added, fd.added_hunk):
+                n = normalize_entry(ln)
+                if exact[n] > 0:            # 没被逐字匹配用掉的那几条才是新内容
+                    exact[n] -= 1
+                    key = entry_key(ln)
+                    if key:
+                        new_keys[(h, key)] += 1
+            for ln, h in unmatched:
+                kind = structured_kind(ln)
+                key = entry_key(ln)
+                if key and new_keys[(h, key)] > 0:
+                    new_keys[(h, key)] -= 1
+                    v1_rewrites.append((prefix + path, kind, key[1][:100]))
+                    continue
+                v1_hits.append((prefix + path, kind, ln.strip()[:100]))
 
     size_total = adds + dels
     hit = []
@@ -698,120 +677,126 @@ def evaluate_vetoes(delta, size_cap, runtime):
         "auto_update_only": sorted(set(auto_update_only)),
         "framework_assets": sorted(set(framework)),
         "v1_hits": v1_hits,
+        "v1_rewrites": v1_rewrites,
     }
 
 
 # ---------- 输出 ----------
 
 
-def render(result, delta, slice_note, scan_summary):
+def _slice_lines(delta):
+    return [f"仓 `{label}`：{r['since'][:12]}..{r['diff_ref'][:12]}（文件 {len(r['files'])}）"
+            for label, r in sorted(delta["repos"].items())]
+
+
+def render(result, delta):
     out = []
     w = out.append
-    w("签发档判定（四段闸门）")
+    w("签发否决项判定")
     w("=" * 60)
-    tail = ""
-    if result["pending"]:
-        tail = f"   ⚠ 暂定——含 {len(result['pending'])} 条待裁决项，裁决前不是终局"
-    w(f"判定结论：{result['tier']}{tail}")
-    w("")
-    w("扫描面")
-    for line in scan_summary:
-        w(f"  {line}")
-    w(f"  切片锚定：{slice_note[0]}")
-    for extra in slice_note[1:]:
-        w(f"     {extra}")
-    if result["gaps"]:
-        w("  ⚠ 缺口（缺口存在时禁止降档——降档等于拿看不见的东西换权限）：")
-        for g in result["gaps"]:
-            w(f"     - {g}")
+    v = result["veto"]
+    if v["hit"]:
+        verdict = "命中否决项 → 交用户拍板（不论签发类别）"
+    elif result["pending"]:
+        verdict = (f"机器可判的未命中，但有 {len(result['pending'])} 条待裁决——"
+                   "裁决之前不是终局：要么交用户拍板，要么逐条写出裁决")
     else:
-        w("  缺口：无")
+        verdict = "机器可判的未命中"
+    w(f"判定结论：{verdict}")
     w("")
-    w(f"① 默认起点：@qa {result['segments']['default_start']}")
-    ps = result["segments"]["passport"]
-    w(f"② 通行证：{'成立' if ps['ok'] else '不成立'}")
-    for line in ps["lines"]:
-        w(f"     {line}")
-    w(f"③ 地板：{result['segments']['floor']['note']}")
-    v = result["segments"]["veto"]
-    w("④ 封顶：")
-    w(f"     尺寸：additions {v['additions']} + deletions {v['deletions']} = "
+    w("切片（只含已提交改动）")
+    for line in _slice_lines(delta):
+        w(f"  {line}")
+    w("")
+    w(f"尺寸：additions {v['additions']} + deletions {v['deletions']} = "
       f"{v['size_total']}（上限 {v['size_cap']}，口径是加减之和不是净变化）")
     if v["binaries"]:
-        w(f"       二进制文件 {len(v['binaries'])} 个不计行数：{'、'.join(v['binaries'][:5])}")
+        w(f"  二进制文件 {len(v['binaries'])} 个不计行数：{'、'.join(v['binaries'][:5])}")
     if v["hit"]:
-        w("     已命中（任一条即到用户）：")
+        w("已命中（任一条即到用户）：")
         for h in v["hit"]:
-            w(f"       ✗ {h}")
+            w(f"  ✗ {h}")
     else:
-        w("     机器可判的那几条：未命中")
+        w("机器可判的那几条：未命中")
     if v["v1_hits"]:
-        w(f"     V1 明细（前 10 条，共 {len(v['v1_hits'])}）：")
+        w(f"V1 明细（前 10 条，共 {len(v['v1_hits'])}）：")
         for path, kind, sample in v["v1_hits"][:10]:
-            w(f"       - {path} [{kind}] {sample}")
+            w(f"  - {path} [{kind}] {sample}")
+    if v["v1_rewrites"]:
+        w(f"（提示，不参与封顶）V1 按同键改写放行 {len(v['v1_rewrites'])} 处——同一个 hunk 里"
+          "有类别与键都相同的新行，按原地改写算；键是表格首格或列表项开头的标签。机器只证明"
+          "了这一点，是不是同一条目请签发方核（前 10 条，全部见 --json 的 v1_rewrites）：")
+        for path, kind, key in v["v1_rewrites"][:10]:
+            w(f"  · {path} [{kind}] 键 {key}")
     if v["protected"]:
-        w(f"     V6 路径命中：{'、'.join(v['protected'][:10])}")
+        w(f"V6 路径命中：{'、'.join(v['protected'][:10])}")
     if v["auto_update_only"]:
-        w(f"     （提示，不参与封顶）触及 `auto-update` §受保护资产 但不在否决项 6 清单内"
+        w(f"（提示，不参与封顶）触及 `auto-update` §受保护资产 但不在否决项 6 清单内"
           f" {len(v['auto_update_only'])} 处：{'、'.join(v['auto_update_only'][:5])}"
           "——两张表是真子集关系，差集里的路径仍受 auto-update 约束，只是不自动封顶")
     if v["framework_assets"]:
-        w(f"     （提示，不参与封顶）触及会分发的框架资产 {len(v['framework_assets'])} 处"
-          "——「谁实现」那条轴据此定为恒 @dev，不由本脚本判")
+        w(f"（提示，不参与封顶）触及会分发的框架资产 {len(v['framework_assets'])} 处"
+          "——要不要独立验证由签发方按 §谁签发这次收口 的判据定，不由本脚本判")
     if result["pending"]:
-        w("     待裁决（**本轮真的产出了机器信号**，裁决为未命中之前本判定不是终局）：")
+        w("待裁决（**本轮真的产出了机器信号**，裁决为未命中之前本判定不是终局）：")
         for p in result["pending"]:
-            w(f"       ? {p}")
+            w(f"  ? {p}")
     else:
-        w("     待裁决：无——本轮 diff 没有产出需要人裁的机器信号")
-    w("     恒有的模型裁量项（**与本次 diff 无关，每次都要人判**，机器永远算不了）：")
+        w("待裁决：无——本轮 diff 没有产出需要人裁的机器信号")
+    w("恒有的模型裁量项（**与本次 diff 无关，每次都要人判**，机器永远算不了）：")
     for p in v["model_review"]:
-        w(f"       · {p}")
+        w(f"  · {p}")
     w("")
-    w("本脚本没验的：机器闸是否全绿（不跑 validate / doctor / close-check）；"
-      "通行证覆盖的真实性；爆炸半径判得对不对；上面那五条恒有的模型裁量项。")
+    w("本脚本没验的：签发类别判得对不对；机器闸是否全绿（不跑 validate / doctor / close-check）；"
+      "未提交改动与未声明的仓；上面那几条恒有的模型裁量项。")
     return "\n".join(out)
 
 
-def to_json(result, delta, slice_note, scan_summary):
-    v = result["segments"]["veto"]
+def to_json(result, delta):
+    v = result["veto"]
     return {
-        "tier": result["tier"],
+        "needs_user": result["needs_user"],
         "conditional": bool(result["pending"]),
-        "segments": {
-            "default_start": result["segments"]["default_start"],
-            "passport": {"ok": result["segments"]["passport"]["ok"],
-                         "lines": result["segments"]["passport"]["lines"]},
-            "floor": result["segments"]["floor"],
-            "veto": {k: v[k] for k in ("hit", "additions", "deletions", "size_total",
-                                       "size_cap", "binaries", "protected",
-                                       "auto_update_only", "framework_assets")},
-        },
+        "veto": {k: v[k] for k in ("hit", "additions", "deletions", "size_total",
+                                   "size_cap", "binaries", "protected",
+                                   "auto_update_only", "framework_assets")},
         "pending": result["pending"],
         "model_review": v["model_review"],
-        "gaps": result["gaps"],
-        "slice": slice_note,
-        "scan": scan_summary,
+        "slice": {label: {"since": r["since"], "diff_ref": r["diff_ref"],
+                          "files": len(r["files"])}
+                  for label, r in delta["repos"].items()},
         "v1_hits": [{"path": p, "kind": k, "sample": s} for p, k, s in v["v1_hits"]],
+        "v1_rewrites": [{"path": p, "kind": k, "key": s} for p, k, s in v["v1_rewrites"]],
     }
 
 
 # ---------- main ----------
 
 
+def _cli_refs(text):
+    """`hash` 或 `LABEL=hash,LABEL=hash` → parse_refs 吃的形态。"""
+    if text is None:
+        return None
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    if len(parts) == 1 and "=" not in parts[0]:
+        return parts[0]
+    out = {}
+    for p in parts:
+        label, sep, ref = p.partition("=")
+        out[label.strip() if sep else ROOT_LABEL] = ref.strip() if sep else label.strip()
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="signoff_tier_check.py",
-        description="吃 diff，吐「本次签发档 = X」及四段依据（默认起点 / 通行证 / 地板 / 封顶）",
+        description="吃一段钉死两端的 diff，吐否决项判定：命中即交用户拍板",
     )
     ap.add_argument("--project-dir", default=None, help="项目根；默认按 harness 解析")
-    ap.add_argument("--radius", type=int, choices=[1, 2, 3, 4], default=None,
-                    help="爆炸半径档位（模型判出的结果）；不给则按最严地板处理")
-    ap.add_argument("--since", default=None,
-                    help="切片起点 ref；不给则只看未提交改动")
-    ap.add_argument("--passport", default=None,
-                    help="通行证 JSON 文件路径，`-` 表示从 stdin 读")
-    ap.add_argument("--task", default=None, help="本轮任务 ID，用于判通行证是否跨任务")
+    ap.add_argument("--since", required=True,
+                    help="切片起点：一个 hash（项目根那个仓），或 LABEL=hash,LABEL=hash（根仓写 .）")
+    ap.add_argument("--diff-ref", default=None,
+                    help="切片终点，形态同 --since；缺省为各声明仓的当前 HEAD")
     ap.add_argument("--size-cap", type=int, default=DEFAULT_SIZE_CAP,
                     help=f"尺寸上限（additions+deletions），默认 {DEFAULT_SIZE_CAP}")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
@@ -822,97 +807,18 @@ def main(argv=None):
         print(f"[拒绝判定] 项目根不存在：{project_dir}", file=sys.stderr)
         return 1
 
-    passport_raw = None
-    if args.passport is not None:
-        try:
-            text = sys.stdin.read() if args.passport == "-" \
-                else Path(args.passport).read_text(encoding="utf-8")
-            passport_raw = json.loads(text)
-        except FileNotFoundError:
-            print(f"[拒绝判定] 通行证文件不存在：{args.passport}"
-                  "——声明了通行证却读不到，按「无通行证」处理会把不成立读成没声明，"
-                  "两者的下游动作不同", file=sys.stderr)
-            return 1
-        except Exception as e:
-            print(f"[拒绝判定] 通行证解析失败（{type(e).__name__}）：{args.passport}",
-                  file=sys.stderr)
-            return 1
-
-    patterns, index_gap = load_index_patterns(project_dir)
-    scan_gaps = []
-    if index_gap:
-        scan_gaps.append(
-            f"{index_gap} → 嵌套仓发现面为空。被主仓 ignore 的嵌套仓（框架仓是典型）"
-            "的改动不在本次判定内，尺寸与路径类判定在那一侧恒为 0")
-
-    delta = collect_delta(project_dir, patterns, args.since)
-
-    # 通行证 ref 要逐仓解析，把仓的绝对路径带给 check_passport
-    delta["_repo_abs"] = {
-        label: (project_dir / r["repo_rel"] if r["repo_rel"] else project_dir)
-        for label, r in delta["repos"].items()
-    }
-
-    if not delta["repos"]:
-        print("[拒绝判定] 一个 git 仓都没扫到——项目根不是 git 仓且未发现嵌套仓。"
-              "此时「零改动」与「看不见改动」无法区分，据此报绿就是假绿", file=sys.stderr)
+    delta, errors = collect_slice(project_dir, _cli_refs(args.since), _cli_refs(args.diff_ref))
+    if errors:
+        print("[拒绝判定] 切片声明不成立——看不全的切片据此报「未命中」就是假绿：", file=sys.stderr)
+        for e in errors:
+            print(f"  ✗ {e}", file=sys.stderr)
         return 1
 
-    for kind, label, detail in delta["notes"]:
-        if kind == "broken_nested_repo":
-            scan_gaps.append(f"嵌套仓 {label} 探测失败：{detail}")
-        elif kind == "git_failed":
-            scan_gaps.append(f"仓 {label} 的 `git {detail}` 失败——该类改动本次未收集")
-        elif kind == "since_ref_unresolved":
-            # **切片起点解析不到必须归到缺口，不能只印一行散文。** `--since` 是单个 ref
-            # 而项目可能是多仓：起点在仓 A 有效、在仓 B 无效时，B 只贡献未提交改动，
-            # 它在起点之后的**已提交**改动整段不进 delta——尺寸上限与否决项在 B 那侧
-            # 被少算，而「缺口：无」照样打出来。实测同一个任务用两个合法起点算出
-            # 1016（命中上限）与 96（不命中）两个相反答案。归到缺口即走「有缺口不得
-            # 降档」那条既有通道，方向 fail-safe，不另造一套并行机制。
-            scan_gaps.append(
-                f"切片起点在仓 {label} 解析不到（{detail}）——**该仓只贡献未提交改动**，"
-                "它在起点之后的已提交改动整段不在本次 delta 里，"
-                "尺寸上限与否决项在那一侧被少算")
-    for label, r in delta["repos"].items():
-        for e in r["errors"]:
-            scan_gaps.append(f"仓 {label} 取 diff 内容失败：{e}")
-
-    if args.since:
-        resolved = [l for l in delta["repos"] if l not in delta["since_unresolved"]]
-        if not resolved:
-            print(f"[拒绝判定] --since `{args.since}` 在扫描到的任何一个仓里都解析不到。"
-                  "切片起点无效时整个 delta 失去锚定，此时算出的档位是对一个未定义区间"
-                  "的判定", file=sys.stderr)
-            return 1
-        slice_note = [
-            f"`{args.since}`..HEAD ＋ 未提交改动（仓：{'、'.join(resolved)}）",
-            "起点由调用方给定；board 签注记录字段落地后应改由它记录的 hash 提供",
-        ]
-        # 「哪些仓解析不到」不在这里重说一遍——它已经是上面的缺口条目，且那条带后果。
-        # 同一事实两个表现层必漂，留带后果的那个。
-    else:
-        slice_note = [
-            "未提交改动（HEAD → 工作区，含 staged 与未跟踪）",
-            "**未给 --since**：本批尚无签注记录字段，切片起点由调用方自划（§12-08）。"
-            "已提交的改动不在本次判定内",
-        ]
-
-    nfiles = sum(len(r["files"]) for r in delta["repos"].values())
-    scan_summary = [
-        f"项目根：{project_dir}",
-        f"仓：{'、'.join(sorted(delta['repos']))}",
-        f"文件：{nfiles}",
-    ]
-
-    result = evaluate(delta, args.radius, args.size_cap, passport_raw, args.task,
-                      scan_gaps, runtime_protected(project_dir))
-
+    result = evaluate(delta, args.size_cap, runtime_protected(project_dir))
     if args.json:
-        print(json.dumps(to_json(result, delta, slice_note, scan_summary),
-                         ensure_ascii=False, indent=2))
+        print(json.dumps(to_json(result, delta), ensure_ascii=False, indent=2))
     else:
-        print(render(result, delta, slice_note, scan_summary))
+        print(render(result, delta))
     return 0
 
 

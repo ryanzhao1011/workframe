@@ -1,8 +1,8 @@
 # Workframe
 
-> 让 Claude Code（或 Codex）成为一个专属于你的产品团队，干活：需求、研发、测试、Prompt 各有专职角色，项目自带记忆和看板。装一次插件，新老项目都能用；一份源、两扇门，同一个项目可以同时挂两边。
+> 让 Claude Code（或 Codex）成为一个专属于你的产品团队：需求、研发、测试、Prompt 各有一套专属的纪律、技能和记忆，项目自带看板。装一次插件，新老项目都能用；一份源、两扇门，同一个项目可以同时挂两边。
 
-**Status:** v1.1.0 · [CHANGELOG](./CHANGELOG.md) · [![validate](https://github.com/ryanzhao1011/workframe/actions/workflows/validate.yml/badge.svg)](https://github.com/ryanzhao1011/workframe/actions/workflows/validate.yml)
+**Status:** v1.2.0 · [CHANGELOG](./CHANGELOG.md) · [![validate](https://github.com/ryanzhao1011/workframe/actions/workflows/validate.yml/badge.svg)](https://github.com/ryanzhao1011/workframe/actions/workflows/validate.yml)
 
 ## 肺腑之言
 
@@ -20,7 +20,8 @@ Workframe 就是这套沉淀的开源版。希望它能帮你少走弯路，通�
 
 - **即插即用**——把项目资料直接丢给它，自动解析、分类、归档、相互关联索引，快速产出一个完善可用的项目文件夹。
 - **写文档再也不操心**——内置我实践提炼的 PRD 框架，能根据你需求文档的写法进行技能自动优化，对齐你的交付标准。
-- **4 个内置角色，各司其职**——@pm 拆/写需求，@dev 写代码，@qa 把控质量，@prompt-eng 调 prompt，每个人都有专属技能包。
+- **4 个内置角色，一个对话全都用得上**——需求、研发、测试、Prompt 四个领域各有专属技能包和记忆，对话做到哪一块，就自动带上哪一块积累的经验；关键改动再交给一个没看过实现过程的 @qa 独立复核。
+- **模块提醒按需出现**——产品口径放权威文档，模块的作业提醒写在 `module-memory.md`；碰到该模块时才由 hook 带进上下文，提醒里写何时复查什么、动手前读哪里。文件按需创建，每份不超过 1,500 字符，详见 [记忆系统](./docs/concepts.md#记忆系统)。
 - **越用越懂你**——自动从对话里提炼有价值的经验沉淀为记忆，agents 和 skills 跟着你不断进化，纠正过的错不会再犯第二遍。
 - **产研双向互通**——支持把代码解析成文档、和需求关联起来，写需求快到飞起；快去找你的领导开放代码权限，体验不一样的产研协作。
 
@@ -68,7 +69,7 @@ claude plugin install workframe-launcher@workframe
 |---|---|
 | `/core:audit` | 看框架最近自动做了哪些维护 |
 | `/core:rollback` | 回滚某次自动变更 |
-| `/core:memory-log` | 看记忆层的提升 / 衰减 / 纠正流水 |
+| `/core:memory-log` | 看记忆层的提升 / 衰减 / 纠正 / 迁出流水，含模块纠正去向 |
 | `/core:maintenance-review` | 维护流程入口（librarian 整理、提案审批，每步你确认） |
 
 ## 几件先知道为好的事
@@ -99,7 +100,7 @@ cd <你的项目> && claude plugin update core@workframe -s project
 
 面向 Windows 11 / macOS / Linux 设计。
 
-Windows 11 已完成真实会话全流程 E2E（覆盖全新创建、存量接入、升级、断点续做等九场景）与 `validate.py` 全量验证（当前 218 项检查，随新增检查增长）。
+Windows 11 已完成真实会话全流程 E2E（覆盖全新创建、存量接入、升级、断点续做等九场景）与 `validate.py` 全量验证（当前 216 项检查，随新增检查增长）。
 
 macOS / Linux 的兼容优化尚不够完整，后续会持续改进——遇到问题欢迎提 issue。
 

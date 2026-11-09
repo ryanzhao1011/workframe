@@ -63,10 +63,11 @@ module-close-check — 功能收口时的确定性检查命令（独立 CLI，�
 其纯读函数（parse_code_paths / discover_nested_repos / load_stale）；git 查询自建
 薄封装，失败一律降级为该项 warn，不炸整个命令。
 
-本文件刻意不包 UTF-8 流（在 validate `check_utf8_stream_wrap_symmetric` 的豁免
-白名单里）：main() 先 importlib 加载 check-stale-modules.py，那边是模块级包装，
-加载那一刻两条流已经包好；自己再包就是两个 TextIOWrapper 抢同一个 buffer。
-加载前的输出（argparse 报错/usage）只含 GBK 可编码字符，不带 ✓✗ 类符号。
+本文件不新建 TextIOWrapper（在 validate `check_utf8_stream_wrap_symmetric` 的豁免
+白名单里）：main() 开头对两条流原地 reconfigure 成 UTF-8。check-stale-modules.py
+加载时不再改宿主的流，所以这里必须自己设——不设时，中文 Windows 上被管道接走的输出
+（模型经 shell 调用正是这种）打印 ✓✗ 当场 UnicodeEncodeError。reconfigure 不新建
+wrapper，与任何已有的一层包装共存都不会抢 buffer。
 
 已知盲区（陈述可证伪）：检查 7 无法分辨「最新账本段属于哪条工作线」——同日早前
 收口写过账、本轮忘写时会假绿；确定性检查判不了语义归属，此项仍靠 QA 与纪律。
@@ -114,10 +115,10 @@ def _load_csm(project_dir):
     必须在设好 CLAUDE_PROJECT_DIR **之后**加载：它的 PROJECT_DIR/STALE_FILE 等
     路径常量在 import 期冻结，加载前不设 env，从子目录跑 CLI 时全部检查静默空转。
 
-    **只 exec 一次，之后换 project_dir 走属性重定向**：它的包流在 import 期执行，
-    重复 exec_module 会把已包装的流再包一层——两个 TextIOWrapper 抢同一个 buffer，
-    先被回收的关掉 buffer，另一个 `ValueError: I/O operation on closed file` +
-    lost sys.stderr（本脚本首跑实测炸过，不是假想）。
+    **只 exec 一次，之后换 project_dir 走属性重定向**：它曾在 import 期包流，
+    重复 exec_module 时两个 TextIOWrapper 抢同一个 buffer，先被回收的关掉 buffer，
+    另一个 `ValueError: I/O operation on closed file` + lost sys.stderr（本脚本首跑
+    实测炸过）。现在它 import 时不碰流，但路径常量仍在 import 期冻结，单次 exec 照旧。
     """
     global _CSM
     p = Path(project_dir).resolve()
@@ -1382,12 +1383,12 @@ def trace_criterion_c(project_dir, hit_subs, today=None):
     board = project_dir / "projects" / "board.yaml"
     if not board.is_file():
         return "na", "看板 projects/board.yaml 不存在", 0
-    available, detail = _load_yaml_probe().pyyaml_status()
+    probe = _load_yaml_probe()
+    available, detail = probe.pyyaml_status()
     if not available:
         return "na", f"PyYAML 不可用（{detail}），看板读不了", 0
     try:
-        import yaml
-        data = yaml.safe_load(board.read_text(encoding="utf-8"))
+        data = probe.safe_load(board.read_text(encoding="utf-8"))
     except Exception as e:
         return "na", f"看板解析失败（{type(e).__name__}）", 0
     tasks = data.get("tasks") if isinstance(data, dict) else None
@@ -1430,7 +1431,7 @@ def check_discipline_trace(project_dir, csm, subs, ledger_findings, verdict=None
       - 升级计数：只有整体 exit 0 的运行进计数；「收口身份」取账本最新条目头，同一身份取
         最后一次运行，无账本时退回指纹。指纹是各仓 HEAD ＋ porcelain，porcelain 对内容不敏感
         ——同一批脏文件、内容不同的两个状态合成同一个指纹。
-      - 标记的 `marked_by` 验证不了是谁敲的命令（与 `self_signoff` 事件同构）。
+      - 标记的 `marked_by` 验证不了是谁敲的命令——它是可分组的声明，不是身份证明。
       - 状态目录没被 git 忽略的项目，首次写计数日志会改变 porcelain，从而改变指纹——新增的
         不止日志本身，还有它的锁文件 `discipline-trace-log.jsonl.lock`（锁超时时另有 spill 文件）。
       - 计数不切割起点：装上本版之后的真实收口运行都计入。
@@ -1777,7 +1778,17 @@ def run_all(project_dir, trace=None):
     return results
 
 
+def _utf8_streams():
+    """原地把两条流改成 UTF-8；测试把流换成 StringIO 时没有 reconfigure，跳过即可。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv=None):
+    _utf8_streams()
     ap = argparse.ArgumentParser(
         prog="module-close-check",
         description="功能收口确定性检查：stale/路径存在性/基准同值与刷新/仓状态/code-map 覆盖率/"

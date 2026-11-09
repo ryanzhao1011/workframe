@@ -212,7 +212,7 @@ def build_workorder():
         lines.append(f"先 Read `{skill_md}` 获取完整 SOP——**不要用 Skill 工具调用**"
                      f"（-p 会话下 Skill 工具不注入正文，2026-08-06 实测），严格按文中流程执行：")
         lines.append("D/U/R/A 评估 → 融合 SOP → **已处理条目整段移入同目录 notes-archive.md（归档制，勿直接删）** → "
-                     "每条提升以 {scope, summary, provenance 来源归类} 记入 manifest `promotions`，对应的 memory_backlog 信号 ID 记入 `close_pm`"
+                     "每条提升以 {scope, summary, provenance 来源归类} 记入 manifest `promotions`（写进一条已有 MEMORY 条目的另带 `into`），对应的 memory_backlog 信号 ID 记入 `close_pm`"
                      "（sidecar 与事件由 --commit 代码生成，勿手写）。")
         for scope, n in sorted(backlog.items()):
             lines.append(f"- [ ] {scope}：{n} 条待评估（L1 提升/归档照常；L2 候选记入 manifest `l2_candidates`——"
@@ -260,8 +260,8 @@ def build_workorder():
 
     lines += ["", "## manifest 格式（Write 到 logs/maintenance-commit.json，所有键可省略）", "",
               "```json", "{",
-              '  "promotions": [{"scope": "pm", "summary": "<提升条目一句话摘要>", "provenance": "<可选：user-confirmed|inferred|external；**缺省 inferred**——user-confirmed 在衰减规则里等同用户背书、享受豁免，只在用户当场确认过时才填>"}],',
-              '  "l2_candidates": [{"scope": "pm", "summary": "<候选一句话>", "source": "<notes 条目>", "target": "<建议落点文件+章节>"}],',
+              '  "promotions": [{"scope": "pm", "summary": "<提升条目一句话摘要>", "provenance": "<可选：user-confirmed|inferred|external；**缺省 inferred**——user-confirmed 在衰减规则里等同用户背书、享受豁免，只在用户当场确认过时才填>", "into": "<可选：并进 / 归纳进一条已有 MEMORY 条目时填它在 sidecar 里的 entry_key——代码沿用这个 key、不新建 sidecar；新条目不填>"}],',
+              '  "l2_candidates": [{"scope": "pm", "summary": "<候选一句话>", "source": "<notes 条目>", "target": "<建议落点文件+章节>（<操作，按 librarian 第 2.5 步第 3 条>）"}],',
               '  "close_pm": ["PM-YYYYMMDD-NNN"],',
               '  "extra_events": [{"type": "proposal_verified", "...": "按 event-schema 补全字段, ts 可省略"}],',
               '  "done": ["pm", "PM-YYYYMMDD-NNN", "<其他已完成条目的标识子串>"],',
@@ -466,6 +466,33 @@ def commit_manifest():
                 # 批处理是模型判断的产物，inferred 才是它的真实来源等级
                 # （user-decree 仅 correction-detection 写，批处理不产）。
                 prov = "inferred"
+            into = p.get("into")
+            if into is not None:
+                # 并进 / 归纳进一条已有 MEMORY 条目（librarian 第 2.5 步第 7 条）：沿用它的 key、不写 sidecar、
+                # 只补本次 memory_promoted。key 对不上就 fail-closed——退回「新 key」会造出一条三账判幽灵的 sidecar
+                target = entries.get(into) if isinstance(into, str) else None
+                if not (isinstance(target, dict) and target.get("scope") == scope and not target.get("protected")):
+                    why = ("不在 sidecar 里" if not isinstance(target, dict) else
+                           f"scope 是 {target.get('scope')!r} 不是 {scope!r}" if target.get("scope") != scope else
+                           "是 protected 条目（[纠正] 不改写）")
+                    print(f"[maintenance --commit] promotions 的 into {into!r} {why}——未提交任何记账，"
+                          f"manifest 保留。改成该 scope 现有、非 protected 条目的 entry_key，或去掉 into 记成新条目后重跑。",
+                          file=sys.stderr)
+                    return 1
+                frag = _normalize_key_fragment(summary)
+                if any(e.get("entry_key") == into and str(e.get("ts") or "")[:10] in dates
+                       and _same_summary(e.get("summary"), summary, frag) for e in known_events):
+                    skipped_existing += 1                  # 重跑同一份 manifest：这条已记过
+                    continue
+                ev = {"ts": now, "type": "memory_promoted", "scope": scope,
+                      "entry_key": into, "summary": summary[:80], "source": "notes.md",
+                      "protected": False, "provenance": prov}
+                if scope != "shared":
+                    ev["role"] = scope
+                events_out.append(ev)
+                known_events.append(ev)
+                new_events += 1
+                continue
             key, write_sidecar, write_event = _promotion_decision(scope, summary, entries, known_events, dates)
             if key is None:
                 taken = set(entries) | {e.get("entry_key") for e in known_events}

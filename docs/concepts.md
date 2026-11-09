@@ -30,7 +30,7 @@ Claude Code 在启动会话时会从三个层级加载 agents / skills / hooks /
   - **8 docs/publishing skills**：`prd-writer` / `html-demo` / `screenshot` / 4 个 `obsidian-*`（`obsidian-doc-structure` / `obsidian-link-audit` / `obsidian-safe-write` / `obsidian-history-check`）/ `document-norms`，与平台无关；外部发布器 `feishu-publish` / `notion-publish` 等保持项目级
   - **7 modules-system skills**：`module-init` / `code-to-doc` / `module-index-refresh` / `migrate-to-modules` / `doc-graph-health` / `requirement-archiving` / `material-intake`
 - 必载纪律：由 SessionStart / SubagentStart 直接注入上下文，源在 `plugins/core/context/{both,main,sub}/`（领域无关；项目目录里不落文件）
-- 11 段 hook 链路：SessionStart（含 memory-ask 询问式记忆整理触发）/ **Setup**（--maintenance 维护批处理工单聚合）/ UserPromptSubmit / **PostToolUse**（on Edit/Write/NotebookEdit 命中代码或 submodule.yaml → 反向索引 + stale 标记）/ Stop / **SubagentStart**（角色记忆注入：shared 全量 + role 按目录映射）/ SubagentStop / **StopFailure**（turn 级 API 失败审计）/ **ConfigChange**（配置变更审计）/ SessionEnd / **UserPromptExpansion**（用户直敲 `/skill-name` 时记 `skill_invoked`）
+- hook 链路（挂载关系以 `hooks.json` 为准）：SessionStart（含 memory-ask 询问式记忆整理触发）/ **PostCompact**（轮换模块提醒的主线程去重周期，零输出，下次触碰再投）/ **Setup**（--maintenance 维护批处理工单聚合）/ UserPromptSubmit / **PreToolUse**（on Agent：主会话派发 `core:*` 角色带 `name` 即拦，只挂 Claude Code 门）/ **PostToolUse**（Edit/Write/NotebookEdit 命中代码或 submodule.yaml → 反向索引 + stale 标记；文件工具、shell 碰到有模块记忆的模块 → 投递作业提醒，识别边界见下文）/ Stop / **SubagentStart**（角色记忆注入：shared 全量 + role 按目录映射；fork 不注入，它继承主会话上下文）/ SubagentStop / **StopFailure**（turn 级 API 失败审计）/ **ConfigChange**（配置变更审计）/ SessionEnd / **UserPromptExpansion**（用户直敲 `/skill-name` 时记 `skill_invoked`）
 
 ### modules/ 体系
 
@@ -50,10 +50,20 @@ modules/ 体系把"功能模块"作为产品研发的一等公民：`projects/mo
 
 - Claude Code 的市场注册表 `~/.claude/plugins/known_marketplaces.json`——装机时补登 workframe 市场（已登记同一个源时一个字节不动）
 - 这台机器装了 `codex` 时，Codex 的用户级 `config.toml`——装机时写本插件 hook 的信任、本项目的 trust，并把本插件的 `enabled` 改为 `false`（插件从此只在跑过 Codex 门的项目里加载）。**这一步代你信任本插件的全部 hook，而受信 hook 脱离沙盒执行**。门同时经 `codex plugin` 命令登记市场、装插件——市场登记与启用位写在同一份 `config.toml` 里，插件文件落在 `<CODEX_HOME>/plugins/cache/`——并在 `<CODEX_HOME>/.workframe/` 下写一份种信任记录（审计用）
-- **升级之后**：Codex 会话启动时，本插件的种信任 hook 会把此刻未受信的全部本插件 hook（升级后变动过的，以及新版本新增、从没被信任过的）写成受信（同一份 `config.toml`，并更新上面那份种信任记录），在会话里明说信任了哪几条、下次会话生效，**不再问你**——接 Codex 门即视为同意这一点（经 launcher 装机时，确认页的 Codex 门那一行会写明这一点；直接敲 `workframe-door --codex` / `--backfill` 时，写入前的打印目前还没写这一点）。这份信任按 `CODEX_HOME` 共用（通常即整台机器）：同一个 `CODEX_HOME` 下任何一个接了 Codex 门的项目开会话都会补种，不想要就得关掉你接过 Codex 门的每个项目的门（见 [setup-guide.md](./setup-guide.md)「只用一门时怎么关另一门」）
+- **升级之后**：Codex 门升级请运行 `workframe-door --upgrade`，成功后重开这个项目的 Codex 会话。Windows、codex-cli 0.166.0 实测：插件内容变化可使本插件全部 hook 失信；仅重开会话不能恢复信任。裸跑 `codex plugin marketplace upgrade` 不包含恢复信任，已裸升级的也请运行 door 完成恢复。信任记录按 `CODEX_HOME` 共用；一次 door 写入可影响同一 home 下使用同一插件的其他项目。项目启用、项目 trust 与角色文件仍分别检查。
 - `/core:onboard` 只有在你选「当前用户全局」并二次确认后，才写 `~/.claude/settings.json`（见 [onboarding.md](./onboarding.md)）
 
 前两处：经 launcher 装机时都在确认页的动作清单里逐项点名、确认前不写；直接在命令行跑 `workframe-door --codex` / `--backfill` / `--upgrade`（后者不是装机，但同样重写上面那份 `config.toml` 里的 hook 信任）时没有确认页——授权就是你亲手敲了这条命令（`--codex` 在写入之前会先打印要信任哪几条 hook、要改你用户配置里的哪一键，见 [setup-guide.md](./setup-guide.md) §Codex 门）。
+
+## 角色是领域，不是派出去的人
+
+出厂角色（@pm / @dev / @qa / @prompt-eng）各是一个**工作领域**：每个领域有自己的契约（`agents/<role>.md`：工程纪律、产物要求、状态流转）、技能包与角色记忆。**谁来做这些活**是另一件事：
+
+- **缺省由主会话做完整条链路**——方案、实现、跑闸、文档同步、记账。做到某个领域的活时，hook 把该领域的角色记忆投给主会话（见下文 §记忆分工，按「谁消费」）
+- **只在少数情形派子 agent**：独立验证、权限隔离、可独立并行的大块、大量探索而只要结论。「这个角色更懂」不构成派发理由
+- 你在消息开头写 `@角色名`，就是点名派给那个角色的子 agent
+
+判据的权威文本是每会话注入的主会话纪律（§派发子 agent，源文件 [`10-main-protocol.md`](../plugins/core/context/main/10-main-protocol.md)），本节只做导航。
 
 ## 项目级同名 agent：并存，不是覆盖
 
@@ -64,7 +74,7 @@ modules/ 体系把"功能模块"作为产品研发的一等公民：`projects/mo
 **实际行为**（Claude Code 2.1.285 实测）：plugin 的角色带命名空间，全名是 `core:pm`；项目这份叫 `pm`。两个名字不同，所以**不是覆盖而是并存**——会话的 agent 列表里 `core:pm` 与 `pm` 同时在。
 
 - 你写 `@pm`、或主会话派 `pm`，用的是项目这份；派 `core:pm`，用的仍是插件那份
-- 你没点名、只描述任务时，由主会话按两者的 description 挑一个。挑哪个是模型行为，不保证每次都选项目这份——要让它稳定，在 `AGENTS.md` 的项目级角色段写明这类活交给 `pm`、不用 `core:pm`
+- 你没点名、只描述任务，而主会话判定这件事该派子 agent 时，由它按两者的 description 挑一个（多数任务主会话自己做，不派）。挑哪个是模型行为，不保证每次都选项目这份——要让它稳定，在 `AGENTS.md` 的项目级角色段写明这类活交给 `pm`、不用 `core:pm`
 - 两者收到的子 agent 纪律注入与 `pm` 角色记忆相同（`SubagentStart` hook 按去掉命名空间后的角色名取记忆目录）
 - Codex 门的角色由插件 `agents/*.md` 生成，不读 `.claude/agents/`；Codex 侧怎么定制见 [setup-guide.md](./setup-guide.md) §角色与项目配置
 
@@ -103,29 +113,32 @@ modules/ 体系把"功能模块"作为产品研发的一等公民：`projects/mo
 
 ```
 <project>/.workframe/agent-memory/<role>/
-├── MEMORY.md        # 高置信事实（role ≤8000 字符 / shared ≤4000），SubagentStart hook 自动注入
+├── MEMORY.md        # 高置信事实（role ≤8000 字符 / shared ≤4000），子 agent 由 SubagentStart hook 注入；主会话由 hook 投递
 └── notes.md         # 低置信笔记缓冲区，无行数上限，按需读取
 ```
 
 由 `librarian` skill 维护：notes → MEMORY 的非冲突提升可自动执行；超容量或低置信条目只生成降级候选，需 `/core:maintenance-review` 确认后执行；永不清理 `[纠正]` 标记的条目。
 
-### 两套记忆，按「谁消费」分工
+### 记忆分工，按「谁消费」
 
 主 Claude 直做工作时不经过 subagent，因此它有自己的一层记忆：
 
 | 记忆 | 消费者 | 装什么 | 注入时机 |
 |---|---|---|---|
 | **auto-memory**（Claude Code 官方记忆目录） | 主 Claude | 用户偏好、协作习惯、项目状态**指针** | 主会话启动，官方注入 |
-| `.workframe/agent-memory/<role>/` | 单个角色 | 该角色的执行经验 | 该 subagent 被调度时，SubagentStart hook 注入 |
-| `.workframe/agent-memory/shared/` | ≥2 个角色 | 跨角色权威事实（写入条件更严） | 每个 subagent 启动时全量注入 |
+| `.workframe/agent-memory/<role>/` | 单个角色 | 该角色的执行经验 | 该 subagent 被调度时，SubagentStart hook 注入；主会话进入该域 skill（dev 另含首次改模块代码路径）时由 hook 投递——Claude Code 门是调用 Skill 工具或用户输入 `/skill`，Codex 门是读该 skill 的 `SKILL.md` 或用户在提示里写 `$skill`；fork 只有派生前父会话投过的那些，此后首次进入某域只给一行路径指针 |
+| `.workframe/agent-memory/shared/` | ≥2 个角色 | 跨角色权威事实（写入条件更严） | 每个 subagent 启动时全量注入（fork 除外，开场投递的那份已在它继承的上下文里）；主会话开场全量投递 |
+| `projects/modules/<basic>/<sub>/module-memory.md`（跨子模块放基础模块级） | 在该模块动手的人 | 作业提醒与必读入口，不写产品结论 | 文件存在且该线程碰到模块时由 hook 投递；主线程每压缩周期一次，压缩后再次碰到才重投；子线程压缩后暂不恢复 |
 
-**落点判据是「未来谁要读它」，不是「这次谁做的」**——主 Claude 做 dev 域的活，经验该落 dev 域给未来的 @dev 读。业务知识（需求口径 / 方案结论）一律进 `projects/` 文档，记忆里至多留一行指针。完整判据在每会话注入的必载纪律里（§Step 2 — 经验沉淀，源文件 [`20-protocol-common.md`](../plugins/core/context/both/20-protocol-common.md)；两套记忆分工表在同一批注入片的「两套记忆分工」一节，源文件 [`50-roles-and-flow.md`](../plugins/core/context/both/50-roles-and-flow.md)）。
+**落点判据是「未来谁要读它」，不是「这次谁做的」**——主 Claude 做 dev 域的活，跨模块执行经验该落 dev 域给未来的 @dev 读。产品或系统的定义与规格进需求 PRD，跨需求进模块 `shared/`；技术设计理由仍进 ADR。只在该模块动手时要用的提醒进 `module-memory.md`，不新增 role/shared 指针；既有指针继续有效，迁出仍需用户确认。完整判据在每会话注入的必载纪律里（§Step 2 — 经验沉淀，源文件 [`20-protocol-common.md`](../plugins/core/context/both/20-protocol-common.md)；记忆分工表在同一批注入片的「记忆分工」一节，源文件 [`50-roles-and-flow.md`](../plugins/core/context/both/50-roles-and-flow.md)）。
 
-条目跨记忆域搬家时记 `memory_migrated` 事件，与同域内 notes→MEMORY 的 `memory_promoted` **分立不混用**：后者是消费方判断「这个域多久没消化 notes 了」的依据，混用会污染这个信号。
+模块记忆按需创建，`module-init` 不建空文件，也不建需求级版本。每份 ≤1,500 字符，一行一条 `- 做 X 时 → 要做 Y / 必读 Z`，环境与工序参数可写；改模块文档时复查，`librarian` 定期扫描。投递头标出来源路径与相对路径基准，并说明「这是作业提醒，与文档冲突时信文档」；条目内相对路径以该文件所在目录为基准，`projects/...` 从项目根解析。hook 在工具调用后提醒：shell 只识别模块文档路径，文件工具与 `apply_patch` 还通过 `code_paths` 反查；放不下全文时只给路径，后续触碰会重试，不是写前拦截。投递机制与两门取证方法见 [context-injection.md](./context-injection.md#模块记忆投递)。
+
+条目跨记忆域搬家时记 `memory_migrated` 事件，与同域内 notes→MEMORY 的 `memory_promoted` **分立不混用**：后者是消费方判断「这个域多久没消化 notes 了」的依据，混用会污染这个信号。经用户确认从角色记忆移到文档或模块记忆时用 `memory_moved_out`，保留源 key、归档路径与目标路径；模块纠正用 `user_correction` 的 `scope=module`，写模块与完整 `target_path`，不写 MEMORY、sidecar 或 `entry_key`。文档纠正随版本演进，追溯靠 git、变更记录与事件，`[纠正]` 的永不清理只保护记忆条目。
 
 ### 三账本对齐
 
-记忆层有三份账，必须互相对得上：`MEMORY.md`（人读正文）↔ `memory-index.json`（sidecar：provenance / protected / created_at）↔ `events.jsonl`（变动流水）。
+角色记忆层有三份账，必须互相对得上：`MEMORY.md`（人读正文）↔ `memory-index.json`（sidecar：provenance / protected / created_at）↔ `events.jsonl`（变动流水）。模块文档与 `module-memory.md` 不建 sidecar；迁出事件作为旧 key 的合法去向证据。
 `plugins/core/eval-cases/memory-pipeline/scripts/assert_three_ledgers.py` 做四向互查，退出码即违例数——记忆改坏时它比人眼先发现。
 
 **记忆默认进 git**（别和下一段的"不进 Plugin"混淆——那说的是跨项目共享，这说的是版本管理）：记忆是跨会话积累的资产，误删或改坏无法重建，进 git 才有回溯与多端同步。同进 git 的还有 `.workframe/state/memory-index.json`——记忆的 sidecar，存 `provenance` / `protected` / `created_at`，`[纠正]` 条目的保护标记就在里面，同样无法从正文重算。它虽住在整体不进 git 的 `.workframe/state/` 下，`.gitignore` 用 `.workframe/state/*` + `!.workframe/state/memory-index.json` 的成对写法单独放行（不能简写成 `.workframe/state/`，那样 git 会静默无视例外行）。
@@ -153,14 +166,15 @@ tasks:
     ...
 ```
 
-研发任务有强制状态流转：`pending → in_progress → pending_qa → completed`，其中 `pending_qa → completed` 在角色侧只能由 `@qa` 签发。主 Claude 自签是另一条通道，由**四段闸门**（默认起点 → 通行证 → 地板 → 封顶）判定准入。签发档位从严到松是：**@qa 完整验证 → 轻签注 → 主 Claude 自签**；封顶命中时另交用户拍板。四段依次算：
+研发任务有强制状态流转：`pending → in_progress → pending_qa → completed`，其中 `pending_qa → completed` 在角色侧只能由 `@qa` 签发。主 Claude 自签是另一条通道，分两类：
 
-- **默认起点**：恒为「@qa 完整验证」——没有任何独立视角看过的东西，默认就该被独立看一次
-- **通行证**：一份覆盖**本轮改动**（上一个签发点到现在的 diff）的独立结论。它是唯一能让档位往下降的东西，没有就停在默认起点
-- **地板**：按改动的爆炸半径算出的最低档，通行证再好也降不到它下面。爆炸半径是改动影响面的分级（1–4），由模型判、机器只读取值：档 4 降不下去，档 3 最低到轻签注，档 1–2 可到自签；没声明按最严处理
-- **封顶**：命中六条否决项之一（结构化条目删除 / 发版动作 / 判定命题被推翻 / 产品决策 / 两个独立结论冲突 / 受保护资产的契约变更），一律交用户拍板，无论前三段算出什么
+- **主会话自理**：改动错了主会话自己验得出来——主会话实现、自行决定验到什么程度，然后签发
+- **需要独立验证**：改的东西本身负责判断对错（闸、校验、测试、评分标准）、影响核心链路且出错难发现或难回收、或主会话自己拿不准——交一个与实现方没有共享上下文的验证方（新 @qa、另一个模型、外部 agent）验过再签
+- **两类之上**：命中六条否决项之一（结构化条目删除 / 发版动作 / 判定命题被推翻 / 产品决策 / 两个独立结论冲突 / 受保护资产的契约变更），一律交用户拍板
 
-**自签档默认开启**（`.workframe-config.json` 的 `signoff.self_signoff_enabled` **缺键即 true**；要求更严的项目显式写 `false`）。详见 [`task-management` 的 SKILL.md](../plugins/core/skills/task-management/SKILL.md) 与必载纪律 §谁签发这次收口（源文件 [`10-closeout.md`](../plugins/core/context/both/10-closeout.md)）。
+签注一律写成映射形态，看板写入 hook 按签注里钉死的提交区间自己重算否决项。类别由模型判，机器不判。
+
+**自理默认开启**（`.workframe-config.json` 的 `signoff.self_signoff_enabled` **缺键即 true**；要求更严的项目显式写 `false`）。详见 [`task-management` 的 SKILL.md](../plugins/core/skills/task-management/SKILL.md) 与必载纪律 §谁签发这次收口（源文件 [`10-closeout.md`](../plugins/core/context/both/10-closeout.md)）。
 
 ## 收口闸
 

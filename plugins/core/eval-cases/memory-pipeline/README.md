@@ -31,7 +31,7 @@ J11 于 2026-08-27 新增（补 librarian 关信号后的抑制闭环），**落
 
 | # | 验什么 | 形态 | 文件 |
 |---|---|---|---|
-| J1 | 纠正写入分流（角色 supersede / 主 Claude 层双消费） | 真实会话 | cases/J1-correction-write.md |
+| J1 | 纠正写入分流（角色 supersede / 主 Claude 层双消费 / 模块权威文档） | 真实会话 | cases/J1-correction-write.md |
 | J2 | 写时 A.U.N. 同主题查重 | 真实会话（与 J1 合并） | cases/J2-aun-write.md |
 | J3 | 开场卡闸门矩阵（首跑 8 断言；F4b 修复后含入口闸三态） | 脚本直调 + 真实 SessionStart | cases/J3-ask-gates.md |
 | J4 | librarian 开场卡消费 | 真实会话 --resume | cases/J4-librarian-consume.md |
@@ -40,7 +40,7 @@ J11 于 2026-08-27 新增（补 librarian 关信号后的抑制闭环），**落
 | J7 | 自迭代 baseline 代码派生（A/B 两 fixture——断言 2 是兜底信号，与 1/3 互斥） | 真实 **Stop** 或脚本直调 | cases/J7-baseline-derive.md |
 | J8 | subagent 记忆注入三态 | 真实会话双探针 | cases/J8-subagent-inject.md |
 | J9 | 跨会话状态流转 | 多会话累积 + 读账 | cases/J9-cross-session.md |
-| J10 | 三账对齐终查 | 脚本 | cases/J10-three-ledgers.md |
+| J10 | 三账对齐终查（含迁出证据与无 sidecar 的模块纠正） | 脚本 | cases/J10-three-ledgers.md |
 | X1 | 同消息命中多 rule 不重复记账 | 真实会话（与 J1 合并） | cases/X1-multi-rule.md |
 | X2 | maintenance flag 撞车双向 | 脚本直调 | cases/X2-flag-collision.md |
 | X3 | dormant 全链静默 | 脚本直调 | cases/X3-dormant-silence.md |

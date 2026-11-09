@@ -80,7 +80,8 @@ NOTES_STALE_DAYS = 30         # 距上次 memory_promoted 超过此天数且 not
 #             用户，按角色分会因事件稀疏而失真（见该脚本内注释）
 # 同一份数据两处结论不同属正常，别把其中一个改成另一个。
 ROLE_MEMORY_MAX_CHARS = 8000     # 单角色 MEMORY.md 字符预算（≈5.6k tok；行数检查已退役——单行超长可钻空，字符才反映注入开销）
-SHARED_MEMORY_MAX_CHARS = 4000   # shared MEMORY.md 字符预算（SubagentStart 注入所有 agent，预算更紧）
+SHARED_MEMORY_MAX_CHARS = 4000   # shared MEMORY.md 字符预算（CC 门主会话开场全文投递 ＋ SubagentStart 注入所有 agent，预算更紧）
+MODULE_MEMORY_MAX_CHARS = 1500   # 基础模块 / 子模块作业提醒，按完整文件的 Python len() 计
 AUTO_MEMORY_ENTRY_MAX_CHARS = 3000   # auto-memory 单条字符预算（对应主会话注入片 auto-memory 写入纪律 ≤2k token）
 AUTO_MEMORY_INDEX_MAX_LINES = 80     # auto-memory MEMORY.md 索引行数上限（条数管索引成本）
 TOKEN_PER_CHAR = 0.7          # CJK 文本 token 粗估系数（仅展示用）
@@ -416,7 +417,7 @@ def check_data_yaml_parse(ctx):
     差别只在解析器与文件集（那边逐行 JSON 读 events.jsonl，这边整份 YAML）。
 
     **为什么 `board.yaml` 必须在这里**：它是全框架**唯一**一个真有真解析器消费方的
-    数据文件（`recompute_board_summary.py` 用 `yaml.safe_load` 读它），而那条路径的
+    数据文件（`recompute_board_summary.py` 经 `_yaml_probe.safe_load` 读它），而那条路径的
     失败处置是降级逐行解析。也就是说这类畸形在 board.yaml 上今天就会发生，且发生在
     唯一的真解析器消费方身上——最该被看住的恰恰是它。
 
@@ -495,9 +496,9 @@ def check_data_yaml_parse(ctx):
                     if "ReaderError" in info else
                     "。常见成因：双引号标量里有未转义的裸双引号导致标量提前终止、"
                     "用 tab 缩进、或值里有未加引号的特殊字符")
-            extra = ("。**board.yaml 尤其要紧**：`recompute_board_summary.py` 用真解析器"
-                     "读它，解析失败会落进逐行降级路径，summary 数字可能与真解析器"
-                     "的读数不一致" if label.endswith("board.yaml") else "")
+            extra = ("。**board.yaml 尤其要紧**：`recompute_board_summary.py` 与签发检查都用真解析器"
+                     "读它，读不进时 summary 重算整次跳过、签发检查不做任何校验"
+                     if label.endswith("board.yaml") else "")
             out.append(("error", f"{label} **不是合法 YAML**：{info}{hint}{extra}"))
     if not [x for x in out if x[0] == "error"]:
         # 有跳过时**不发 ok**：一条 `✓ 0/1 份可解析` 读起来像「都查过了」，
@@ -545,11 +546,11 @@ def check_notes_backlog(ctx):
 
 
 def check_memory_capacity(ctx):
-    """MEMORY.md 容量：字符预算（role/shared 分档）+ token 估算。"""
+    """MEMORY.md 与有效模块的 module-memory.md 容量：字符预算 + token 估算。"""
     P = ctx["paths"]
-    if not P.memory.is_dir():
-        return [("info", f"agent-memory/ 不存在{_no_data_why(P)}")]
     out, sizes = [], []
+    if not P.memory.is_dir():
+        out.append(("info", f"agent-memory/ 不存在{_no_data_why(P)}"))
     for scope in ctx["scopes"]:
         f = P.memory / scope / "MEMORY.md"
         if not f.exists():
@@ -560,7 +561,23 @@ def check_memory_capacity(ctx):
         sizes.append(f"{scope}={len(text)}字符(≈{est}tok)/预算{budget}")
         if len(text) > budget:
             out.append(("warn", f"{scope}/MEMORY.md {len(text)} 字符 > 预算 {budget}（容量整理候选，须用户确认后降级）"))
-    out.append(("ok" if not any(l == "warn" for l, _ in out) else "info", "体量: " + "；".join(sizes)))
+    modules = P.project / "projects" / "modules"
+    # 两级分别以标识文件确认为模块；不递归扫 shared / requirements 等同名文件。
+    for pattern, marker in (("*/module-memory.md", "module.yaml"),
+                            ("*/*/module-memory.md", "submodule.yaml")):
+        for f in sorted(modules.glob(pattern)):
+            if not f.is_file() or not (f.parent / marker).is_file():
+                continue
+            n = len(f.read_text(encoding="utf-8", errors="replace"))
+            rel = f.relative_to(modules).as_posix()
+            sizes.append(f"{rel}={n}字符(≈{int(n * TOKEN_PER_CHAR)}tok)/预算{MODULE_MEMORY_MAX_CHARS}")
+            if n > MODULE_MEMORY_MAX_CHARS:
+                out.append(("warn", f"{rel} {n} 字符 > 预算 {MODULE_MEMORY_MAX_CHARS}"
+                                    "（模块作业提醒超预算，整理后再投递）"))
+    if sizes:
+        out.append(("ok" if not any(l == "warn" for l, _ in out) else "info", "体量: " + "；".join(sizes)))
+    elif not out:
+        out.append(("ok", "尚无 MEMORY.md 或 module-memory.md"))
     return out
 
 
@@ -847,7 +864,9 @@ def check_skeleton(ctx):
                     + (f"（{_LEGACY_FIX_POINTER}）" if legacy else "（重跑 project_scaffold.py 可补齐）")))
     missing_opt = [f for f in SCAFFOLD_OPTIONAL_FILES if not (P.project / f).is_file()]
     if missing_opt:
-        out.append(("warn", f"软骨架缺 {len(missing_opt)} 项（不影响运行）: " + "、".join(missing_opt)))
+        # 出路与硬骨架同一句：只报缺、不给补法时，迁移上来的项目（新版多了几个占位文件）读不出该做什么
+        out.append(("warn", f"软骨架缺 {len(missing_opt)} 项（不影响运行）: " + "、".join(missing_opt)
+                    + (f"（{_LEGACY_FIX_POINTER}）" if legacy else "（重跑 project_scaffold.py 可补齐）")))
     # 运行时骨架：缺失是否算问题，取决于 hook 到底跑过没有
     missing_rt = [f"{P.state_rel}/{f}" for f in _STATE_RUNTIME
                   if not (P.state / f).is_file()]
@@ -1893,12 +1912,17 @@ def check_setup_state(ctx):
     failed = [k for k, v in steps.items()
               if k not in SETUP_SELF_RECORDED_STEPS and not str(v).startswith("ok")]
     missing = [k for k in SETUP_REQUIRED_STEPS if k not in steps]
+    # 只缺 hook 补记的那一步、而它要的文件已在位：迁移 apply 之后、首会话之前就是这一态
+    # （`ensure_agents_md_present()` 下次会话启动确认文件在位就补记），不是装机没走完——
+    # 报 error 并指向 launcher §5 等于引人重跑装机。文件不在时照旧报缺。
+    deferred = [k for k in missing if k in SETUP_HOOK_RECORDED_STEPS and P.agents_md.exists()]
+    missing = [k for k in missing if k not in deferred]
     out = []
     if failed:
         out.append(("error", f"初始化有步骤失败: "
                              + "、".join(f"{k}({steps[k]})" for k in failed)))
     if missing:
-        done = [k for k in SETUP_REQUIRED_STEPS if k in steps]
+        done = [k for k in SETUP_REQUIRED_STEPS if k in steps or k in deferred]
         out.append(("error", f"初始化未走完——已完成 {len(done)}/{len(SETUP_REQUIRED_STEPS)} 步"
                              f"（{'、'.join(done) or '无'}），未做: {'、'.join(missing)}"))
     if out:
@@ -1909,6 +1933,9 @@ def check_setup_state(ctx):
         else:
             out.append(("info", "补做未完成的步骤后重跑本检查；各步命令见 launcher setup skill §5"))
         return out
+    if deferred:
+        return [("info", f"{'、'.join(deferred)} 这一步还没记进 setup-state.json，但 AGENTS.md 已在位——"
+                         "下次开会话时由会话启动 hook 补记（迁移之后、首会话之前就是这一态），不用补做")]
     when = st.get("completed_at") or st.get("updated_at") or "未知时间"
     acc = steps.get("acceptance")
     tail = f"；最近一次落盘验收: {acc}" if acc else "（尚未跑过落盘验收）"
@@ -1993,6 +2020,15 @@ def check_portability(ctx):
     return [("ok", f"已扫 {scanned} 个进 git 的文本文件，无本机绝对路径")]
 
 
+def check_codex_trust(ctx):
+    """实时只读信任诊断；未知不能显示健康。"""
+    import _codex_trust as ct
+    result = ct.diagnose(ctx["paths"].project)
+    level = {ct.NOT_CONNECTED: "info", ct.DISABLED: "info", ct.TRUSTED: "ok",
+             ct.NEEDS_TRUST: "error", ct.INSTALL_ERROR: "error", ct.UNVERIFIED: "warn"}[result.state]
+    return [(level, result.message)]
+
+
 def check_env(ctx):
     """python 可达性 + hook 活性证据（后者依赖重启，重启前自降 info）。"""
     P = ctx["paths"]
@@ -2062,7 +2098,48 @@ def _check_plugin_roots_same_version(P):
                           f"（{roots['codex']}）——一边升级了一边没升，两门会各自执行不同版本的脚本、读不同"
                           f"版本的事件注册表，会话里看不出差别；把落后的那一门也升到同版本"
                           f"（CC：`claude plugin update core@<市场> -s project`；Codex：`workframe-door --upgrade`）")]
-    return [("ok", f"两扇门的插件根版本一致（{vers['cc']}）")]
+    diff = _plugin_roots_content_diff(roots["cc"], roots["codex"])
+    if diff:
+        return [("warn", f"两扇门的插件根版本串同为 {vers['cc']}，但内容不同（{len(diff)} 个文件，如 "
+                         f"{'、'.join(diff[:3])}）——版本串相同分辨不出这一态：多半是一门读着框架开发版、另一门是缓存"
+                         f"的发布版，或某一门的缓存没刷新。要两门一致就刷新落后的那一门"
+                         f"（Codex：`workframe-door --upgrade`；CC：`claude plugin update core@<市场> -s project`）")]
+    return [("ok", f"两扇门的插件根版本一致（{vers['cc']}）"
+                   + ("，指向同一个目录" if diff is None else "，插件根内容也相同"))]
+
+
+# 两门插件根的内容对账比**整个插件根**，只排除这几类非分发产物：脚本、注入片、角色契约、skills、bin 入口、
+# 模板、reference 都会被执行或投递，挑一份子集来比，漏掉的那类同版本不同内容就照报 ok
+_ROOT_CONTENT_SKIP_PARTS = ("__pycache__", ".git")
+
+
+def _plugin_roots_content_diff(a, b):
+    """两个插件根里哪些文件不同（含只在一边的；`_ROOT_CONTENT_SKIP_PARTS` 除外），按相对路径排序。
+
+    同一个目录返回 None（不必比）。**按 LF 归一后比**：git 源的缓存经 `core.autocrlf` 检出可能是 CRLF，
+    与工作树只差行尾不算不同。读不了的文件算不同——宁可多报一条 warn，不把「没比成」说成「相同」。
+    """
+    try:
+        ra, rb = Path(a).resolve(), Path(b).resolve()
+    except Exception:
+        return None
+    if ra == rb:
+        return None
+
+    def files(root):
+        out = {}
+        for f in root.rglob("*"):
+            rel = f.relative_to(root)
+            if not f.is_file() or any(p in _ROOT_CONTENT_SKIP_PARTS for p in rel.parts):
+                continue
+            try:
+                out[rel.as_posix()] = f.read_bytes().replace(b"\r\n", b"\n")
+            except OSError:
+                out[rel.as_posix()] = None
+        return out
+
+    fa, fb = files(ra), files(rb)
+    return sorted(k for k in set(fa) | set(fb) if fa.get(k) is None or fa.get(k) != fb.get(k))
 
 
 def check_inject_log(ctx):
@@ -2072,7 +2149,8 @@ def check_inject_log(ctx):
     `UserPromptSubmit --scope prompt` 上判子线程的依据正是「`transcript_path` 里的线程号 ≠ `session_id`」
     ——所以 sub 行的 `thread_id` 与 `session_id` 相等，只能来自判定式或载荷字段的错位：主会话被灌进了
     子 agent 的纪律片，模型按错的协议做事，而注入本身 exit 0、终端零信号。两个字段任一为空的行不判
-    （缺字段是另一个问题，不在本检查内）；坏 JSON 行只计数不判。
+    （缺字段是另一个问题，不在本检查内）；坏 JSON 行只计数不判。`kind == "skipped_fork"` 的行不判：那是 fork
+    线程判过、没投（chars=0），它的 thread_id 取决于载荷带不带 `agent_id`，与「投错线程」无关。
     """
     P = ctx["paths"]
     f = P.state / "inject-log.jsonl"
@@ -2092,6 +2170,8 @@ def check_inject_log(ctx):
             bad_json += 1
             continue
         rows += 1
+        if r.get("kind") == "skipped_fork":
+            continue
         tid, sid = r.get("thread_id"), r.get("session_id")
         # 比对前两边都 `.lower()`：inject-context.py 判 is_sub 时把 session_id 小写后比，这里口径同它
         if (r.get("scope") == "sub" and isinstance(tid, str) and isinstance(sid, str) and tid
@@ -2124,7 +2204,8 @@ def check_inject_shards(ctx):
     """注入分片到齐：同一次投递里 `i/n` 各片的**出现次数必须相等**，不等 ⇒ warn。
 
     **取行**：只取 `shard` 形如 `i/n` 的行（按形态过滤，不按门过滤——Codex 行里也有 `i/n`）；
-    排除 `kind == "turn"`（`--scope prompt` 的轮次记账行）；**只判带 `thread_id` 键的新格式行**，
+    排除 `kind == "turn"`（`--scope prompt` 的轮次记账行）与 `kind == "skipped_fork"`（fork 线程判过、没投——
+    缺了这种行，下面「那一片纪律没到模型手里」的解释不成立）；**只判带 `thread_id` 键的新格式行**，
     旧格式行只计数（窗口内的才报，窗口过后自然消失）。坏 JSON 行不在本项计数，`inject_log` 项已报。
 
     **判据**：组键 = (harness, session_id, thread_id, event, scope, n)；组内各片号出现次数
@@ -2158,7 +2239,7 @@ def check_inject_shards(ctx):
             r = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(r, dict) or r.get("kind") == "turn":
+        if not isinstance(r, dict) or r.get("kind") in ("turn", "skipped_fork"):
             continue
         idx = _shard_index(r.get("shard"))
         if idx is None:
@@ -2210,6 +2291,7 @@ def check_inject_shards(ctx):
 
 INSTALL_CHECKS = [
     ("legacy_state_dir", "旧布局运行态目录", "`.claude/` 下的旧 state / 记忆 / 记忆归档目录不在（记忆按框架出厂形态判，只有 CC 原生 agent 记忆时报 info）；在即 error，按只有旧 / 新旧并存给出路。**必须排第一**：首会话验收里其余缺项多半是它的连带", check_legacy_state_dir),
+    ("codex_trust", "Codex hook 信任", "已接门实时核信任；失信 error，未能核实 warn；未接或已关跳过", check_codex_trust),
     ("skeleton", "骨架完整性", "scaffold 基础骨架 + 渲染产物齐全；占位符零残留（兜底）", check_skeleton),
     ("claude_md", "CLAUDE.md 导入与旧副本", "有一处有效的 `@AGENTS.md` 导入（CC 侧读到 AGENTS.md 的唯一入口，缺即 error）；框架段落的旧副本报 warn（与注入片形成双份）", check_claude_md),
     ("agents_md", "AGENTS.md 契约段", "两扇门共用的项目自有判据落点：四段齐全、委派授权段在位、正文无 `@<file>` 导入；「这个项目是什么」只剩框架占位报 warn", check_agents_md),
@@ -2231,7 +2313,7 @@ CHECKS = [
     ("proposal_dates", "提案日期字段", "applied 须有 applied_at、rejected 须有 rejected_at（迭代日期派生的输入质量）", check_proposal_dates),
     ("yaml_parse", "数据文件 YAML 可解析性", "board.yaml / issues / proposals 过真 YAML 解析器；坏行=error（与 close-check `[yaml-parse]` 共用判定式、文件集不相交）", check_data_yaml_parse),
     ("notes_backlog", "notes 积压", f"内容行 > {NOTES_BACKLOG_LINES} 或 内容行>5 且距上次提升 > {NOTES_STALE_DAYS} 天（体积口径；开场卡问询按条目数另计，见 memory-ask.py）", check_notes_backlog),
-    ("memory_capacity", "MEMORY 容量", f"字符预算 role ≤ {ROLE_MEMORY_MAX_CHARS} / shared ≤ {SHARED_MEMORY_MAX_CHARS}；附 token 估算（×{TOKEN_PER_CHAR}）", check_memory_capacity),
+    ("memory_capacity", "MEMORY 容量", f"字符预算 role ≤ {ROLE_MEMORY_MAX_CHARS} / shared ≤ {SHARED_MEMORY_MAX_CHARS} / module ≤ {MODULE_MEMORY_MAX_CHARS}；附 token 估算（×{TOKEN_PER_CHAR}）", check_memory_capacity),
     ("auto_memory", "auto-memory 体量", f"单条 ≤ {AUTO_MEMORY_ENTRY_MAX_CHARS} 字符；索引 ≤ {AUTO_MEMORY_INDEX_MAX_LINES} 行；只报警不动手", check_auto_memory),
     ("promise_producer", "承诺-producer 对账与死信号三态", "schema 全事件类型 × (事件计数, producer 文本存在性) → normal / starved / broken-promise", check_promise_producer),
     ("protected_assets", "受保护资产对账", f"近 {PROTECTED_WINDOW_DAYS} 天 git 提交 vs changelog 痕迹（启发式，仅提示级）", check_protected_assets),

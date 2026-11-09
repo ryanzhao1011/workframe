@@ -32,11 +32,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-# 本文件**刻意不包 UTF-8 流**（在 `check_utf8_stream_wrap_symmetric` 的豁免白名单里）：
-# 下面 import 的 check-stale-modules.py 是模块级包装，import 那一刻就把两条流包好了。
-# 再包一层就是两个 TextIOWrapper 抢同一个 buffer——先被回收的把 buffer 关掉，
-# 另一个当场 `ValueError: I/O operation on closed file` + `lost sys.stderr`。
-# 加过一次，测试立刻红；本进程的中文输出由被测模块那层覆盖，无需自己再包。
+# 本文件**不新建 TextIOWrapper**（在 `check_utf8_stream_wrap_symmetric` 的豁免白名单里），
+# 只在 `__main__` 里对两条流原地 reconfigure：被加载的 check-stale-modules.py import 时
+# 不再改宿主的流，不自己设的话 ✓ 在中文 Windows 的管道输出上当场 UnicodeEncodeError。
+# 别改成 TextIOWrapper 替换——两个 wrapper 抢同一个 buffer，先被回收的会把它关掉。
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "plugins" / "core" / "scripts" / "check-stale-modules.py"
@@ -694,4 +693,6 @@ def main():
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

@@ -40,6 +40,6 @@ developer_instructions = '''
 通用 Step 3 规则见必载片 §Step 3 — 更新任务看板。@prompt-eng 特有：
 
 - **Prompt 变更类任务**（Prompt 模板修改、策略文件变更、新版本上线等）：状态从 `in_progress` 流转到 `pending_qa`，**不得直接 `completed`**
-  - 响应末尾明确标注："Prompt 变更已完成，需 @qa 验证"（由用户 / 主 Claude 调度）
+  - 响应末尾明确标注："Prompt 变更已完成，待签发"——要不要独立验证由主 Claude 按必载片 §谁签发这次收口 判；改的这句话若是在告诉模型「什么算通过」，在响应里点明
 - **非研发类任务**（AI 策略咨询、评估报告、模型能力研究等纯交付物类）：可从 `in_progress` 直接流转到 `completed`
 '''

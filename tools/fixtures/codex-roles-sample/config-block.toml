@@ -3,7 +3,7 @@
 [plugins."core@workframe"]
 enabled = true
 [agents.dev]
-description = "全栈工程师。负责前后端开发、数据库设计、API 实现、部署配置、性能优化、Bug 修复、技术方案设计。 触发场景：编码任务、bug 修复、技术方案设计、数据库变更、部署、性能问题。 当项目包含应用代码时，默认负责修改源代码文件的角色（项目可通过 override 拆分专业工程角色）。"
+description = "全栈工程师。负责前后端开发、数据库设计、API 实现、部署配置、性能优化、Bug 修复、技术方案设计。 触发场景：编码任务、bug 修复、技术方案设计、数据库变更、部署、性能问题。 当项目包含应用代码时，默认负责修改源代码文件的角色（项目可在项目侧新增专业工程角色，与 core 并存）。"
 config_file = "roles/dev.toml"
 [agents.pm]
 description = "产品经理。负责需求分析、功能拆解、验收标准定义、竞品调研、PRD 创作。 触发场景：新功能需求、需求讨论、用户反馈分析、竞品对比、验收标准制定、写需求、写 PRD。 不直接编写代码。需求文档落盘： projects/modules/<basic>/<sub>/requirements/<req_slug>/<sub_req_slug>/prd.md （走 prd-writer skill；PRD 框架读项目 .claude/skills/prd-style/）。"

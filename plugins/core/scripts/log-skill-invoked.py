@@ -25,6 +25,15 @@ prompt 直接送给模型，`PostToolUse(matcher: Skill)` 永远等不到。于�
 CC 行为变化，这里按 `(session_id, skill, 分钟级 ts)` 做一次轻量去重：同窗口同 skill
 已有记录则跳过。**去重是尽力而为，不保证跨进程原子**——事件流是观测用途，宁可偶尔多一条
 也不要为它上锁拖慢 hook。
+
+## 顺带：主会话角色记忆投递（CC 门）
+
+skill 调用是主会话进入某个角色域的确定时点。映射到角色的 skill（`.workframe-meta/role-memory-map.json`）
+在主线程首次调用时投该域 MEMORY 全文（判定与去重在 `_role_memory.deliver`）。**投递判定在上面那道分钟级
+去重之前**：两者去重的对象不同，记事件的早退不能挡掉投递。两条入口的纯文本 stdout 都不进模型，投递以
+`hookSpecificOutput.additionalContext` JSON 输出，且是本进程 stdout 的唯一内容。Codex 没有 Skill 工具与
+UserPromptExpansion，本脚本在那一门不会被这两条入口调起；Codex 的 skill 入口在 `signoff-guard.py`（shell 读
+`SKILL.md`）与 `user-prompt-inject.py`（提示里的 `$skill`），见 `_role_memory` 抬头。
 """
 import io
 import json
@@ -51,6 +60,10 @@ if _SCRIPTS_DIR not in sys.path:
 import _harness  # noqa: E402
 from _harness import project_dir as _project_dir, session_id as _session_id  # noqa: E402
 from _state_io import append_line, event_json, state_dir_of  # noqa: E402
+try:
+    import _role_memory  # noqa: E402
+except Exception:  # 加载器坏了也不能连带 skill_invoked 记账一起断
+    _role_memory = None
 
 EVENT_TYPE = "skill_invoked"
 
@@ -146,6 +159,21 @@ def _is_dup(events_file, session_id, skill, minute):
     return False
 
 
+def _deliver_role_memory(payload, skill, entry, plugin):
+    """映射到角色的 skill → 投该域记忆（见文件头「顺带」一节）。任何异常都吞掉：投递失败不能拦住 skill。"""
+    if _role_memory is None:
+        return
+    try:
+        full = _role_memory.skill_full_name(skill, plugin)
+        role = _role_memory.load_map().get(full)
+        trigger = _role_memory.TRIGGER_COMMAND if entry == "command_expansion" else _role_memory.TRIGGER_SKILL_TOOL
+        text = _role_memory.deliver(_project_dir(payload), payload, role, trigger, skill=full)
+        if text:
+            print(_role_memory.hook_output(payload.get("hook_event_name") or "PostToolUse", text))
+    except Exception:
+        pass
+
+
 def main():
     # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
     if _harness.hook_outside_project():
@@ -158,6 +186,8 @@ def main():
     skill, entry, plugin = _extract(payload)
     if not skill:
         return 0
+
+    _deliver_role_memory(payload, skill, entry, plugin)
 
     # ts 用 UTC + 秒级（见文件头 ts 口径说明）
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")

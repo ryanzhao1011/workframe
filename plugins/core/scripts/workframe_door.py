@@ -86,7 +86,7 @@ trust）。每台机器的每个项目各跑一次 `--codex`。
    8 回读：用户层 enabled 是 false（读 `layers[type=user]`，不读合成值）、从项目看的合成值是 true、
      `hooks/list` 全 `trusted`、项目 trust、角色注册 → 任一不符 5，文案点名是哪一层；回读过了才
      **明说「已代你信任 N 条 hook」**（用户 2026-09-13 拍板的字面：先列清单再写，写后明说）
-   9 写种信任记录 `<CODEX_HOME>/.workframe/codex-trust-seed.json`（审计记录；G 补种 hook 也写它）
+   9 写种信任记录 `<CODEX_HOME>/.workframe/codex-trust-seed.json`（历史路径保留，仅 door 显式写入）
   10 验活只在 `--check --live` 做（真跑一次 `codex exec`，用本机 127.0.0.1 上立即回 400 的 HTTP 桩当
      model provider：hook 全跑、4 s 内结束、不等鉴权；Codex 仍会记一份失败的 rollout——知情项）
   11 孤儿：`config.toml` 里前缀为本插件 id、但不在本次 `hooks/list` 里的 `hooks.state` 记录，
@@ -94,15 +94,15 @@ trust）。每台机器的每个项目各跑一次 `--codex`。
   步 4–6 任一失败时用户层停在 true（步 3 写回的），失败文案会明说这一点。失败文案也会明说本次写过
   哪些项目文件、一个没写就说没写（`_wrote_note`，这半句只从它出）。
 
-**hash 只从 `hooks/list.currentHash` 读，不自己算**：Codex 的 hash 盖的是 `${CLAUDE_PLUGIN_ROOT}`
-字面、且 Windows 上只盖生效命令——任何本地重实现都会静默漂移。
+**hash 只从 `hooks/list.currentHash` 读，不自己算**：它是服务端的不透明信任值；
+Windows、0.166.0 实测含配置与内容两段，命令冻结不能保证继续受信。
 
 **`--upgrade`**：先预检，再**按市场源形态分两条路**刷插件缓存 → 从步 4 起重做。源形态读
 `codex plugin list --json` 的 `installed[].marketplaceSource.sourceType`（`marketplace list --json`
 只在 git 登记的那一行带 `marketplaceSource`，本地登记的那一行只有 `{name, root}`——要认出的恰是本地源，它在
 那里没有正面字段；实测 codex-cli 0.153.4）。
   · **git 源** → `codex plugin marketplace upgrade <mkt> --json`（一条命令同时刷快照并重物化已装插件
-    缓存；改动过的 hook 随之 `modified`；**不改用户层启用值**）。用户层 false 且项目未 trust（例如
+    缓存；内容变化可使本插件全部 hook 随之 `modified`；**不改用户层启用值**）。用户层 false 且项目未 trust（例如
     clone 到第二台机器）时在写项目文件之前以 3 停下、出路「先跑 `--codex`」（停下之前
     `marketplace upgrade` 已经跑过、插件缓存已刷新——等同裸跑了一次那条命令；项目文件与用户配置不动）。
   · **本地目录源** → 那条命令对它**根本不适用**（实测 codex-cli 0.153.4：rc=1、**stdout 空**、stderr
@@ -114,8 +114,8 @@ trust）。每台机器的每个项目各跑一次 `--codex`。
     未 trust 就以 3 停下」在这一路上也不成立：`plugin add` 已经把用户层写成 true，装机照常走完。
   源形态**分辨不出**时（命令失败 / 解析不了 / 本市场此刻没有已装插件）先试 git 那条，撞见上面那句
   stderr 再落到 `plugin add`——「分辨不出」不该变成「升不了」。
-用户即使绕过本命令直接敲 `codex plugin marketplace upgrade`，下一次 Codex 会话里的
-`codex-trust-seed.py` 也会补种并明说。
+升级请运行 `workframe-door --upgrade`，成功后重开 Codex 会话。裸升级不包含恢复信任；
+非交互 codex exec 实测全部 hook 可静默停跑；交互 TUI 会弹复核页，选择不信任后 hook 不执行。
 
 **`--backfill`**：**已装项目补上缺的那扇门**——装机链路只在建项目那一刻接两扇门，此前装的项目不会自己
 长出第二扇。判两扇门此刻的状态（CC 门看 `check_cc` 同一条判据；Codex 门看项目 `.codex/config.toml`
@@ -188,7 +188,6 @@ https URL）；需要鉴权的远端未验）。装机时用 `--marketplace` 覆
 """
 
 import argparse
-import importlib.util
 import io
 import json
 import os
@@ -267,16 +266,7 @@ MARKETPLACE_NAME_TAKEN = ("本机已登记同名市场，但它的源与本次�
                           "再带 `--marketplace <你要的源>` 重跑")
 
 
-def _load_seed_module():
-    """复用 `codex-trust-seed.py` 里的 `codex_home()` / `seed_record()` / `own_entries()`——
-    两侧必须是同一份定位规则与同一份记录形态（文件名带连字符，走 spec 加载）。"""
-    spec = importlib.util.spec_from_file_location("_wf_seed", _SCRIPTS_DIR / "codex-trust-seed.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-seed = _load_seed_module()
+import _codex_trust as trust_diag
 
 
 class DoorError(Exception):
@@ -682,7 +672,7 @@ def _cached_doors(marketplace):
     """Codex 安装缓存里现有的各版本门：`<CODEX_HOME>/plugins/cache/<市场>/core/*/scripts/workframe_door.py`，排除本命令
     自己所在的那一份。只列真实存在的文件（结构事实），读不到就是空表。"""
     try:
-        base = seed.codex_home() / "plugins" / "cache" / marketplace / PLUGIN_NAME
+        base = trust_diag.codex_home() / "plugins" / "cache" / marketplace / PLUGIN_NAME
         mine = _norm_path(PLUGIN_ROOT)
         return [p for p in sorted(base.glob("*/scripts/workframe_door.py"))
                 if _norm_path(p.parents[1]) != mine]
@@ -923,7 +913,7 @@ def _door_market_root_now():
     if not (cand / ".claude-plugin" / "marketplace.json").is_file():
         return None
     try:
-        home = _norm_path(seed.codex_home())
+        home = _norm_path(trust_diag.codex_home())
         if (_norm_path(cand) + os.sep).startswith(home.rstrip("\\/") + os.sep):
             return None
     except Exception:
@@ -1126,7 +1116,7 @@ def print_plan(mine, project_key, project_trusted_now, plugin_id=None, user_now=
         f"受信 hook 脱离沙盒执行：")
     for h in mine:
         mark = "  " if h.get("trustStatus") == "trusted" else "→ "
-        say(f"   {mark}{h.get('trustStatus'):9} {seed.describe(h)}")
+        say(f"   {mark}{h.get('trustStatus'):9} {trust_diag.describe(h)}")
     say(f"   项目 trust：[projects.'{project_key}'] trust_level = \"trusted\""
         f"（当前 {'已是 trusted' if project_trusted_now else '未设置，将写入'}）")
     if plugin_id:
@@ -1220,12 +1210,13 @@ def step_readback(server, project, plugin_id, key, want_project, expected=None):
 
 
 def step_seed(installed_root, plugin_id, mine):
-    path = seed.write_seed(installed_root, plugin_id, [h.get("key") for h in mine])
+    path = trust_diag.write_seed(installed_root, plugin_id, [h.get("key") for h in mine],
+                                 seeded_by="workframe-door")
     say(f"[9/11] 种信任记录 → {path}")
 
 
 def step_orphans(server, plugin_id, mine):
-    n = seed.orphan_count(server, plugin_id, {h.get("key") for h in mine})
+    n = trust_diag.orphan_count(server, plugin_id, {h.get("key") for h in mine})
     if n:
         say(f"[11/11] config.toml 里有 {n} 条不对应当前 hook 的记录，可安全删除；删除后下次装机/升级"
             f"会重批。框架不代删。")
@@ -1261,16 +1252,18 @@ def check_static(exe, project, mkt_name):
     """`--check` 的只读半：返回 (问题列表, 信息列表, mine)。安装根版本与本命令不同、它的 hook 冻结清单
     缺失或坏了，都只进问题列表，不让其余检查项断掉。"""
     problems, info = [], []
-    plugin_id = f"{PLUGIN_NAME}@{mkt_name}"
+    _state, actual_id, _why = trust_diag.project_plugin(project)
+    plugin_id = actual_id or f"{PLUGIN_NAME}@{mkt_name}"
     key = project_key(project)
     try:
         closed = codex_roles.managed_block_state(project) == codex_roles.BLOCK_USER_CLOSED
     except Exception:
         closed = False
+    closed = closed or _state == trust_diag.DISABLED
     if closed:
         info.append(f"本项目 Codex 门已被你关闭（{codex_roles.CONFIG_REL.as_posix()} managed 段 enabled = false）"
                     f"——hook 不加载是预期；要重新开启把它改回 true 后重跑 workframe-door --codex")
-    with cas.AppServer(exe=exe, cwd=str(project)) as s:
+    with cas.AppServer(exe=exe, codex_home=trust_diag.codex_home(), cwd=str(project)) as s:
         try:
             is_problem, line = user_layer_finding(plugin_id, user_layer_enabled(s, plugin_id))
             (problems if is_problem else info).append(line)
@@ -1278,6 +1271,11 @@ def check_static(exe, project, mkt_name):
             problems.append(f"用户层启用值读不到: {e}")
         listing = s.hooks_list([str(project)])
         mine = cas.plugin_hooks(listing, plugin_id)
+        if not closed and _state == trust_diag.INSTALL_ERROR:
+            problems.append(_why + "；" + trust_diag.RECOVERY)
+        if not closed and _state == trust_diag.TRUSTED:
+            verdict = trust_diag.inspect_listing(listing, plugin_id)
+            (info if verdict.state == trust_diag.TRUSTED else problems).append(verdict.message)
         root, src = loaded_root(mine)          # Codex 实际加载的那一份；反推不出时 root 为 None、src 是那句人话
         if not mine:
             if not closed:
@@ -1302,7 +1300,7 @@ def check_static(exe, project, mkt_name):
                     if len(mine) != expected:
                         problems.append(f"{plugin_id} {len(mine)} 条 ≠ manifest {expected} 条")
             for h in mine:
-                if h.get("trustStatus") != "trusted":
+                if not closed and h.get("trustStatus") != "trusted":
                     problems.append(f"{h.get('key')}: {h.get('trustStatus')}（hash {str(h.get('currentHash'))[:20]}）")
                 if not (h.get("command") or "").strip():
                     problems.append(f"{h.get('key')}: command 为空")
@@ -1313,7 +1311,7 @@ def check_static(exe, project, mkt_name):
                         f"安装根 {root}")
         trust = project_trust_state(s, key)
         (info if trust == "trusted" else problems).append(f"项目 trust = {trust!r}（键 {key!r}）")
-        n = seed.orphan_count(s, plugin_id, {h.get("key") for h in mine}) if mine else None
+        n = trust_diag.orphan_count(s, plugin_id, {h.get("key") for h in mine}) if mine else None
         if n:
             info.append(f"孤儿信任记录 {n} 条（可安全删除，框架不代删）")
     problems += codex_roles.verify(project)
@@ -1322,20 +1320,20 @@ def check_static(exe, project, mkt_name):
             roles = [r for r, _d, _b in codex_roles.load_agents((root or PLUGIN_ROOT) / "agents")]
         except Exception:
             roles = []
-        with cas.AppServer(exe=exe, cwd=str(project)) as s:
+        with cas.AppServer(exe=exe, codex_home=trust_diag.codex_home(), cwd=str(project)) as s:
             reg = roles_registered_problems(s, project, roles)
         (problems if reg else info).extend(reg or [f"角色注册：config/read(cwd=项目) 见 {len(roles)} 个 [agents.*]"])
-    seed_path = seed.codex_home() / seed.SEED_REL
+    seed_path = trust_diag.codex_home() / trust_diag.SEED_REL
     if seed_path.is_file():
         try:
             rec = json.loads(seed_path.read_text(encoding="utf-8"))
             ver = installed_version(root) if root else "?"
-            (info if rec.get("plugin_version") == ver or (closed and not mine) else problems).append(
-                f"种信任记录 {seed_path}：plugin_version {rec.get('plugin_version')} vs 已装 {ver}")
+            info.append(
+                f"历史信任审计记录 {seed_path}（不用于实时判定）：plugin_version {rec.get('plugin_version')} vs 已装 {ver}")
         except Exception as e:
-            problems.append(f"种信任记录 {seed_path} 读不出: {e}")
+            info.append(f"历史信任审计记录 {seed_path} 读不出（不用于实时判定）: {e}")
     else:
-        info.append(f"种信任记录不存在（{seed_path}）——尚未经本命令或 G hook 种过")
+        info.append(f"历史信任审计记录不存在（{seed_path}）；当前信任以 hooks/list 为准")
     markers = sorted(state_dir_of(project).glob("current-session-codex-*.json"))
     if len(markers) > 1:
         info.append(f"同项目有 {len(markers)} 个 current-session-codex-*.json（上一个会话没跑到 "
@@ -1416,8 +1414,6 @@ def check_live(exe, project):
     inj0 = _rows(state / "inject-log.jsonl")
     ev0 = _rows(state / "events.jsonl")
     c0 = _activity_counter(state)
-    last = state / seed.LAST_FILE
-    last0 = last.read_bytes() if last.exists() else None
     stub = _Stub400()
     stub.start()
     args = ["exec", "-C", str(project), "-s", "read-only",
@@ -1446,14 +1442,11 @@ def check_live(exe, project):
     inj = _rows(state / "inject-log.jsonl")[len(inj0):]
     ev = _rows(state / "events.jsonl")[len(ev0):]
     c1 = _activity_counter(state)
-    last1 = last.read_bytes() if last.exists() else None
     table = [
         ("session-start-prep.py", "activity-state.session_counter +1（会话前没有这个计数时：建出且为 1）",
          session_counter_ticked(c0, c1)),
         ("inject-context.py --scope main --shard all", "inject-log 新增 scope=main shard=all",
          any(r.get("scope") == "main" and r.get("shard") == "all" for r in inj)),
-        ("codex-trust-seed.py", "codex-trust-seed.last.json 内容更新",
-         last1 is not None and last1 != last0),
         ("inject-context.py --scope prompt", "inject-log 新增 scope=prompt",
          any(r.get("scope") == "prompt" for r in inj)),
         ("session-end-flush.py", "events.jsonl 新增 session_ended（harness=codex）",
@@ -1623,7 +1616,7 @@ def locate_market(mkt_name, exe=None, project=None):
     cfg = {}
     try:
         import tomllib
-        cfg = tomllib.loads((seed.codex_home() / "config.toml").read_text(encoding="utf-8")) \
+        cfg = tomllib.loads((trust_diag.codex_home() / "config.toml").read_text(encoding="utf-8")) \
             .get("marketplaces") or {}
     except Exception:
         cfg = {}
@@ -1806,6 +1799,8 @@ def do_backfill(a, project):
         tail = "；两扇门项目侧已接；Codex 门本机未核，跑 workframe-door --check"
     else:
         tail = "；两扇门都已接上"          # Codex 门是本次装的：do_codex 已回读核过本机那一侧
+    if wrote:
+        tail += "；本次补上的门在新开的会话里才生效，已开着的 Claude Code / Codex 会话关掉重开"
     say(f"--backfill 完成：{done}{tail}")
     return not left
 
@@ -1843,7 +1838,7 @@ def do_codex(a, project, upgrade=False, wrote=None):
         plugin_id = f"{PLUGIN_NAME}@{mkt_name}"
         key = project_key(project)
         try:
-            with cas.AppServer(exe=exe, cwd=str(project)) as s:
+            with cas.AppServer(exe=exe, codex_home=trust_diag.codex_home(), cwd=str(project)) as s:
                 user_now = user_layer_enabled(s, plugin_id)
                 user_true_now = user_now is True
                 if user_now is not True and project_trust_state(s, key) != "trusted":
@@ -1897,7 +1892,7 @@ def do_codex(a, project, upgrade=False, wrote=None):
                 say("[10/11] 验活默认不做（真跑一次会话；用 --check --live 显式做）")
                 step_orphans(s, plugin_id, mine)
         except cas.AppServerError as e:
-            raise DoorError(EXIT_ENV, f"app-server 未响应（{str(e)[:200]}）；hook 信任状态无法读取，"
+            raise DoorError(EXIT_ENV, f"app-server 未响应（{str(e)[:200]}）；hook 信任未能核实；运行 workframe-door --upgrade，成功后重开 Codex 会话，"
                             + ("[7/11] 的 config/batchWrite 已写入你的 Codex 用户配置、回读没做完——重跑 "
                                "workframe-door --codex" if trust_written else "未写入任何 hook 信任"))
     except DoorError as e:
@@ -1910,8 +1905,9 @@ def do_codex(a, project, upgrade=False, wrote=None):
             msg += f"。{USER_LAYER_STILL_TRUE}"
         raise DoorError(e.code, msg)
     say(f"Codex 门就绪：{len(mine)} 条 hook 受信；项目 trust = {trust}；本插件只在跑过 --codex 的项目里加载；角色见 "
-        f"{codex_roles.CONFIG_REL.as_posix()}。受信 hook 脱离沙盒执行；升级用 workframe-door --upgrade"
-        f"（绕过它直接升级也行——下次 Codex 会话里的种信任 hook 会补种并明说）。")
+        f"{codex_roles.CONFIG_REL.as_posix()}。**新开的 Codex 会话才生效**，已开着的会话照旧，关掉重开。"
+        f"受信 hook 脱离沙盒执行；升级用 workframe-door --upgrade"
+        f"，成功后重开 Codex 会话；裸升级可能使全部 hook 停跑，开场 hook 无法自行恢复。")
 
 
 def agents_md_notes(project):
@@ -1956,7 +1952,7 @@ def do_check(a, project):
     try:
         problems, info, _mine = check_static(exe, project, a.marketplace_name)
     except cas.AppServerError as e:
-        raise DoorError(EXIT_ENV, f"app-server 未响应（{str(e)[:200]}）；hook 信任状态无法读取")
+        raise DoorError(EXIT_ENV, f"app-server 未响应（{str(e)[:200]}）；hook 信任未能核实；运行 workframe-door --upgrade，成功后重开 Codex 会话")
     for ln in info:
         say(f"   i {ln}")
     for ln in problems:
@@ -1975,7 +1971,7 @@ def main(argv=None):
     mode.add_argument("--cc", action="store_true", help="只读核 CC 门订阅")
     mode.add_argument("--both", action="store_true", help="默认：探测到 codex 就装 Codex 门，CC 门只读核")
     mode.add_argument("--check", action="store_true", help="只读对账；--live 再真跑一次会话验活")
-    mode.add_argument("--upgrade", action="store_true", help="marketplace upgrade 后重种信任、重生成角色")
+    mode.add_argument("--upgrade", action="store_true", help="刷新插件缓存、重生成角色并恢复 hook 信任")
     mode.add_argument("--backfill", action="store_true",
                       help="已装项目回填：检测哪扇门未接，只补缺的那扇（重跑零改动）")
     mode.add_argument("--migrate", action="store_true",

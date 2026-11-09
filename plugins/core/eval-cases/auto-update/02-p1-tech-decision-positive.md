@@ -1,4 +1,4 @@
-# auto-update eval · 02 P1 技术决策落 decisions/ ADR + 记忆留指针
+# auto-update eval · 02 P1 技术决策落 decisions/ ADR + 模块作业提醒
 
 **类型**：正例
 
@@ -10,8 +10,8 @@
 - 判定为陈述新事实（非提问 / 非假设讨论），**P1 即时更新**，不需要二次确认
 - 先过归属分流：这是团队级技术共识，**决策本身落文档**——单模块进
   `projects/modules/<basic>/<sub>/decisions/`，跨模块进 `projects/specs/plans/`
-- `.workframe/agent-memory/dev/MEMORY.md` **只留一行指针**，不复制决策全文
-  （文档能承载的不进记忆；判据见必载片 §Step 2 — 经验沉淀）
+- 如动手时需要提醒，写对应模块 `module-memory.md` 的「做 X 时 → 要做 Y / 必读 Z」；
+  不在 `.workframe/agent-memory/dev/MEMORY.md` 新增决策或指针（判据见必载片 §Step 2 — 经验沉淀）
 - 如需实施：**响应中输出 board task 草稿**，由 `task-management` / 主 Claude 落盘，
   不由本 rule 直接写 board.yaml
 

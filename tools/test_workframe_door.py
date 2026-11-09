@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""`workframe_door.py` / `codex_roles.py` / `codex-trust-seed.py` 的常驻单测——纯函数与判定分支，
-不起 codex（那半在沙盒里按侧效应验，见交付报告）。爆炸半径档 4：装机器的对账与 G 补种 hook 的
+"""`workframe_door.py` / `codex_roles.py` / `_codex_trust.py` 的常驻单测——纯函数与判定分支，
+不起 codex（那半在沙盒里按侧效应验，见交付报告）。爆炸半径档 4：装机器的对账与 实时信任诊断的
 分支都是「判断别的东西对不对」的东西。
 
 守的事按下列各条分组，每条各配它自己的失败方式：
@@ -12,8 +12,7 @@
 2. **装机对账的判定分支**：退出码 2 / 3 / 4 / 5 / 6 钉数值；条数 ≠ manifest → 3；command 为空 → 3；
    batchWrite 非 ok → 4；回读仍有非 trusted → 5；项目 trust 键形态；`own_entries` 只认 sourcePath 落在
    插件根内的条目；角色回读读不到时文案按 layers 有无项目层分说、不指向 trust；`describe()` 无残留引号。
-3. **G 补种 hook 的分支**：N == 0 零输出只刷 last.json；N > 0 走 batchWrite 并明说「下次会话生效」；
-   app-server 失败 → exit 0 ＋ 一行「待信任…自动补种失败」；`codex_home()` 三级定位。
+3. **公共信任模块**：home 定位与 door 审计记录；实时诊断矩阵见 test_codex_trust.py。
 4. **按项目启用**：managed 段段首启用表的位置与插件 id 取市场名；整份语义预检的拒绝矩阵（段外同名声明七种写法 /
    段后吸收三种 / 文件解析不了）与不拒的两种，拒绝时项目树逐字节不变；旧形态段（无启用表、未被手改）按原样替换；
    「用户已关」与「段内其他行手改」两种段状态。`do_codex` 打桩驱动：预检命中时 codex CLI 与 app-server **零调用**、
@@ -103,7 +102,8 @@ import _codex_appserver as cas  # noqa: E402
 _FIND_CODEX_EXE = cas.find_codex_exe     # 封闭自检用：跑完时核它没有被哪一格打了桩留下
 _RUN_CODEX = wd.run_codex                # 同上：各驱动都把它换成桩、靠手写的恢复元组还原——漏了复原，后面的格就在用别人的桩
 
-seed = wd.seed
+seed = wd.trust_diag
+PID = "core@workframe"
 MKT = "workframe"          # 段首启用表的市场名（插件 id core@workframe）
 FAILURES = []
 
@@ -444,109 +444,13 @@ def test_door():
         rm(d)
 
 
-# ---- 3. G 补种 hook ----
+# ---- 公共信任辅助函数 ----
 
 def test_seed():
-    print("[seed] G 的分支")
-    d = tmpdir()
-    try:
-        home = d / "home"
-        home.mkdir()
-        (home / "config.toml").write_bytes(b"model = 'x'\n")
-        proj = d / "proj"
-        (proj / ".workframe" / "state").mkdir(parents=True)
-        (proj / ".workframe-config.json").write_bytes(b'{"project_name":"t"}')
-        env_backup = dict(os.environ)
-        try:
-            os.environ["CODEX_HOME"] = str(home)
-            check("codex_home 认环境变量", seed.codex_home(), Path(str(home)))
-            os.environ.pop("CODEX_HOME", None)
-            # 上溯 5 级：<home>/plugins/cache/mkt/core/1.1.0
-            fake_root = home / "plugins" / "cache" / "workframe" / "core" / "1.1.0"
-            fake_root.mkdir(parents=True)
-            orig = seed._harness.plugin_root_candidates
-            seed._harness.plugin_root_candidates = lambda: [fake_root]
-            try:
-                check("codex_home 无环境变量时从插件根上溯 5 级（要求那一级有 config.toml）", seed.codex_home(), home.resolve())
-                (home / "config.toml").unlink()
-                check("上溯那一级没有 config.toml → 退到 ~/.codex", seed.codex_home(), Path.home() / ".codex")
-                (home / "config.toml").write_bytes(b"model = 'x'\n")
-            finally:
-                seed._harness.plugin_root_candidates = orig
-            os.environ["CODEX_HOME"] = str(home)
-            manifest = json.loads((PLUGIN / "hooks" / "hooks.codex.manifest.json").read_text(encoding="utf-8"))
-            keys = [e["key"].split(":", 1)[1] for e in manifest["entries"]]
-            root = str(PLUGIN)
-            payload = {"cwd": str(proj), "session_id": "s1", "hook_event_name": "SessionStart"}
-
-            class FakeCas:
-                AppServerError = cas.AppServerError
-                hooks_of = staticmethod(cas.hooks_of)
-                trust_edits = staticmethod(cas.trust_edits)
-                plugin_hooks = staticmethod(cas.plugin_hooks)
-                server = None
-
-                class AppServer:
-                    def __init__(self, cwd=None, timeout=None, **kw):
-                        self.s = FakeCas.server
-                        if self.s == "raise":
-                            raise cas.AppServerError("app-server 已退出（exit 1）")
-
-                    def __enter__(self):
-                        return self.s
-
-                    def __exit__(self, *a):
-                        return False
-
-            real_cas = sys.modules["_codex_appserver"]
-            sys.modules["_codex_appserver"] = FakeCas
-            seed._harness.plugin_root_candidates = lambda: [PLUGIN]
-            try:
-                # N == 0
-                FakeCas.server = FakeServer([_hook(k, "trusted", root=root) for k in keys])
-                text, last = seed.run(payload)
-                check("N==0 零输出", text, None)
-                check("N==0 last.json 记 checked/pending", (last.get("checked"), last.get("pending")), (len(keys), 0))
-                # N > 0
-                hooks = [_hook(k, "trusted", root=root) for k in keys]
-                hooks[0] = dict(hooks[0], trustStatus="modified")
-                hooks[5] = dict(hooks[5], trustStatus="untrusted")
-                after = [dict(h, trustStatus="trusted") for h in hooks]
-                FakeCas.server = FakeServer(hooks, after=after)
-                text, last = seed.run(payload)
-                check("N>0 写了恰好 N 条 upsert", len(FakeCas.server.edits), 2)
-                check("N>0 文案明说条数与「下次会话生效」", "已代你信任 2 条" in text and "下次会话生效" in text, True)
-                check("N>0 文案列出每条执行什么", keys[0] in text and keys[5] in text, True)
-                check("N>0 写种信任记录", (home / ".workframe" / "codex-trust-seed.json").is_file(), True)
-                rec = json.loads((home / ".workframe" / "codex-trust-seed.json").read_text(encoding="utf-8"))
-                check("种信任记录字段集 = HOOK_HASH_FIELDS 全集", rec["fields"], list(wd.ch.GROUP_HASH_FIELDS + wd.ch.HOOK_HASH_FIELDS))
-                check("种信任记录条数 = manifest", len(rec["entries"]), len(keys))
-                check("last.json 记 seeded", last.get("seeded"), 2)
-                # batchWrite 非 ok → 文案「自动补种失败」，不抛
-                FakeCas.server = FakeServer(hooks, write_status="error")
-                text, last = seed.run(payload)
-                check("写失败 → 一行「待信任…自动补种失败」", "2 条 hook 待信任，自动补种失败" in text, True)
-                # app-server 起不来
-                FakeCas.server = "raise"
-                text, last = seed.run(payload)
-                check("app-server 起不来 → 文案「未能读取」且 last 记 error", "未能读取" in text and "error" in last, True)
-                # 非本插件条目不写
-                FakeCas.server = FakeServer([_hook("stop:0:0", "untrusted", plugin="other@m", root=str(d / "other"))])
-                text, last = seed.run(payload)
-                check("只有别的插件的条目 → 零输出、不写", (text, FakeCas.server.edits), (None, None))
-            finally:
-                sys.modules["_codex_appserver"] = real_cas
-                seed._harness.plugin_root_candidates = orig
-        finally:
-            os.environ.clear()
-            os.environ.update(env_backup)
-    finally:
-        rm(d)
-
-
-# ---- 4. 按项目启用：段首启用表 ＋ 整份语义预检 ＋ 用户层 ----
-
-PID = "core@workframe"
+    print("[trust] 记录由实际调用方署名；当前信任不依赖历史记录")
+    rec = seed.seed_record(PLUGIN, "core@workframe", ["key"], seeded_by="workframe-door")
+    check("审计由实际调用方署名", rec["seeded_by"], "workframe-door")
+    check("审计字段集完整", rec["fields"], list(wd.ch.GROUP_HASH_FIELDS + wd.ch.HOOK_HASH_FIELDS))
 
 
 def _snap(root):
@@ -933,7 +837,7 @@ def test_enable_layers():
         # 首装：用户层 true（plugin add 写回）、项目未 trust
         s = LayeredServer(keys, key, user=True, trusted=False)
         mine = wd.cas.plugin_hooks(s.hooks_list([str(proj)]), PID)
-        check("首装写入前：用户层 true 时 17 条可见", len(mine), len(keys))
+        check("首装写入前：用户层 true 时清单全部可见", len(mine), len(keys))
         check("首装：user_layer_enabled 读 layers[user]", wd.user_layer_enabled(s, PID), True)
         wd.step_write(s, mine, key, True, PID, disable_user=True)
         check("首装 edits = N 条 hook ＋ 项目 trust ＋ 用户层 false", len(s.edits), len(keys) + 2)
@@ -945,7 +849,7 @@ def test_enable_layers():
             got = (s.user, len(mine2), trust)
         except wd.DoorError as e:
             got = f"DoorError {e.code}: {str(e)[:80]}"
-        check("首装回读通过：用户层 false、合成值 true、17/17 trusted", got, (False, len(keys), "trusted"))
+        check("首装回读通过：用户层 false、合成值 true、清单全部 trusted", got, (False, len(keys), "trusted"))
         # 同一 home 的第二个项目：hook 早已受信
         s2 = LayeredServer(keys, key, user=True, trusted=False, trusted_hooks={s.full(k) for k in keys})
         pending = [h for h in wd.cas.plugin_hooks(s2.hooks_list([str(proj)]), PID) if h["trustStatus"] != "trusted"]
@@ -1319,6 +1223,7 @@ def test_backfill():
         check("两扇门都接：收尾说「项目侧已接；本机未核，跑 --check」、不说「两扇门都已接上」",
               ("项目侧已接" in seen["out"], "本机未核" in seen["out"], "workframe-door --check" in seen["out"],
                "两扇门都已接上" in seen["out"]), (True, True, True, False))
+        check("两扇门都接、零写入：收尾不提重开会话（没东西要生效）", "新开的会话里才生效" in seen["out"], False)
         # [3/3] 那一行自己也要说「项目侧」「本机没核」「跑 --check」——只看收尾那句的话，这一行退回旧文案照样全绿
         step3 = [ln for ln in seen["out"].splitlines() if ln.startswith("[3/3]")]
         check("两扇门都接：[3/3] 行说「项目侧已接」、本机那一侧没核、给出 --check",
@@ -1345,6 +1250,7 @@ def test_backfill():
         check("只缺 Codex：do_codex 跑了一次、settings 没被写", (err, seen["codex"], seen["sub"]), (None, 1, []))
         check("只缺 Codex、本次装上：收尾说「两扇门都已接上」（do_codex 已回读核过本机那一侧）、不说「本机未核」",
               ("两扇门都已接上" in seen["out"], "本机未核" in seen["out"]), (True, False))
+        check("只缺 Codex、本次装上：收尾提示新开会话才生效", "新开的会话里才生效" in seen["out"], True)
         check("只缺 Codex、本次装上：do_backfill 返回 True", seen["rv"], True)
         check("只缺 Codex：市场源取项目已在用的来源，不用默认公开仓", a.marketplace, "D:/fw")
     finally:
@@ -3307,7 +3213,7 @@ def test_live_counter():
                 f.write(json.dumps({"scope": "prompt", "harness": "codex"}) + "\n")
             with open(st / "events.jsonl", "a", encoding="utf-8", newline="") as f:
                 f.write(json.dumps({"type": "session_ended", "harness": "codex"}) + "\n")
-            (st / seed.LAST_FILE).write_text(json.dumps({"n": os.urandom(4).hex()}), encoding="utf-8", newline="")
+
         return run
 
     for label, before, counter, want in [("会话前没有 activity-state.json、会话后为 1", None, 1, None),
@@ -3716,6 +3622,10 @@ def main():
     test_roles()
     test_door()
     test_seed()
+    import test_codex_trust
+    import unittest
+    diagnostic_result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_codex_trust))
+    check("实时只读信任状态矩阵", diagnostic_result.wasSuccessful(), True)
     test_preflight()
     test_eol_checkout()
     test_do_codex_order()

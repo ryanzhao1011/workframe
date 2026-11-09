@@ -21,6 +21,8 @@ modules/ 体系下三类骨架的唯一创建入口：
 
 **适用范围**：已接入 Workframe 的项目（modules/ 体系默认启用）。
 
+**模块记忆按需存在**：本 skill 不创建空 `module-memory.md`。确有作业提醒时，在基础模块或子模块目录手动创建，格式与预算按 `document-norms` §1（纯条目清单，不带 frontmatter）；不建需求级模块记忆，只对单个需求成立的内容写该需求 PRD。
+
 **不适用**：
 
 - 修改/重命名已有模块 → 直接 Edit + 调 `module-index-refresh`

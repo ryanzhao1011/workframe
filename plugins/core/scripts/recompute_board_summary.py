@@ -4,7 +4,7 @@
 
 设计原则：
   - **写入侧不用 yaml.dump**，避免丢失注释和字段顺序——summary 块仍是逐行替换
-  - **读计数用 yaml.safe_load**（软依赖，缺 PyYAML 时降级逐行 + 自检）：逐行判据
+  - **读计数用真 YAML 解析器**（经 `_yaml_probe.safe_load`，libyaml 优先；软依赖，缺 PyYAML 时降级逐行 + 自检）：逐行判据
     对 YAML 的跨行标量续行失明（续行不要求缩进），会提前退出、静默少算并把错值
     写回，还返回 status=ok（BUG-005）。读取不涉及注释与字段顺序，故与上一条不冲突
   - 逐行扫描 summary 块，只替换已知字段（total / pending / in_progress / pending_qa /
@@ -57,6 +57,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 from _harness import project_dir as _project_dir  # noqa: E402
 from _state_io import append_line, event_json, state_dir_of  # noqa: E402
+import _yaml_probe  # noqa: E402  共用解析入口（libyaml 优先）；import 无副作用、不 import PyYAML
 
 PROJECT_DIR = _project_dir()
 BOARD_FILE = PROJECT_DIR / "projects" / "board.yaml"
@@ -102,8 +103,12 @@ def _count_via_yaml(text):
     双引号续行少算、块状标量里的 `status:` 正文多算（BUG-005）。
 
     返回签名与 _count_task_statuses_by_line 一致，便于两条路径互换。
+
+    解析走 `_yaml_probe.safe_load`（装了 libyaml 用 C 实现；纯 Python 读得进的它都读得进，另有少数
+    纯 Python 拒绝的形态它也读得进，见该函数）：SessionEnd 整体预算只有 1.5 秒，纯 Python 解析
+    MB 级看板就要吃掉近一半。
     """
-    data = yaml.safe_load(text)
+    data = _yaml_probe.safe_load(text)
     if not isinstance(data, dict):
         raise ValueError("board.yaml 顶层不是映射")
     tasks = data.get("tasks") or []
@@ -175,7 +180,7 @@ def count_task_statuses(text):
 def _count_task_statuses_by_line(text):
     """**只扫描 tasks: 块内**的 `status: <value>` 行，遇到下一个顶层 key 停止。
 
-    降级实现：仅在 PyYAML 不可用或 safe_load 失败时使用，且结果必须过
+    降级实现：仅在 PyYAML 不可用时使用（解析失败走 `BoardYamlUnparsable`、不降级），且结果必须过
     count_task_statuses 的自检才作数。**已知失明面**：YAML 的跨行标量续行不要求
     缩进，本函数会把这类续行判成下一个顶层 key 而提前退出（BUG-005）。
 
@@ -347,9 +352,14 @@ def rewrite_summary_block(text, total, counts, today):
     return "".join(out), summary_seen
 
 
-def recompute_board_summary():
+def recompute_board_summary(known=None):
     """入口：读 board.yaml，重算并就地更新 summary 块，写事件。
     返回 dict：{status: ok|skipped|error, reason?: str, total?: int, counts?: dict, unknown_statuses?: list}
+
+    `known`：调用方刚解析过看板时传 `(text, count_task_statuses(text) 的返回值)`，本函数重读到的
+    文本与 `text` **逐字相同**才复用那份计数、不再解析第二遍；不同（两次读盘之间被并发改写）
+    就照常重算。比的是全文而不是 mtime——复用错一份计数会把错值写进 summary，这一步不许猜。
+    读法须与本函数相同（`utf-8-sig`），否则恒不相等、只是退回重算。
 
     **strict 默认行为（v0.2.2-fixup-2 起）**：
     扫描 tasks: 块时遇到任何未定义 status 值（如 'completd' / 'needs-review' 拼写错误或未声明状态）
@@ -368,7 +378,10 @@ def recompute_board_summary():
     # 与下面两道同一形态（skipped + 不写回）。本缺陷的伤害主要来自「写错还报 ok」，
     # 所以宁可什么都不写、留一条可查的 reason，也不把少算的值盖上去。
     try:
-        total, counts, unknown_statuses, n_entries = count_task_statuses(text)
+        if known is not None and known[0] == text:
+            total, counts, unknown_statuses, n_entries = known[1]
+        else:
+            total, counts, unknown_statuses, n_entries = count_task_statuses(text)
     except BoardParseMismatch as e:
         result = {"status": "skipped", "reason": "parse_mismatch", "detail": str(e)}
         append_event(**result)

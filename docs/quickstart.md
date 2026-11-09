@@ -10,6 +10,7 @@
   - Windows：通常是 `python` 或 `py -3`
   - macOS / Linux：`python` 或 `python3`（Ubuntu 22.04+ / Fedora 等默认只有 `python3`）
   - hook 由 `plugins/core/bin/workframe-python` launcher 自动选择解释器（POSIX：`python` → `python3`；Windows：`python` → `py -3` → `python3`），无需手工改 `hooks.json`，也无需做 alias
+  - **已知限制（Windows）**：你在 cmd / PowerShell 里敲的那几个命令（`workframe-doctor`、`workframe-door` 等 `bin/*.cmd` 入口）直接调 `python`，不走上面那套依次尝试——PATH 上没有 `python`、只装了 `py` 启动器的机器上它们会报找不到 python。这时改用 `py -3 "<插件根>/bin/<命令名>"`（不带 `.cmd`）
 
 ## 第 1 步：安装 launcher（每台机器一次）
 
@@ -56,7 +57,7 @@ launcher 会先判断你所在目录的状态（空目录 / 桌面之类的容�
 
 确认后 launcher 一气呵成：落骨架 → 建模块树（确认页拍定的是真实树时；无资料时展示的示例树不落盘，真实模块之后用 `/core:module-init` 长出来）→ 订阅 core 插件 → `git init` + 首提交（可取消）→（本机装了 `codex` 时）接 Codex 门 → 落盘验收（doctor install 组）。
 
-确认页上那份「将要执行的动作清单」的文件面由脚本算出来（只读预演，确认前零写盘），不是模型手写的：它列全本次要建 / 改的每一个文件，**含两处写在项目外的**——用户级市场注册表 `~/.claude/plugins/known_marketplaces.json`，以及装 Codex 门那一步要改的用户级 `config.toml`（后者会代你信任本插件的全部 hook，而受信 hook 脱离沙盒执行；以后插件升级时，未受信的本插件 hook 会在开 Codex 会话时自动补种信任、不再单问）。
+确认页上那份「将要执行的动作清单」的文件面由脚本算出来（只读预演，确认前零写盘），不是模型手写的：它列全本次要建 / 改的每一个文件，**含两处写在项目外的**——用户级市场注册表 `~/.claude/plugins/known_marketplaces.json`，以及装 Codex 门那一步要改的用户级 `config.toml`（本步骤会修改 Codex 用户级 `config.toml` 与项目 `.codex/`，代你信任本插件的全部 hook；受信 hook 脱离沙盒执行。执行时先逐条列出，再写入并回读确认。以后升级请运行 `workframe-door --upgrade`，成功后重开 Codex 会话；不能依赖开场 hook 恢复升级后的信任。）。
 
 ## 第 2 步 · 场景 B：把现有项目接入
 
@@ -114,7 +115,7 @@ claude plugin update core@workframe -s project
 
 然后**先迁移、再重启会话**：上一版装的项目（运行态还在 `.claude/` 下），重开会话之前先按 [setup-guide.md](./setup-guide.md) 的「已装项目迁移」一节跑一遍——本版框架只读新位置，没迁移就开会话会在新位置另建一套（计数从零、角色记忆注入为空），迁移工具随后对那一类判冲突。plan 在普通终端里出，别在被迁移项目自己的会话里出。新建或已迁移的项目直接**重启会话**。必载纪律由启动时的 hook 直接注入上下文，项目里没有需要对齐的副本，也没有要手动跑的同步步骤；生效时序与故障排查详见 [context-injection.md](./context-injection.md)。
 
-Codex 侧另有一步：在项目目录里跑 `workframe-door --upgrade`（git 源也可以裸敲 `codex plugin marketplace upgrade workframe`——那样改动过的 hook 先失信任、下一次会话由种信任 hook 补种并明说、再下一次会话才跑；本地目录源不吃这条命令，用 `--upgrade`，它会自己改走重装那条路）。顺序要紧：`--upgrade` 拿门自己这一份去核对刷新后的 Codex 侧，门本身得已经是目标版本，比 Codex 侧旧就会停下（exit 2）——所以先做上面的 CC 更新、再跑它；只装了 Codex 的机器，停下后按文案用新版本目录下的 `scripts/workframe_door.py` 带同样的参数重跑（门开跑时就记下了自己的版本，这次升级即使删掉或刷新了它所在的目录，它也照样会停下、并点名新目录下的门）。两扇门各自升级；一边升了一边没升，doctor 会报两根版本不等。`--upgrade` 跑完同样要**重开这个项目的 Codex 会话**才生效。
+Codex 侧另有一步：在项目目录里跑 `workframe-door --upgrade`（成功后重开 Codex 会话；git／本地目录源由 door 自动分流。裸升级不包含恢复信任）。顺序要紧：`--upgrade` 拿门自己这一份去核对刷新后的 Codex 侧，门本身得已经是目标版本，比 Codex 侧旧就会停下（exit 2）——所以先做上面的 CC 更新、再跑它；只装了 Codex 的机器，停下后按文案用新版本目录下的 `scripts/workframe_door.py` 带同样的参数重跑（门开跑时就记下了自己的版本，这次升级即使删掉或刷新了它所在的目录，它也照样会停下、并点名新目录下的门）。两扇门各自升级；一边升了一边没升，doctor 会报两根版本不等。`--upgrade` 跑完同样要**重开这个项目的 Codex 会话**才生效。
 
 ## 同事加入一个已接入的项目
 

@@ -113,7 +113,7 @@ launcher 先判断当前目录是什么（按顺序，前面命中就不往下�
 5. **git init + 首提交**——全新创建默认做（确认页可取消）；已是 git 仓则跳过 init 且不替你提交；没配 git 身份时保留 init、提示你补完
 6. **逐模块深读与安置**——一次一个模块：深读该模块资料 → 确认安置与原件处置 → 当场执行（成品 md 收口引用；异构原料归位 `others/原始资料/`；大批量走「样板批 + 重启后批量迁移」逃生口；小模块合并进相邻一轮，单轮不超过约 10 份文件的决策量）
 7. **节奏闸 + 整理归档段**（有原始资料批次时）——预估只给份数与需你拍板的决策点数（**不给时间**），你拍节奏与 git 提交策略；选当场做的批次逐阶段照归档 / 迁移 SOP 执行，每批完成汇报并给离场点
-8. **（本机装了 `codex` 时）接 Codex 门**——`workframe-door --codex`，装机的一部分，**不再单问一层**：它改你的**用户级** `config.toml`（本插件 hook 的信任 ＋ 本项目的 trust ＋ 本插件 `enabled` 改为 `false`）与项目 `.codex/`，并**代你信任本插件的全部 hook，受信 hook 脱离沙盒执行**；以后插件升级时，未受信的本插件 hook 会在开 Codex 会话时自动补种信任、不再单问（见 [concepts.md](./concepts.md) §用户级）。这一步的事前授权在结构闸那一页的动作清单里（它在那里单独占一行、连同上面这句披露），执行时逐条列出要信任哪几条、写完报数。细节见下文 §Codex 门
+8. **（本机装了 `codex` 时）接 Codex 门**——`workframe-door --codex`，装机的一部分，**不再单问一层**：它改你的**用户级** `config.toml`（本插件 hook 的信任 ＋ 本项目的 trust ＋ 本插件 `enabled` 改为 `false`）与项目 `.codex/`，并**代你信任本插件的全部 hook，受信 hook 脱离沙盒执行**；以后升级请运行 `workframe-door --upgrade`，成功后重开 Codex 会话；不能依赖开场 hook 恢复升级后的信任（见 [concepts.md](./concepts.md) §用户级）。这一步的事前授权在结构闸那一页的动作清单里（它在那里单独占一行、连同上面这句披露），执行时逐条列出要信任哪几条、写完报数。细节见下文 §Codex 门
 9. **落盘验收**——doctor install 组：旧布局运行态目录（新建项目恒为通过；从上一版升级、没迁移的项目在这里报出，排第一）、骨架完整性、CLAUDE.md 导入与旧副本、项目 PRD 框架、项目 skills 链接形态、config 字段、订阅接线、AGENTS.md 契约段、旧镜像残留、`.gitignore` 必需条目、初始化断点、**初始化完整度**（推迟批次的落地状态）、可移植性、环境与 hook 活性。放在批次落定之后跑，「初始化完整度」读到的才是真实终态。依赖 hook 的项此刻显示「待首个会话后复查」是正常的，不是失败
 
 全程**每完成一步立即记进 `setup-state.json`**——真断在中途时，进度已经在文件里，doctor 能告诉你装到哪一步；整理归档批次另有台账逐行记账，任何后续会话「继续初始化」精确续上。
@@ -162,17 +162,17 @@ launcher 先判断当前目录是什么（按顺序，前面命中就不往下�
 
 生成的都是**起手稿**，鼓励直接编辑：
 
-- 改角色职责 → `.claude/agents/<role>.md`（**基于插件版全量复制后修改**：项目这份被派到时就是它的全部定义，不与插件版合并。它与插件角色是**并存**、不是覆盖——插件角色全名带命名空间 `core:<role>`，仍在 agent 列表里；`@<role>` 派到项目这份，没点名时主会话按 description 挑，细节见 [concepts.md](./concepts.md) §项目级同名 agent：并存，不是覆盖）
+- 改角色职责 → `.claude/agents/<role>.md`（**基于插件版全量复制后修改**：项目这份被派到时就是它的全部定义，不与插件版合并。它与插件角色是**并存**、不是覆盖——插件角色全名带命名空间 `core:<role>`，仍在 agent 列表里；`@<role>` 派到项目这份，没点名而主会话判定要派时按 description 挑，细节见 [concepts.md](./concepts.md) §项目级同名 agent：并存，不是覆盖）
 - 加 / 删项目级 skill → 项目 skills 目录下增减目录：新建项目在 `.agents/skills/`（`.claude/skills` 是指向它的链接，两条路径读到同一份文件——链接失效或被复制成真目录时不再成立，会话启动与 doctor 的「项目 skills 链接形态」会报出来）；已装项目在 `.claude/skills/` 真目录
 - 项目自己的判据 → 项目根 `AGENTS.md`；成套的工序 → 项目自己的 skill
 - 调整业务目录 → 随意重组
-- **改不了的（能力边界）**：通用角色表与路由规则、任务状态流转与签发权限、两套记忆分工由会话启动时的注入片投递，项目侧没有副本可改；需要项目级差异只能在 `AGENTS.md` 里**补充**（项目级角色、路由偏好），不能覆盖注入片
+- **改不了的（能力边界）**：通用角色表与路由规则、任务状态流转与签发权限、记忆分工由会话启动时的注入片投递，项目侧没有副本可改；需要项目级差异只能在 `AGENTS.md` 里**补充**（项目级角色、路由偏好），不能覆盖注入片
 
 **项目里没有框架同步的只读文件**：必载纪律由会话启动时的 hook 直接注入上下文，不落盘；`AGENTS.md` 铺一次骨架之后就归你，框架不再覆盖它。
 
 ## Codex 门（同一个项目同时挂 Claude Code 与 Codex）
 
-框架是一份源、两扇门：hooks、纪律片、角色、skills 都是同一套，Codex 侧只多一份派生的 hook 清单（Codex 清单 17 条）与一个装机器。**只在 Windows + codex-cli 0.153.x 上实测过**；macOS / Linux 的目录链接（symlink）路径未验。
+框架是一份源、两扇门：hooks、纪律片、角色、skills 都是同一套，Codex 侧只多一份派生的 hook 清单（当前条目以生成器输出为准）与一个装机器。**装机原有路径在 Windows + codex-cli 0.153.x 实测；内容 hash 与 TUI／exec 信任差异在 Windows + 0.166.0 实测**；macOS / Linux 的目录链接（symlink）路径未验。
 
 ### 装机：`workframe-door --codex`
 
@@ -196,7 +196,7 @@ workframe-door --codex            # 默认市场源 owner/repo；本地目录 / 
 
 ### 装完之后
 
-- **`workframe-door --check`**：只读对账——用户层 `enabled` 是否是 `false`（是 `true` 算问题：最常见成因是裸敲过 `codex plugin add`，重跑 `--codex` 即可；用户层整张表都没有算正常）、hook 是否全 `trusted`、项目 trust、角色注册是否被 Codex 读到、种信任记录的版本是否等于已装版本、Codex 侧装上的插件与本命令是不是同一版本（不同或任何一侧读不出都算问题）、它的 hook 冻结清单是否完好（缺失或坏了算一项问题，其余各项照查）、Codex 实际加载的那一份（从 hook 的来源路径反推）是不是同样对得上（反推不出也算问题，不拿门自己的那份顶上）、`multi_agent` 特性是否开着；本项目的门已被你关闭时报一句「已关闭」、不算问题；同项目若有多于一个会话标记文件会提示一句（上一个会话没跑到 SessionEnd 时会留下，7 天后自清）。过滤后 0 条时按读得到的状态说成因（用户层未启用且项目未 trust / 段内没有启用表 / 已关闭），分不出时把 `hooks/list` 的 `warnings` 原文打出来——那时最常见的成因是清单里某条缺 `command` 键、整份被静默丢弃。
+- **`workframe-door --check`**：只读对账——用户层 `enabled` 是否是 `false`（是 `true` 算问题：最常见成因是裸敲过 `codex plugin add`，重跑 `--codex` 即可；用户层整张表都没有算正常）、hook 是否全 `trusted`、项目 trust、角色注册是否被 Codex 读到、历史审计记录仅作信息展示（不参与实时信任判定）、Codex 侧装上的插件与本命令是不是同一版本（不同或任何一侧读不出都算问题）、它的 hook 冻结清单是否完好（缺失或坏了算一项问题，其余各项照查）、Codex 实际加载的那一份（从 hook 的来源路径反推）是不是同样对得上（反推不出也算问题，不拿门自己的那份顶上）、`multi_agent` 特性是否开着；本项目的门已被你关闭时报一句「已关闭」、不算问题；同项目若有多于一个会话标记文件会提示一句（上一个会话没跑到 SessionEnd 时会留下，7 天后自清）。过滤后 0 条时按读得到的状态说成因（用户层未启用且项目未 trust / 段内没有启用表 / 已关闭），分不出时把 `hooks/list` 的 `warnings` 原文打出来——那时最常见的成因是清单里某条缺 `command` 键、整份被静默丢弃。
 - **门的成功出口会说 `AGENTS.md` 的状态**（`--codex` / `--upgrade` / 缺省 / `--check` 成功时，`--backfill` 结束时 Codex 门在项目侧接着时——本次装上的或原本就接着的；不改退出码）：Codex 读 `AGENTS.md`、不读 `CLAUDE.md` 与 `.claude/rules/`，门装好不等于 Codex 看得到项目内容。「这个项目是什么」还是框架占位、或项目根没有 `AGENTS.md` 时打一行 `!`；`CLAUDE.md` 有模板之外的二级段、或 `.claude/rules/` 下有 md 时打一行 `i`，列出这些只有 Claude Code 读得到的内容面。归位按 core 插件 `reference/claude-md-merge-guide.md`。
 - **`workframe-door --check --live`**：再真跑一次零凭据的 `codex exec` 验活（用本机回环上一个立即回 400 的桩当模型，模型请求不出本机，几秒内结束；验活会话仍会加载你 Codex 配置里的其余外连能力——实测见过一次向外的 MCP 传输连接，来源未查明）。Codex 仍会把它记成一次失败的会话——知情项。静态对账有问题时走不到验活。
 - **`workframe-door --backfill`（已装项目回填）**：装机链路只在**装 / 接入项目那一刻**把两扇门都接上（新建与接入都走，见 launcher `setup` §6 收尾），此前装的项目不会自己长出第二扇。这条命令先看两扇门此刻各是什么状态，**只补缺的那扇**：
@@ -207,12 +207,14 @@ workframe-door --codex            # 默认市场源 owner/repo；本地目录 / 
   - **不改你自己关掉的 Codex 门**；managed 段被手改过时停下报告、不覆盖。**不含任何删除动作。**
   - **补完要重开会话才生效**：补了哪扇门，就重开这个项目在那扇门里的会话（补的是 CC 那扇就重开 Claude Code 会话，补的是 Codex 那扇就重开 Codex 会话）。
 - **第二台机器 / clone 之后**：hook 信任、项目 trust、用户层 `enabled = false` 都写在各人的 Codex 用户配置里、不随仓走——在那台机器上对这个项目跑一次 `--codex`。直接跑 `--upgrade` 会在写项目文件之前停下，并给出这条出路——但停下之前 `codex plugin marketplace upgrade` 已经跑过，插件缓存已刷新（等同你裸跑了一次那条命令；项目文件与用户配置不动）。**这一段只讲 git 源**：本地目录源下 `--upgrade` 走的是下一条说的重装路径，用户层会被写回 `true`，于是不会停在这里、照常装完。
-- **升级**：`workframe-door --upgrade`（重生成角色 ＋ 补种信任；刷插件缓存那一步**按市场源形态分两条路**）。**前提：门本身得已经是目标版本**——`--upgrade` 先刷新 Codex 侧的缓存，再拿门自己这一份去核对它；门比刷新后的 Codex 侧旧时以 `2` 停下（缓存已换成新版，hook 信任没动；项目文件通常也没动，但段里还没有启用表的项目，角色可能已先写——写没写、写了哪些，停下时的文案会如实点名）。所以顺序是：先升级门所在的那一侧（CC 门：`claude plugin update core@<市场>`），再跑 `--upgrade`；只装了 Codex、从插件目录直接跑脚本的（门在 Codex 安装缓存的版本目录里，或在 git 源的市场快照里），停下后按文案用新版本目录下的 `scripts/workframe_door.py` 带同样的参数重跑——门开跑时就记下了自己的版本，这次升级即使删掉了它所在的目录、或把它原地刷新成了新版，也照样会停下、并点名新目录下的门，文案还会说明那个目录此刻已不是正在跑的那一份。**升级完重开这个项目的 Codex 会话才生效**（Claude Code 那侧同理，见下文「各自的升级路径与生效时机」）。
+- **升级**：`workframe-door --upgrade`（刷新插件缓存 ＋ 重生成角色 ＋ 恢复本插件 hook 信任；刷插件缓存那一步**按市场源形态分两条路**）。**前提：门本身得已经是目标版本**——`--upgrade` 先刷新 Codex 侧的缓存，再拿门自己这一份去核对它；门比刷新后的 Codex 侧旧时以 `2` 停下（缓存已换成新版，hook 信任没动；项目文件通常也没动，但段里还没有启用表的项目，角色可能已先写——写没写、写了哪些，停下时的文案会如实点名）。所以顺序是：先升级门所在的那一侧（CC 门：`claude plugin update core@<市场>`），再跑 `--upgrade`；只装了 Codex、从插件目录直接跑脚本的（门在 Codex 安装缓存的版本目录里，或在 git 源的市场快照里），停下后按文案用新版本目录下的 `scripts/workframe_door.py` 带同样的参数重跑——门开跑时就记下了自己的版本，这次升级即使删掉了它所在的目录、或把它原地刷新成了新版，也照样会停下、并点名新目录下的门，文案还会说明那个目录此刻已不是正在跑的那一份。**升级完重开这个项目的 Codex 会话才生效**（Claude Code 那侧同理，见下文「各自的升级路径与生效时机」）。
   - **git 源** → `codex plugin marketplace upgrade`，**不改用户层的 `enabled`**。
   - **本地目录源**（框架开发者、或用 `marketplace add <本地路径>` 装的） → 那条命令只认 Git 市场，对它恒失败（`not configured as a Git marketplace`）。门改走 `codex plugin add core@<市场>` 重装（重装之前同样先过装前核对：本地仓里那一份与门的版本不同、且读得出时就在重装之前停下，用户层不会被写回 `true`；本地仓比门新时，出路点名本地仓里自带的门）——实测是整体重物化：缓存里被你改动过的部分换回原样。**代价：这一步会把用户层 `[plugins."core@<市场>"] enabled` 写回 `true`**，门在写入那一步再置回 `false`；中途失败时它停在 `true`，失败文案会明说，修完重跑即可。
   - 源形态拿不到时（`codex plugin list --json` 跑不通）门先试 git 那条，被拒再落到重装。
 
-  **绕过它直接敲 `codex plugin marketplace upgrade` 也行**（这条只对 git 源成立）：改动过的 hook 会变成 `modified` 而停跑，但下一次 Codex 会话里的种信任 hook（`SessionStart` 上命令行冻结的那一条）会检测到并直接补种、在会话里明说「框架已升级，已代你信任 N 条 hook」——**下次会话生效**（同一会话内刚补种的 hook 不跑，实测）。它自己第一次装上时也是 `untrusted`，由 `--codex` 一并种上。哪些改动会让 hook 失信任：`type` / `command` / `commandWindows` / `matcher` / `additionalContextLimit` / `timeout` / `statusMessage` / `async` 任一变、或在清单中间插条目；只改脚本正文、纪律片、版本号不会。
+  Codex 门升级请运行 `workframe-door --upgrade`，成功后重开这个项目的 Codex 会话。Windows、codex-cli 0.166.0 实测：插件内容变化可使本插件全部 hook 失信；仅重开会话不能恢复信任。裸跑 `codex plugin marketplace upgrade` 不包含恢复信任，已裸升级的也请运行 door 完成恢复。
+
+  `HOOK_HASH_FIELDS` 与组级 `matcher` 是配置审查使用的跨平台字段并集，不是完整 `currentHash` 的输入清单。0.153.x 的字段及平台差异结论属于旧版实测。Windows、codex-cli 0.166.0 实测的 `currentHash` 包含配置 hash 与插件内容 hash；内容变化可使全部 hook 失信，命令冻结不能保证继续受信。manifest 只审查配置和 key，不代表用户侧信任，也不预测需恢复信任的条数；实际 hash 与信任状态以 `hooks/list` 为准，不自行重算。
 - **坏发版**：`--upgrade` 里刷缓存那一步（两条路都是）先把本地缓存换成新版、门才对账——对账不过（exit 3）时缓存已是坏版、门没有回滚，只能等下一个好发版，或手动 `codex plugin marketplace add` 一个旧源。装后核对不过（exit 2：新缓存与门的版本对不上，或它的 hook 冻结清单缺失、坏了）时同样是缓存已换、门没有回滚；其中版本对不上多半不是坏发版，而是门落后了，照上一条的前提与顺序处理。
 - **Windows 深路径**：`CODEX_HOME` 路径很长时 `marketplace add / upgrade` 会撞 MAX_PATH（git 报 `Filename too long`）。门给自己起的 codex 子进程开了 `core.longpaths`；**你自己裸敲 `codex plugin marketplace add/upgrade` 没有这一层**，撞上就是 exit 128 且提示只说 clone failed——给 git 全局开 `core.longpaths=true`，或把 `CODEX_HOME` 挪短。
 - **默认市场源** `owner/repo` 形态：对 GitHub 公开仓（无鉴权的只读拉取）实测过注册市场、装插件与 `--upgrade` 刷新；需要鉴权的远端没验。装不上就 `--marketplace` 指 git URL 或本地目录。
@@ -227,17 +229,19 @@ workframe-door --codex            # 默认市场源 owner/repo；本地目录 / 
 
 - **插件按项目启用**：跑过 `--codex` 的项目才加载本插件（见上「按项目启用」）。用户层 `enabled` 被写回 `true` 之后（裸敲一次 `codex plugin add` 就会），任何目录的 Codex 会话都会加载它——这时本插件的 hook 在会话目录向上找不到 `.workframe-config.json` 的地方**直接早退**（零写入、零输出），不建 `.workframe/state/`、不补 `AGENTS.md`、不注入；`--check` 会把用户层 `true` 报成问题。代价：每个挂载点仍会各起一个 python 进程再退出（零凭据会话实测会话启动与一次提问共 8 条、比用户层 `false` 时多约 2.5 s）。早退只看会话目录向上有没有标记、**没有上限**：家目录这类祖先目录带标记时，其下所有目录都算「在项目内」（实测：祖先目录带标记时，子目录会话的状态写进祖先目录）。Claude Code 门没有这道早退——若把 core 装在 Claude Code 的用户作用域，它在非 workframe 目录同样会建状态目录（按代码推断，未实测）。
 - **子目录、非 git 项目、嵌套仓**：git 仓里的项目，从任何子目录起的 Codex 会话都加载本插件，状态统一写到项目根；**非 git 仓的项目只在项目根起的会话加载**（子目录会话里 Codex 读不到项目层）；项目里内嵌的独立 git 仓不加载（Codex 的项目层在最近的 `.git` 截止）——但用户层 `enabled` 被写回 `true` 时它会加载，hook 向上找到外层项目的标记，状态与注入都记在**外层项目**名下（实测）。
-- **签发把关**：`signoff-guard` 在 Codex 门下实测不起把关作用——用 `apply_patch` 改看板时不拦也不报，只有经 shell 改看板那条路径有提示（见本节下面 `PostToolUse` 那一条）。自签照样生效，四段举证纯靠自觉；关法见下一节「自签档默认开启」。
+- **签发把关**：`signoff-guard` 在 Codex 门下用 `apply_patch` 改看板时从补丁头认出看板，与 Claude Code 的 Edit 同样判、同样 exit 2；**Codex 怎么处置这个 exit 2（模型看不看得到红灯、会不会改回）没在真实会话里验过**，别把它当成与 Claude Code 一样可靠的把关。经 shell 改看板只提示（见本节下面 `PostToolUse` 那一条）。关法见下一节「自理签发默认开启」。
 - **项目 skill 的受保护前缀两个都认**：链接形态下 git 只报 `.agents/skills/…`，在 Claude Code 里经链接编辑时路径是 `.claude/skills/…`——签发把关与 doctor 的受保护资产对账两个前缀都认。两者都只是提示级，不封顶到用户拍板。
 - **装后核对只比版本串，`--codex`（及缺省模式、launcher 装机）在注册市场之前也不读已有登记**（`--backfill` 没给 `--marketplace` 时会先读已有注册面，不在此列）：本机已经以本地目录登记过同名市场、这次不带 `--marketplace` 跑时，只要 Codex 的克隆目录 `<CODEX_HOME>/.tmp/marketplaces/<名>/` 不在，Codex 对「已登记本地源、这次加 git 源」就不拒绝，直接把登记换成默认公开源，随后插件被装成公开那一份（克隆目录残留着时这一组合同样被拒；其余先后组合在已登记的那一份仍然有效时会被拒；本地目录被挪走、或 git 源的克隆目录被删之后，其余组合也会被直接换掉）。公开那一份与门的版本不同、且读得出版本时，装前核对在 `codex plugin add` 之前停下——此时登记已换，插件缓存与用户层还没动。**这一态下，本机其他已装过本插件的项目里 `workframe-door --check` 照样全绿**（它不核市场登记；停下的那个项目本身还没装完，在它里面跑 `--check` 会报问题），**而此后在本机任何项目里跑一次 `--upgrade`，都会按这条公开源登记把全机共用的插件缓存换成公开那一版**（git 源那一路不经过装前核对，换完才由装后核对停下）——所以停下之后先照文案 remove 再带 `--marketplace` 重跑，别先跑 `--upgrade`。**版本相同时（例如某版发布之后、下一次 bump 之前，框架开发版与公开版的版本串相同）装前、装后核对都分辨不出，会静默装成公开那一份并报就绪**。要装本地那一份，就显式给 `--marketplace <本地仓路径>`；登记已经被换掉的，先自己跑 `codex plugin marketplace remove workframe`（会删掉你 Codex 用户配置里的那条市场登记），再带 `--marketplace <本地仓路径>` 重跑。
 - **Codex 读 `AGENTS.md` 的两处边界**：项目根有 `AGENTS.override.md` 时 Codex 只读它、不读 `AGENTS.md`；`AGENTS.md` 超过约 32 KiB 的部分会被 Codex 静默截掉（实测读数，官方文档未核），排在末尾的段先丢。doctor 看不见这两种情形，照样报四段齐全。
 - **两扇门各自升级**：一边升了一边没升时会各自执行不同版本的脚本；doctor 的「环境与 hook 活性」项读两份 `plugin-root.<门>.txt` 对账版本，不等报 error。
 - **`disable-model-invocation` 在 Codex 门下不生效**：它是 Claude Code 的 skill frontmatter 字段，Codex 的 skill 规范不认它（Codex 侧的对应物是各 skill 目录下的 `agents/openai.yaml`，本框架没有写）。于是本插件里带这个字段、只该由你显式触发的那几个 skill（`rollback`、`onboard`、`audit`、`maintenance-review`、`memory-log`）在 Codex 门下对模型可见；按 Codex 的 skill 规范推断它们可被隐式调用，**未实测**（`disable-model-invocation` 是 Claude Code 语义，Codex 侧没见到对等字段生效的记录）。当前决定是先忽略、不做门差补偿；要不要补是产品决策。
 - **launcher 装成 Codex 插件这个形态没验过**：本文讲的 Codex 门全部围绕 core——`workframe-door` 是 core 插件带的命令。launcher（装机入口）在 Codex 下能不能被发现、装上之后它的 skill 正文与 `reference/` 相对引用能不能被读到、`allowed-tools` 这类 Claude Code frontmatter 在 Codex 的语义是什么，**都没有真机结论**。所以本文没有「在 Codex 里装 launcher」的步骤，**对话式的建项目 / 接入目前需要 Claude Code**。装机脚本本身不依赖 `claude` 命令（见 §确认后执行什么 步骤 4）：没有 Claude Code 的机器，可以照根 README「无人值守 / CI 初始化」一段手工跑同一批脚本——那条路没有确认页，也没在只装 Codex 的机器上完整走过一遍。
-- **`PostToolUse` 四条 Claude Code matcher 在 Codex 的实测命中面**（Windows、codex-cli 0.153.4；一次带凭据的会话，再按同一载荷直调脚本复证）：
-  - `Bash` → `signoff-guard`：**命中**，行为与 Claude Code 相同（经 shell 改看板时只提示、不拦）
-  - `Edit|Write|NotebookEdit` → `check-stale-modules`、`signoff-guard`：**matcher 命中，但两个脚本都空转**。Codex 改文件走 `apply_patch`：载荷里 `tool_name` 是 `apply_patch`、`tool_input.command` 是 patch 文本、没有 `file_path`；`check-stale-modules` 只认 Claude Code 的编辑工具名，`signoff-guard` 取不到 `file_path`，两个都直接返回。后果：**Codex 门下用 `apply_patch` 改看板，自签把关不拦也不报**；改到模块 `code_paths` 覆盖的文件时不会当场标 stale，要等下一次会话启动时的 git 改动补扫
+- **`PostToolUse` 四条 Claude Code matcher 在 Codex 的实测命中面**（Windows、codex-cli 0.153.4 首测，0.166.0 用真实会话复测）：
+  - `Bash` → `signoff-guard`：**命中**，行为与 Claude Code 相同（经 shell 改看板时只提示、不拦）；命令读到某个 skill 的 `SKILL.md` 时顺带投该 skill 所属角色的记忆（Codex 门的 skill 入口，见本节下面「两门不共享的」里主会话记忆那一条）
+  - `Edit|Write|NotebookEdit` → `check-stale-modules`、`signoff-guard`：**matcher 命中 `apply_patch`**，载荷里 `tool_name` 是 `apply_patch`、`tool_input.command` 是补丁文本、没有 `file_path`。`check-stale-modules` 从补丁头取路径（新增、修改、删除，移动取前后两个），改到模块 `code_paths` 覆盖的文件时当场标 stale、投 dev 记忆；`signoff-guard` 用同一份补丁头解析认出看板，改到看板就按签注规则判、违规 exit 2（exit 2 在 Codex 下的效果未实测，见上面「签发把关」）
   - `Skill` → `log-skill-invoked`：**不命中**——Codex 没有 Skill 工具（模型用 shell 读 `SKILL.md`），`skill_invoked` 事件在 Codex 门下不产生
+- **派发起名闸只挂 Claude Code 门**：`PreToolUse`（matcher `Agent`）上那道「主会话派发 `core:*` 角色带 `name` 即拦」的 hook 不派生进 Codex 清单——Codex 没有 Agent 工具与 agent teams，`spawn_agent` 也不带 `name`
+- **`codex exec` 退出时 `SessionEnd` 偶发没跑完**（Windows、codex-cli 0.153.4 实测：同一项目 5 次 `codex exec` 会话里有 1 次 `session-end-flush` 进程起了却零事件，`current-session-codex-*.json` 会话标记残留；根因未查）。后果：那一次会话的收尾事件缺失；残留标记让下一次同门会话时出现两个标记，`workframe-event` 分不清是哪个会话，`skill_used` 就不带 `session_id`。所以「每次会话必然产出的事件集」在 Codex 门下不必然——双门对等探针的事件集合比对碰上这一次会假红，重跑一次即可分辨
 - 需要凭据才能验的：`spawn_agent` 子线程上 `agent_type` 是否等于角色名（角色记忆按它命中）、TUI 启动审查页与 `SessionStart` 的先后。
 
 ### 安全删法：`.claude/` 里的 `skills` 是链接
@@ -267,13 +271,13 @@ workframe-door --codex            # 默认市场源 owner/repo；本地目录 / 
 **各自的升级路径与生效时机**
 
 - Claude Code：按它的插件更新入口更新之后，**hook 清单与角色定义要 `/reload-plugins` 或重启会话才生效**；hook 调用的脚本与 skill 正文在下一次被调用时就是新版。
-- Codex：`workframe-door --upgrade`（刷插件缓存 ＋ 重生成角色 ＋ 补种信任；刷缓存那一步按市场源形态走 `marketplace upgrade` 或重装，两条路与各自代价见上「装完之后」的升级一条）——门本身得已经是目标版本，先升门所在的那一侧再跑它，否则它在核对时以 `2` 停下（前提与顺序同见那一条）；git 源也可以直接 `codex plugin marketplace upgrade`——改动过的 hook 变 `modified` 而停跑，下一次 Codex 会话里的种信任 hook 自动补种，**再下一次会话生效**。
+- Codex：`workframe-door --upgrade`（刷新插件缓存 ＋ 重生成角色 ＋ 恢复本插件 hook 信任；刷缓存那一步按市场源形态走 `marketplace upgrade` 或重装，两条路与各自代价见上「装完之后」的升级一条）——门本身得已经是目标版本，先升门所在的那一侧再跑它，否则它在核对时以 `2` 停下（前提与顺序同见那一条）；成功后重开 Codex 会话。裸升级不包含恢复信任。
 - 一边升了一边没升：两门各跑一个版本；doctor 读两份 `plugin-root.<门>.txt` 报 error。
 - 上一版装的项目（运行态还在 `.claude/` 下）：两门一样，升级后先按下面「已装项目迁移」迁移、再开会话。
 
 **两门不共享的**
 
-- 主会话记忆：Claude Code 用 auto-memory（官方记忆目录），Codex 用它自己的原生机制，两边互不可见。角色记忆（`agent-memory/`）是框架自有机制，两门共用一份。
+- 主会话记忆：Claude Code 用 auto-memory（官方记忆目录），Codex 用它自己的原生机制，两边互不可见。角色记忆（`agent-memory/`）是框架自有机制，两门共用一份；主会话拿到它的方式两门相同：由 hook 投递（开场投 shared 全文与各角色条目目录，进入某域 skill、首次改到模块代码路径时投该域全文，压缩后补投）；只有「进入某域 skill」的认法不同——Claude Code 门是调用 Skill 工具或用户输入 `/skill`，Codex 门是读该 skill 的 `SKILL.md` 或用户在提示里写 `$skill`。
 - 模型手写的事件（`skill_used`、`user_correction` 等）：写入指令随注入的纪律片投递。Codex 侧主线程片头带一行 `本会话 harness=codex session_id=…`，`workframe-event` 另有会话标记文件兜底。事件注册表（`.workframe-meta/event-schema.json`）里 `__delivery_established__.codex` 仍是 `false`：它表示「Codex 门下模型照做写事件」这一环还没被观察到——Codex 侧这类事件为零时先怀疑投递，再怀疑模型。
 
 **两门对等怎么验**
@@ -281,15 +285,15 @@ workframe-door --codex            # 默认市场源 owner/repo；本地目录 / 
 - 静态：`tools/validate.py` 的 `hooks_twin_parity`（两门 hook 清单在事件 × matcher × 脚本 × 固定参数上对等）与 `role_twin_parity`（角色生成器对 `agents/*.md` 的渲染 == 仓内样本）。**验的是声明面**：`PostToolUse` 四条 hook 的 matcher 是 Claude Code 的工具名，它们在 Codex 的命中面不在这两道闸的视野内（实测结论见上「能力边界」里 `PostToolUse` 那一条）。
 - 动态：`tools/twin_parity_probe.py`（框架仓根工具，不随插件分发）比对两门在同一项目里的 scope 级注入指纹、角色记忆注入产出与事件类型集合。需要两门凭据，由维护者跑；配方见脚本的 `--recipe`。
 
-## 升级到含「四段闸门」的版本：已装项目要做什么
+## 升级到含「主 Claude 自签通道」的版本：已装项目要做什么
 
 **这一版改了一个架构不变量**：`pending_qa → completed` 从「无条件仅 @qa」变成
-「角色侧仅 @qa，主 Claude 另有一条走四段闸门的自签通道」。**升级后这条通道会自动生效**
+「角色侧仅 @qa，主 Claude 另有一条自签通道」。**完成对应门的升级后，新契约随新会话注入；Codex 须先完成 door 的信任恢复**
 ——请先读第 1 条再决定要不要关掉它，另外两件也值得过一遍。
 
-**升级之后重开这个项目的会话才生效**：新契约随会话启动时注入的纪律到达，已经开着的会话仍按旧版；上一版装的项目（运行态还在 `.claude/` 下）先按下文「已装项目迁移」迁移、再开会话。
+**Codex 须先完成 door 的信任恢复；升级之后重开这个项目的会话才生效**：新契约随会话启动时注入的纪律到达，已经开着的会话仍按旧版；上一版装的项目（运行态还在 `.claude/` 下）先按下文「已装项目迁移」迁移、再开会话。
 
-### 1. 自签档默认开启——不想要就显式关掉
+### 1. 自理签发默认开启——不想要就显式关掉
 
 `.workframe-config.json` 里**没有** `signoff` 键 = **开着**。要关：
 
@@ -301,19 +305,19 @@ workframe-door --codex            # 默认市场源 owner/repo；本地目录 / 
 某个配置键才生效的能力，对多数项目等于不存在。但它的代价请你知情后再决定：
 
 - **主 Claude 在收口时可以自己签发**（`pending_qa → completed`），不再必须调度 @qa。
-  降档不是无条件的——要拿得出「覆盖本轮改动的独立结论」，档位还受改动爆炸半径卡下限、
-  命中六条否决项之一则一律抬到找你拍板；写松了会被 hook 当场拒绝。
-- **那道 hook 在 Codex 门下实测不起把关作用。** 它挂在 `PostToolUse` 上、按工具名匹配
+  自理不是无条件的——改的东西本身负责判断对错、影响核心链路且出错难发现、或主会话自己拿不准时，
+  要先交独立验证；命中六条否决项之一则一律找你拍板。否决项由 hook 按签注里的提交区间自己重算，
+  写成自理而命中了会被当场拒绝；但「该不该独立验证」是模型判的，hook 不判。
+- **那道 hook 在 Codex 门下的拦截效果没验过。** 它挂在 `PostToolUse` 上、按工具名匹配
   （`Bash` / `Edit|Write|NotebookEdit`）。Codex 改文件走的是 `apply_patch`，载荷里没有 `file_path`，
-  hook 进程起了却取不到要查的文件、直接放行——**用 `apply_patch` 改看板，自签写松了不拦也不报**；
-  只有经 shell 改看板那条路径有提示（与 Claude Code 一样只提示不拦）。所以那一门下自签照样
-  生效，四段举证纯靠自觉（Windows、codex-cli 0.153.4 实测，细节见上文「Codex 门」的能力边界）。
-  **在 Codex 下用本框架、又对签发质量敏感的项目，建议显式关掉。**
-- 校验还有两处看得见的边界：用 shell 命令（脚本 / `sed` / 重定向）改看板时它只提示不拦；
-  历史上写成一段散文的签发记录不进把关面。
+  hook 从补丁头认出看板、与 Claude Code 的 Edit 同样判、违规时同样 exit 2——但 **Codex 怎么处置这个
+  exit 2 没在真实会话里验过**；经 shell 改看板那条路径只提示不拦（与 Claude Code 一样）。细节见上文
+  「Codex 门」的能力边界。**在 Codex 下用本框架、又对签发质量敏感的项目，建议显式关掉。**
+- 校验还有三处看得见的边界：用 shell 命令（脚本 / `sed` / 重定向）改看板时它只提示不拦；
+  2026-11-01 之前完成的任务的签注不进把关面；收口检查（`module-close-check`）不查签注格式，不替它兜底。
 
-关掉之后，看板里写 `qa_signoff.tier: 自签` 会被 hook 拒绝，红灯会告诉你要改的是配置
-而不是那一行档位。
+关掉之后，研发任务一律经独立验证才能签，看板里写 `qa_signoff.mode: 自理` 会被 hook 拒绝，
+红灯会告诉你要改的是配置而不是那一行类别。
 
 ### 2. 检查 `shared/MEMORY.md` 里有没有一条过期的 `[纠正]`
 
@@ -354,7 +358,7 @@ grep -n "\[纠正\]" <你的项目>/.workframe/agent-memory/shared/MEMORY.md
 
 ### 回滚
 
-**只想回到「只有 @qa 能签」**：不必回退插件版本，把自签档显式关掉即可（`.workframe-config.json` 里写
+**只想让每个研发任务都经独立验证再签**：不必回退插件版本，把自理签发显式关掉即可（`.workframe-config.json` 里写
 `"signoff": { "self_signoff_enabled": false }`，见上）。下面的逆序 revert 只适用于从源码仓跟踪开发分支、
 要把代码层面整体退回去的维护者。
 
@@ -427,7 +431,7 @@ git log --oneline --name-only <上一个发版 tag>..HEAD
 5. 候选文件（`logs/workframe-migrate/<时间戳>/candidates/`）按输出的 `git diff --no-index` 命令对比，想要就替换进去。
 6. **退出码是 `0` 才重开会话**。**退出码不是 `0` 就先别开这个项目的会话，看输出末尾的块**：`8` 表示没做完，块里逐项写明哪些还留在旧位置、哪些只是文件没改，见下面「中途失败」「有一类没迁」「跳过了改写」三条。
 7. **auto-memory 里的旧路径手改**：主会话记忆（Claude Code 的 auto-memory）里指向旧记忆目录的指针，迁移工具只列不改（plan 的报告项逐行列出；迁移之后体检的 auto-memory 一项也会报）——把指针里的旧记忆目录前缀换成新的（上表第二行）。
-8. **把项目内容归位进 `AGENTS.md`**：迁移不搬 `CLAUDE.md` 里的项目目标 / 业务背景 / 项目特殊约束；`AGENTS.md`「这个项目是什么」还是 `（待填）` 时，plan 的报告项与 apply 收尾都会说一句。按 core 插件 `reference/claude-md-merge-guide.md` 逐段归位（见上面「升级到含『四段闸门』的版本」第 3 条）。
+8. **把项目内容归位进 `AGENTS.md`**：迁移不搬 `CLAUDE.md` 里的项目目标 / 业务背景 / 项目特殊约束；`AGENTS.md`「这个项目是什么」还是 `（待填）` 时，plan 的报告项与 apply 收尾都会说一句。按 core 插件 `reference/claude-md-merge-guide.md` 逐段归位（见上面「升级到含『主 Claude 自签通道』的版本」第 3 条）。
 
 ### 它怎么防误跑、能力边界
 
@@ -460,3 +464,23 @@ git log --oneline --name-only <上一个发版 tag>..HEAD
 | 异构原料（docx / xls / 截图）归档入库 | `requirement-archiving`（重启后项目内执行） |
 | 代码反解为现状文档 | `code-to-doc`（重启后项目内执行） |
 | 一堆资料不知道怎么进来 | `material-intake`（先出台账与分流计划） |
+
+### Codex 信任诊断与能力边界
+
+`workframe-doctor`（含 install 组）与 `workframe-door --check` 共用实时只读信任诊断，
+按本项目 managed 配置中的实际市场筛选插件，显示未受信 N/M 与恢复出路。
+doctor 确证失信报 error；CLI 缺失、超时或协议异常报 warn「未能核实」，不能视为健康。
+未接 Codex 门或用户已关闭时不报信任问题。诊断不写 hook 信任、项目 trust 或启用位；
+app-server 自身可能写运行日志。历史审计文件不能证明当前受信。
+
+Windows、codex-cli 0.166.0、隔离 `CODEX_HOME` 的补测：hook 受信时，`codex exec`
+中的两条 SessionStart hook 都执行；只改插件 README 并重装后，两条都变为 `modified`，
+`codex exec` 中零条执行且没有提示。同一状态下交互式 TUI 启动会弹 hook 复核页；
+选择「Continue without trusting」后 hook 未执行（用户实测）。因此升级后静默停跑
+发生在 `codex exec` 等非交互／自动化场景；交互用户会看到 Codex 自己的复核页。
+在那里批准与运行 door 是两条路径；框架推荐的恢复路径仍是 `workframe-door --upgrade`，
+成功后重开 Codex 会话。
+
+原开场种信任 hook 已退役，它自身失信时无法恢复其他 hook。本框架保证 door／doctor
+入口内异常可见；绕过入口直接运行非交互 Codex 仍可能静默停跑。不在 Claude Code
+每次开场替 Codex 检查信任，也不承诺覆盖原生启动、IDE 或所有 `CODEX_HOME`。

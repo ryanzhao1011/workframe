@@ -43,7 +43,7 @@ jobs:
       # 也不产生 Dependabot 安全告警——升级由维护者发版前人工核版驱动；末尾版本号注释是
       # Dependabot 官方识别的格式，升级时 SHA 与注释同一行同批改（validate 有闸）。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
       # 钉死版本的理由见文件头「依赖」段；升级与核版走发版前的人工核版工序。

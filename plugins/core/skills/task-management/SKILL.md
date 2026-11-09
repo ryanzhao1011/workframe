@@ -1,6 +1,6 @@
 ---
 name: task-management
-description: '管理项目看板 board.yaml 的任务创建、状态流转与进度统计。用于 board.yaml 任务创建 / 状态变更 / 流转规则查阅 / schema 约束确认。典型触发："看板 X" / "任务状态改 Y" / "怎么流转研发任务到 pending_qa" / "签发权限"。不用于：summary 数字重算（由 SessionEnd hook 自动 + 用户显式 `workframe-recompute-board-summary` 命令）/ 节奏复盘与周报（暂无对应 skill，由主 Claude 自由发挥）。'
+description: '管理项目看板 board.yaml 的任务创建、状态流转与签发。用于 board.yaml 任务创建 / 状态变更 / 流转规则查阅 / 签注（`qa_signoff`）写法 / schema 约束确认。典型触发："看板 X" / "任务状态改 Y" / "怎么流转研发任务到 pending_qa" / "签发权限" / "签注怎么写"。不用于：summary 数字的日常维护（SessionEnd hook 自动重算，本 skill 只给手工兜底的调用方式）/ 节奏复盘与周报（暂无对应 skill，由主 Claude 自由发挥）。'
 user-invocable: false
 allowed-tools: [Read, Write, Edit, Glob, Grep]
 ---
@@ -27,7 +27,7 @@ tasks:
     description: "任务描述"
     status: pending          # pending | in_progress | pending_qa | completed | blocked | cancelled
     priority: P1             # P0 | P1 | P2
-    assigned_to: dev         # pm | dev | qa | prompt-eng
+    assigned_to: dev         # pm | dev | qa | prompt-eng | <project-role>
     created_at: "YYYY-MM-DD"
     updated_at: "YYYY-MM-DD"
     deadline: null           # "YYYY-MM-DD" 可选；有截止要求才填。heartbeat-check.py 会扫此字段判逾期
@@ -41,11 +41,11 @@ tasks:
     # sub_req_slug: main                # 与 req_slug 同进同出；main 也要显式写
     #                                   # （缺省按 main 解释仅对**存量**条目成立）
     # affected_modules: []              # 可选；横切多模块任务用二段式数组
-    # ── 可选生命周期字段（按事件触发写入）─────────────────────
-    # completed_at: "YYYY-MM-DD"    # status 改为 completed 时填写
-    # actual_output: ""              # completed 时补充实际产出描述
+    # ── 生命周期字段：到那个状态才出现，出现后按下文 §生命周期字段 填 ──
+    # completed_at: "YYYY-MM-DD"    # status 改为 completed 时必填
+    # actual_output: ""              # completed 时建议填，记录实际产出
     # blocked_reason: ""             # status 改为 blocked 时必填
-    # cancelled_at: "YYYY-MM-DD"     # status 改为 cancelled 时填写
+    # cancelled_at: "YYYY-MM-DD"     # status 改为 cancelled 时必填
     # cancel_reason: ""              # cancelled 时必填
 ```
 
@@ -79,8 +79,7 @@ modules/ 体系下，task 字段叠加 modules 归属：
 
 ### 生命周期字段（到那个状态才填）
 
-「可选」指的是**任务没走到那个状态就不该有这个字段**，不是「到了也可以不填」——下表的
-"必填"是**状态触发后的硬要求**（原标题写「可选」与表内「必填」互相打架）。
+**任务没走到那个状态就不该有这个字段**；走到了，下表的「必填」是**状态触发后的硬要求**。
 流转到对应状态的角色负责当场填，不留给下一个人补。
 
 | 字段 | 填写时机 | 状态触发后 |
@@ -97,12 +96,11 @@ modules/ 体系下，task 字段叠加 modules 归属：
 
 | tag | 含义 | 使用场景 |
 |-----|------|---------|
-| `auto-update` | 由 auto-update 规则自动创建的任务 | P0/P1 信号触发时自动追加 |
+| `auto-update` | 信号入账直接追加的任务 | 仅 P0 安全 / 线上故障类信号，经用户确认后追加的单条 `pending` 任务；其余信号产生的任务走本 skill 或由主会话落盘 |
 | `needs-qa-regression` | 需要 @qa 执行回归验证 | 安全类修复完成后 |
 | `prompt-review` | 需要 @prompt-eng 介入评估 | 需求变更涉及 Prompt 质量时 |
 | `security` | 安全相关任务 | SEC issue 关联任务 |
 | `main-executed` | 主 Claude 实际完成了使任务进入 `pending_qa` 的研发交付 | 主 Claude 直做研发任务、代行 `in_progress → pending_qa` 时 |
-| `P0` / `P1` / `P2` | 优先级标签 | 与 issue severity 对应 |
 
 > tags 用于协同角色标注：当 `assigned_to` 为单值时，通过 tags 标注需要协同的其他角色。例如 `assigned_to: dev` + `tags: [needs-qa-regression]` 表示 dev 完成后需 qa 回归验证。
 >
@@ -115,7 +113,7 @@ modules/ 体系下，task 字段叠加 modules 归属：
 | `pending` | 待开始 | 初始状态 |
 | `in_progress` | 进行中 | 从 pending 流转，依赖项须全部 completed |
 | `pending_qa` | 待 QA 验证 | 从 in_progress 流转，仅研发类任务经过此状态 |
-| `completed` | 已完成 | 研发任务：从 pending_qa 流转（**baseline 角色里仅 @qa 可操作**；主 Claude 自签的准入见 §签发权限 该行）；非研发任务：从 in_progress 直接流转 |
+| `completed` | 已完成 | 研发任务：从 pending_qa 流转（**baseline 角色里仅 @qa 可操作**；主 Claude 签发见 §签发权限 该行）；非研发任务：从 in_progress 直接流转 |
 | `blocked` | 被阻塞 | 从任意状态流转，须注明阻塞原因（QA 不通过时也使用此状态） |
 | `cancelled` | 已取消 | 从任意状态流转，须注明取消原因 |
 
@@ -131,62 +129,63 @@ modules/ 体系下，task 字段叠加 modules 归属：
 - 纯技术咨询、方案评估（@dev 的咨询类交付物）
 - 纯文档任务
 
-**项目自定义角色**（`assigned_to: <project-role>`）：按 `role-customization-guide.md` §任务状态流转约定的三分类归类——「产出修改线上内容」类（content-operator / designer 等）视同研发类走 pending_qa，其 `in_progress → pending_qa` 由该角色自己操作、签发仍仅 @qa（**自定义角色一律不获得签发权**，四段闸门的自签只对主 Claude 开）；「分析/咨询」「协调」类视同非研发类直接流转。项目在角色定义的 Step 3 段写明归类，不明确时按研发类处理（fail-safe：多过一道 QA 优于漏签发）。
+**项目自定义角色**（`assigned_to: <project-role>`）：按 `role-customization-guide.md` §任务状态流转约定的三分类归类——「产出修改线上内容」类（content-operator / designer 等）视同研发类走 pending_qa，其 `in_progress → pending_qa` 由该角色自己操作、签发仍仅 @qa（**自定义角色一律不获得签发权**，§谁签发这次收口 的自签通道只对主 Claude 开）；「分析/咨询」「协调」类视同非研发类直接流转。项目在角色定义的 Step 3 段写明归类，不明确时按研发类处理（fail-safe：多过一道 QA 优于漏签发）。
 
 ### 签发块 schema（`qa_signoff` / `verified_ranges`）
 
-`qa_signoff` 接受**两种形态**，按谁签发分：
-
-| 形态 | 用在哪 | 谁校验 |
-|---|---|---|
-| **字符串**（散文签注） | @qa 签发。写清验了什么、没验什么 | 无机器校验 |
-| **映射**（四段举证） | **主 Claude 自签或轻签注时必须用这种** | `signoff-guard.py` hook 逐字段校验 ＋ 重算四段闸门 |
+研发任务转 `completed` 时写 `qa_signoff`，**一律映射形态**——主会话签、@qa 签都一样。
+签发分哪一类（主会话自理 / 需要独立验证）、否决项怎么交用户，判据在必载片 §谁签发这次收口，
+本节只管字段：
 
 ```yaml
 - id: TASK-042
   status: completed
+  completed_at: "2026-11-05"
   qa_signoff:
-    tier: 自签                    # 自签 / 轻签注 / 完整验证 / 你拍板
-    same_party: true              # 实现方与签发方是否同一方（**必填**）
-    admission:                    # ① 准入凭据——**hook 按这几个输入重算**，不读你写的结论
-      radius: 2                   # 爆炸半径（1-4，模型判的输入）
-      since: "a1b2c3d4"           # 切片起点 = 上一个签发点
-      diff_ref: "e5f6a7b8"        # 被判 diff 的锚点
-      at: "2026-09-10T01:02:03+00:00"   # UTC ＋ 秒级
-      passport:                   # 通行证；没有就写 null
-        task: TASK-041
-        round: "第二轮"
-        covered: "改动面与本轮 delta 的关系，一句话说清"
-        ref: "a1b2c3d4"
-    verified: |                   # ② 验了什么，逐条
+    mode: 自理                    # 自理 / 独立验证 / 你拍板
+    since: "a1b2c3d4"             # 切片起点：已提交的 commit hash（单仓）
+    diff_ref: "e5f6a7b8"          # 切片终点：已提交的 commit hash
+    # 多仓按仓给，键是仓相对项目根的路径，根仓写 "."：
+    #   since: {".": "a1b2c3d4", "vendor/lib": "c9d0e1f2"}
+    #   diff_ref: {".": "e5f6a7b8", "vendor/lib": "a3b4c5d6"}
+    verifier:                     # mode 为「独立验证」时必填
+      who: "@qa"                  # 新 @qa / 另一个模型 / 外部 agent
+      report: "报告路径或会话 id"
+    approval: "…"                 # mode 为「你拍板」时必填：用户批准的原话或时间与范围
+    ruling: "…"                   # 可选：重算出待裁决项而不交用户时，逐条写裁决
+    verified: |                   # 验了什么，逐条
       ...
-    not_verified: |               # ③ 没验什么 ＋ 为什么，逐条
-      ...
-    unreviewed: |                 # ④ 未独立复核的部分
+    not_verified: |               # 没验什么 ＋ 为什么，逐条
       ...
   verified_ranges: |              # 本次签发覆盖到哪儿（**必填**，与 qa_signoff 同级）
     ...
 ```
 
-**四个字段各自防什么**（缺一即被 hook 拒，红灯会点名是哪一段）：
+**`signoff-guard.py` hook 查什么**（缺一即拒，红灯会点名是哪一项）：
 
-- **`admission` 是四段里唯一由机器重算的那段。** hook 只吃 `radius` / `since` / `passport`
-  这几个**输入**，自己调判定脚本重跑一遍，把结果与 `tier` 比——**写入的档位比重算结果松即拒**。
-  所以「把否决项写成未命中」这种事做不到：那不是输入，是结论，hook 根本不读它。
-- **`same_party`** 把「实现方与签发方是同一个」从散文变成可分组字段。允许同一方时这是唯一的
-  补偿控制：缺了它，事后问题率就只剩一个混合池，两种成色分不开。
-- **`unreviewed` 的判据是二元口诀**：本轮有没有第二个 context 从零看过同一份产出？
-  **没有 → 写「全部」**，然后列出你据以自信的机器证据。同一方签发时恒命中「没有」。
+- **切片两端只收十六进制 commit**，签发前先提交——hook 按 `since..diff_ref` **自己重算否决项**，
+  不读你写的结论。符号引用（`HEAD`、分支名）会随提交移动，钉不住签发时判的是哪一段。
+  **没声明的仓不在切片里**：改了两个仓就两个都写——漏写一个仓，hook 发现不了（它只重算你声明的那几段）。
+- **命中否决项**而 `mode` 不是「你拍板」即拒；重算出**待裁决项**（如触及受保护资产的路径）时，
+  要么交用户拍板，要么在 `ruling` 里逐条写出裁决——拿不准一律算命中。
+- **独立验证必须写 `verifier`**——hook 只查有没有写，不判写得真不真。
+- **类别判得对不对，hook 不判**：把该独立验证的写成「自理」，没有任何机器面会说话（判据在必载片 §谁签发这次收口）。
 - **`verified_ranges`** 是下一轮增量复核的锚点。不写它，下一轮只能退回全量复核或凭印象划范围。
+- 通过时 hook 自动记一行 `self_signoff` 事件（任务、类别、验证方），不用手写。
 
-> **`tier: 自签` / `轻签注` 默认可用**：`.workframe-config.json` 的
-> `signoff.self_signoff_enabled` **缺键即开启**（默认 true）。要关掉得显式写
-> `false`；关掉之后 hook 会拒绝这两档，红灯说明要动的是配置而不是那一行档位。
+**查哪些、不查哪些**：`completed_at` 不早于 2026-11-01、且带签注或打了 `main-executed` /
+`needs-qa-regression` 的已完成任务。之前完成的不追溯；被拦的只限**本次新出现或改过**的签注——原样未动的
+存量问题只报不拦。关掉自签开关之后，「你拍板」也要写 `verifier`（拍板不免除独立验证）。
+
+> **自理默认可用**：`.workframe-config.json` 的 `signoff.self_signoff_enabled` **缺键即开启**
+> （默认 true）。显式写 `false` ⇒ 研发任务一律按「独立验证」签发，写「自理」hook 会拒，
+> 红灯说明要动的是配置而不是那一行类别。
 >
-> **默认开启是一个被知情接受的取舍**：它让能力对多数项目真正可用，代价是升级到本版
-> 的项目不做任何动作就获得了自签权，且 **Codex 门下本 hook 实测不起把关作用**（Codex 改文件
-> 走 `apply_patch`，载荷没有 `file_path`，hook 起了也直接放行——用它改看板不拦也不报；经 shell
-> 改看板只提示）⇒ **那一门下的把关按不存在对待**（自签照样生效，四段举证纯靠自觉）。要求更严的项目请显式关闭。
+> **默认开启是一个被知情接受的取舍**：它让能力对多数项目真正可用，代价是从默认关闭的
+> 旧版升级上来的项目不做任何动作就获得了自理签发权，且 **Codex 门下本 hook 的拦截效果未经真实会话验证**
+> （`apply_patch` 改看板时从补丁头认出看板、与 Edit 同样 exit 2，但 Codex 怎么处置这个 exit 2 没验过；
+> 经 shell 改看板只报不拦）。收口检查（`module-close-check`）
+> **不查签注格式**，不替这道 hook 兜底。要求更严的项目请显式关闭。
 
 ### 签发权限
 
@@ -194,15 +193,12 @@ modules/ 体系下，task 字段叠加 modules 归属：
 |---------|-----------|
 | `pending → in_progress` | 该任务 `assigned_to` 的角色（认领即开工，不需要谁签发） |
 | `in_progress → pending_qa` | @dev、@prompt-eng（研发任务必经）；走 pending_qa 类的项目自定义角色（归类见 §pending_qa 适用范围）同此；**主 Claude 直做时代行**——`assigned_to` 仍填对应角色（域语义不变），并打 `tags: [main-executed]` |
-| `pending_qa → completed` | @qa（**baseline 角色里**唯一可签发研发任务完成的，含自定义角色的研发类任务）。**代行不含签发权**——主 Claude 直做研发任务不因此获得签发权。主 Claude **自签**的准入由四段闸门判定（判据见必载片 §谁签发这次收口），且 **自签档默认开启**（`.workframe-config.json` 的 `signoff.self_signoff_enabled` **缺键即 true**）；要求更严的项目显式写 `false`，写了之后本行等价于「**签发权仍仅 @qa**」，直做后仍须实际调度 @qa |
+| `pending_qa → completed` | @qa（**baseline 角色里**唯一可签发研发任务完成的，含自定义角色的研发类任务）。**代行不含签发权**——主 Claude 直做研发任务不因此获得签发权。主 Claude **自签**按必载片 §谁签发这次收口 的两类签发（自理，或经独立验证之后由主 Claude 签），且 **自理默认开启**（`.workframe-config.json` 的 `signoff.self_signoff_enabled` **缺键即 true**）；要求更严的项目显式写 `false`，写了之后研发任务一律经独立验证才能签 |
 | `pending_qa → blocked` | @qa（测试不通过时） |
 | `in_progress → completed` | @pm、@dev（非研发任务）、@qa（非研发任务）、@prompt-eng（非研发类 Prompt 咨询）；分析/咨询/协调类的项目自定义角色同此 |
 | `任意 → blocked` | 任何角色（遇阻即可标，必须同时写 `blocked_reason`）。非 QA 角色直接标 blocked 是被允许的路径——必载片 §Step 1 — 事件流 的 task_blocked fallback 正是为它准备的 |
 | `blocked → in_progress` | 阻塞解除后由 `assigned_to` 角色自行恢复；QA 打回的任务由完成研发交付的角色（@dev / @prompt-eng / 走 pending_qa 类的自定义角色）修复后恢复，不需要 @qa 再签一次 |
 | `任意 → cancelled` | @pm 或用户（范围决策，必须同时写 `cancelled_at` + `cancel_reason`） |
-
-> 上表补齐前只定义了 4 行，而状态定义表写着 blocked / cancelled
-> 「从任意状态流转」——出边和执行主体都没有落点，dev 修完被打回的任务找不到恢复依据。
 
 ## summary 重算（由 SessionEnd hook 自动执行；主 Claude 手工兜底）
 
@@ -240,7 +236,7 @@ python "$(cat .workframe/state/plugin-root.txt)/bin/workframe-recompute-board-su
 
 **自动兜底**：`session-start-prep.py` 在每次 SessionStart 时执行 drift check（对比 summary vs tasks 实际计数），发现不一致自动调用 recompute 修复并写 `summary_drift_repaired` 事件。手工兜底主要用于"用户希望立即看到最新 summary 不等下次 session"或"drift check 因 board.yaml 异常而 skip"等场景。
 
-**SessionEnd timeout caveat**：SessionEnd hook 默认 1.5 秒整体 budget，**plugin-provided hooks 的 timeout 配置不会提升整体 budget**。如果项目 board.yaml 超大（>5000 tasks）导致 recompute 超时，用户可设环境变量 `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS=5000`（或更高）。SessionStart drift check 兜底机制保证即使 SessionEnd 超时，下次启动仍能修复。
+**SessionEnd timeout caveat**：SessionEnd hook 默认 1.5 秒整体 budget，**plugin-provided hooks 的 timeout 配置不会提升整体 budget**。如果项目 board.yaml 大到 recompute 超时（耗时随文件字节数增长，不随任务条数——任务正文写得长的看板，几百条就能到 MB 级），用户可设环境变量 `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS=5000`（或更高）。SessionStart drift check 兜底机制保证即使 SessionEnd 超时，下次启动仍能修复。
 
 ## 操作规范
 

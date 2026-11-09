@@ -403,7 +403,8 @@ def runtime_rel(project_dir, kind):
     **旧形态一律不读不写**：旧布局项目的运行态由 `workframe-door --migrate` 搬过来（含删除动作，
     apply 须用户本人执行），本函数不搬、也不回退到旧目录。没迁移就开会话，hook 会在新位置从零建一套，
     旧目录里的状态与记忆此后没有读者；doctor 安装组第一项 `legacy_state_dir` 报这一态，迁移工具对
-    「新旧同时存在」判冲突不动。**要看旧目录此刻在不在的只有 doctor 与迁移工具**，它们用 `legacy_rel` /
+    「新旧同时存在」判冲突不动。**要看旧目录此刻在不在的只有 doctor、迁移工具与会话启动的一行提示**
+    （`session-start-prep.warn_unmigrated_legacy`，判定借 doctor 的），它们用 `legacy_rel` /
     `legacy_present`，不经本函数。
 
     保留 `project_dir` 参数：`state_dir_of` 一族拿它拼绝对路径，调用方一律经这一个入口取位置。

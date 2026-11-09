@@ -116,7 +116,7 @@
 
 `pending/` → 用户选定候选并批准 → `applied/`（写 `applied_at` / `applied_option` / `verified: null`）→ 下次自迭代阶段 1(b) 闭环验证 → `verified: true | false`。全部驳回时 → `rejected/`（写 `rejected_at` / `rejection_reason`）。
 
-详见 `plugins/core/skills/self-iteration/SKILL.md`。
+详见 `self-iteration` skill。
 
 ### `projects/changelog.md` — 项目变更日志
 
@@ -177,7 +177,7 @@ scaffold 装机即落盘（模板 `dev-log-template.md`，自带一条以装机�
 
 ## 关键设计原则
 
-1. **订阅即获得通用能力**：订阅 core plugin 后，4 baseline agents + 全套 skills + 启动时注入的必载纪律 + 11 段 hook 链路自动可用，项目本地 `.claude/agents/` 和 `.claude/skills/` 只放**项目特有**内容。
+1. **订阅即获得通用能力**：订阅 core plugin 后，4 baseline agents + 全套 skills + 启动时注入的必载纪律 + hook 链路自动可用，项目本地 `.claude/agents/` 和 `.claude/skills/` 只放**项目特有**内容。
 2. **同名不覆盖、是并存**：plugin agent 同样带命名空间（`core:pm`），项目本地的同名 agent（`pm`）与它并存、不覆盖它——`@pm` 派到项目这份，`core:pm` 仍是 plugin 版（实测确认，细节见 `role-customization-guide.md` §何时 override 现有角色）；**plugin skill 带命名空间（`core:skill-name`），项目同名 skill 不构成覆盖而是并存**（项目 `/x` 与 `/core:x` 是两个标识，实测确认并存）——项目扩展 core skill 一律用不同名字叠加避免歧义。
 3. **判据分层**：框架的必载纪律由会话启动时的 hook 注入，项目侧不落盘；**项目自有**的判据放项目根 `AGENTS.md`（两扇门都读），成套的工序放项目自己的 skill。
 4. **记忆隔离**：`.workframe/agent-memory/` 永远属于项目，不进 core plugin。
@@ -208,8 +208,8 @@ scaffold 装机即落盘（模板 `dev-log-template.md`，自带一条以装机�
 | `dormant_profile` | scaffold 默认 | 4 档（见 §Dormant profiles），默认 `normal` |
 | `role_profile` | 对话推断 | 3 档（见 §Role profile），默认 `software-team`；脚本读取必须默认兜底 |
 | `close_check` | scaffold 默认 | `module_close_check.py` 账本检查的项目级声明，装机即写入；关闭方式是改成空壳 `{}`（见下）|
-| `codex` | **不写入，可选** | `{"reinject_every_turns": 30}`：Codex 门下主线程每隔多少个 prompt，由挂在 `UserPromptSubmit` 上的纪律 hook（`inject-context.py --scope prompt`）重发一遍主会话全片（compact 之后的保险）。**缺键 = 30**；非正整数按缺省。K 放配置而不放命令行：Codex 按 hook 命令行字面算信任 hash，命令行一改用户升级后该条即 `modified`、静默停跑 |
-| `signoff` | **不写入，可选** | `{"self_signoff_enabled": false}` 关闭主 Claude 自签档。**缺键 = 开启**（默认 true），装机与升级都不写这个键，所以不写就是开着的。**这是被知情接受的取舍**：默认关闭会让能力对多数项目等于不存在，代价是升级到本版的项目不做任何动作即获得自签权，且 **Codex 门下本 hook 实测不起把关作用**（Codex 改文件走 `apply_patch`，载荷没有 `file_path`，hook 起了也直接放行——用它改看板不拦也不报；经 shell 改看板只提示）⇒ **那一门下的把关按不存在对待**（自签照样生效，四段举证纯靠自觉）。要求更严的项目显式写 `false` |
+| `codex` | **不写入，可选** | `{"reinject_every_turns": 30}`：Codex 门下主线程每隔多少个 prompt，由挂在 `UserPromptSubmit` 上的纪律 hook（`inject-context.py --scope prompt`）重发一遍主会话全片（compact 之后的保险）。**缺键 = 30**；非正整数按缺省。K 放配置而不放命令行：可避免为参数调整修改插件挂载配置；但命令不变不保证继续受信，插件内容变化也可能使全部 hook 失信；升级须运行 `workframe-door --upgrade`，成功后重开会话 |
+| `signoff` | **不写入，可选** | `{"self_signoff_enabled": false}` 关闭主 Claude 的自理签发，研发任务一律经独立验证才能签。**缺键 = 开启**（默认 true），装机与升级都不写这个键，所以不写就是开着的。**这是被知情接受的取舍**：默认关闭会让能力对多数项目等于不存在，代价是从默认关闭的旧版升级上来的项目不做任何动作即获得自签权，且 **Codex 门下本 hook 的拦截效果未经真实会话验证**（Codex 改文件走 `apply_patch`，载荷没有 `file_path`，hook 从补丁头认出看板、与 Edit 同样 exit 2，但 Codex 怎么处置这个 exit 2 没验过；经 shell 改看板只提示）。要求更严的项目显式写 `false` |
 
 **关键约束**：脚本读取 `.workframe-config.json` 时，对所有"可缺省"字段必须有默认兜底逻辑，**不强依赖**——已有项目可能缺字段。
 

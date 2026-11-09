@@ -39,7 +39,8 @@ Codex 门：读 codex plugin marketplace list --json        → 取本市场 roo
 ```bash
 python - <<'PY'
 import json, pathlib
-km = json.loads((pathlib.Path.home()/".claude/plugins/known_marketplaces.json").read_text(encoding="utf-8"))
+reg = pathlib.Path.home()/".claude/plugins/known_marketplaces.json"
+km = json.loads(reg.read_text(encoding="utf-8")) if reg.is_file() else {}   # 不在 = 这扇门没有，不是错误
 for name, meta in km.items():
     loc = pathlib.Path(meta.get("installLocation", ""))
     mf = loc/".claude-plugin"/"marketplace.json"
@@ -352,8 +353,7 @@ B 路径能直接观测到有没有代码（见 §3 观测维度），**观测�
 - **装 Codex 门那一步还会写两处，它们不在脚本输出里**（探测到 `codex` 时才有）：**用户级**
   `config.toml`（本插件 hook 的信任 ＋ 本项目的 trust ＋ 本插件 `enabled` 改为 `false`）与项目 `.codex/`。
   `--print-plan` 只预演骨架脚本，算不到这一步 ⇒ 动作清单里那一行**要你自己加**，
-  连同「会代你信任本插件的全部 hook、受信 hook 脱离沙盒执行，且以后插件升级时未受信的本插件 hook
-  会在开 Codex 会话时自动补种信任、不再单问」那句披露；
+  连同「本步骤会修改 Codex 用户级 `config.toml` 与项目 `.codex/`，代你信任本插件的全部 hook；受信 hook 脱离沙盒执行。执行时先逐条列出，再写入并回读确认。以后升级请运行 `workframe-door --upgrade`，成功后重开 Codex 会话；不能依赖开场 hook 恢复升级后的信任。」那句披露；
   措辞与「不写死条数」的理由见 `reference/proposal-page.md` 第 8 项第三条展开。
 
 ## §4 结构闸（写盘与订阅前的唯一闸门）
@@ -430,6 +430,10 @@ python "<CORE>/scripts/project_scaffold.py" --project "<目标>" --params "<para
 **已经跳过的整合补不回来**（目标已有 CLAUDE.md 时验收会报缺 `@AGENTS.md` 导入，但那时返工成本更高；
 目标没有 CLAUDE.md 时模板渲染的导入行在位、验收看不出走错路径）。退出码 3 = 目标非空，此时**改走接入
 流程或换个不存在的路径**，不要去掉参数硬来。
+
+**参数文件用文件写入工具或 Python（`json.dump`）落盘，别用 Bash heredoc / `echo`**：经 Bash 工具下发的
+命令会先被吃掉一层反斜杠，引号 heredoc 也挡不住——参数里的 Windows 反斜杠路径写进 JSON 后变成
+非法转义或另一条路径。JSON 里的路径一律写正斜杠最稳。
 
 **参数文件必须写在目标目录之外**（系统临时目录即可，`tree.json` 同理）。写进目标目录时它自己
 就是"实质内容"，A 路径会被 `--require-empty` 判为目标非空退出 3——而那条报错说的是「目标已有
@@ -674,7 +678,7 @@ python "<CORE>/scripts/workframe_doctor.py" --project "<目标>" --group install
 验收放在 pending_work 落定之后，「初始化完整度」读到的才是真实终态——放在安置前会
 误报「完整落地」（2026-08-11 实测教训）。
 
-14 项覆盖：旧布局运行态目录（排第一；新建项目恒为通过，从上一版升级、没迁移的项目在这里报 error）、骨架完整性（硬/软两档 + 占位符残留）、**CLAUDE.md 导入与旧副本**（缺 `@AGENTS.md`
+15 项覆盖：旧布局运行态目录（排第一；新建项目恒为通过，从上一版升级、没迁移的项目在这里报 error）、Codex hook 实时信任（已接门失信 error、未能核实 warn；未接或已关闭跳过）、骨架完整性（硬/软两档 + 占位符残留）、**CLAUDE.md 导入与旧副本**（缺 `@AGENTS.md`
 导入报 error、框架段落旧副本报 warn）、**AGENTS.md 四契约段**（两扇门共用的项目自有判据落点；「这个项目是什么」只剩框架占位报 warn）、项目 PRD 框架
 （prd-style 在位性，缺失仅 info）、**项目 skills 链接形态**（`.claude/skills` 是普通文件或目标不存在的链接报 error，两份各读各的报 warn）、config 三字段、订阅接线（市场解析 + 来源形态）、
 旧镜像残留（上一版留在项目里的纪律镜像目录必须已删，报 error）、
@@ -776,7 +780,7 @@ python "<CORE>/scripts/workframe_door.py" --codex --project "<目标>"      # �
 - [ ] 选择题都出了卡：`AskUserQuestion` 在手时一律走它；工具不在手上时按 §交互纪律 的降级形态出（编号 + 推荐项 + 一句「这需要你定」），**没有把选择题咽回去替用户决定**
 - [ ] 确认页在正文完整展示过，且用户明确确认后才开始写盘
 - [ ] 动作清单的文件面来自 `--print-plan` 的输出（逐字贴，没手写）：四格齐全、**项目外那一格没被省掉**、第四格里已存在的 `CLAUDE.md` / `AGENTS.md` 逐项在，且它们的合并稿写回与备份去向由你另说了一句（脚本不管那一步）
-- [ ] 探测到 `codex` 时，动作清单里有 Codex 门那一行（改用户级 `config.toml` ＋ 代你信任本插件全部 hook ＋ 受信 hook 脱离沙盒执行 ＋ 以后升级时自动补种、不再单问），且**没有写死 hook 条数**
+- [ ] 探测到 `codex` 时，动作清单里有 Codex 门那一行（改用户级 `config.toml` ＋ 代你信任本插件全部 hook ＋ 受信 hook 脱离沙盒执行 ＋ 升级须运行 `workframe-door --upgrade`、成功后重开 Codex 会话、不能依赖开场恢复），且**没有写死 hook 条数**
 - [ ] core 路径经**两个定位器之一**（CC 的 known_marketplaces / Codex 的 marketplace list ＋ config.toml）拿到，没有探测「跑在哪扇门」，全程无 `../` 向上引用
 - [ ] 订阅**两项声明**都落了盘（`--write-subscription` 一次写两项；备份与 merge 结果已念给用户），落盘验收确认两项声明齐全
 - [ ] scaffold / doctor 任一非零退出都已停下处理，没有跳过继续

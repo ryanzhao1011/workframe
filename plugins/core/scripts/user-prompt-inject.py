@@ -7,6 +7,9 @@ v0.2.1 变更：
   - wake_up_pending=true 时与 dormant=true 并列静默（首次唤醒会话用户只看 wake-up 摘要，不叠加维护提示）
   - 仅展示 status=open 的条目；按 severity 排序（critical > warn > info）
 
+顺带：提示里写了 `$skill` 时投该 skill 映射到的角色记忆（主会话角色记忆投递的 Codex 门入口；Codex 用 `$skill`
+显式选用 skill，CC 的对应入口是 UserPromptExpansion，在 log-skill-invoked.py）。与维护提醒合并成一次输出。
+
 输出协议：向 stdout 写 JSON：
   {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "<text>"}}
 """
@@ -43,6 +46,9 @@ ACTIVITY_FILE = STATE_DIR / "activity-state.json"
 # 模板 schema 也只声明这两值。保留它是为了将来新增更高优先级信号时排序不用改这里；
 # 排序表容纳未使用的档位无副作用（未知 severity 走 .get 的默认值 9 排最后）。
 SEVERITY_ORDER = {"critical": 0, "warn": 1, "info": 2}
+# 维护提醒的长度上限：它与 `$skill` 投递的角色记忆合并成一条输出，记忆的预算要扣掉提醒占用，提醒不封顶的话
+# 记忆能剩下的预算可以是零（正常提醒五条、每条约百字，远到不了这个数）
+REMINDER_MAX = 2000
 
 
 def load_state():
@@ -78,23 +84,49 @@ def format_pending_items(items):
     return open_items
 
 
-def main():
-    # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
-    if _harness.hook_outside_project():
-        return 0
-    state = load_state()
+def mentioned_skill_memory(payload, used=0):
+    """提示里写了 `$skill`（Codex 显式选用 skill 的写法）→ 该 skill 映射到的角色记忆正文，或 None。
+
+    主会话角色记忆投递的入口之一（判定与去重在 `_role_memory`）；与维护提醒无关——dormant、本会话已提醒过都不挡投递。
+    `used`：同一条输出里维护提醒已占的 UTF-16 码元数，从投递预算里扣掉（两段合并后仍在 CC 单条上限内）。任何异常都吞掉。
+    """
+    try:
+        prompt = payload.get("prompt") if isinstance(payload, dict) else None
+        if not isinstance(prompt, str) or "$" not in prompt:
+            return None
+        import _role_memory
+        skills = _role_memory.skills_mentioned(prompt, PROJECT_DIR)
+        return _role_memory.deliver_for_skills(PROJECT_DIR, payload, skills, _role_memory.TRIGGER_SKILL_MENTION,
+                                               budget=_role_memory.DELIVER_BUDGET - used)
+    except Exception:
+        return None
+
+
+def read_payload():
+    """hook 载荷（bytes ＋ UTF-8）；非管道 / 空 / 不合法一律当空字典。"""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return {}
+        data = json.loads(sys.stdin.buffer.read().decode("utf-8", errors="replace") or "{}")
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def maintenance_text(state):
+    """每会话首次 prompt 的维护提醒正文，或 None（dormant / 唤醒 / 本会话已提醒 / 无待处理项）。会改 state。"""
     # dormant 或 wake_up_pending 都不注入（首次唤醒会话用户只看 wake-up 摘要）
     if state.get("dormant") or state.get("wake_up_pending"):
-        sys.exit(0)
+        return None
 
     session_marker = str(state.get("session_counter", 0))
     last_injected = state.get("last_prompt_injected_session_id")
     if last_injected == session_marker:
-        sys.exit(0)
+        return None
 
     items = state.get("pending_maintenance") or []
     open_items = format_pending_items(items)
-
+    text = None
     if open_items:
         lines = [f"[workframe] 待处理维护项 {len(open_items)} 条（按 severity 排序）："]
         for item in open_items[:5]:
@@ -105,14 +137,29 @@ def main():
             lines.append(f"  - [{sev}] {pid} ({kind}) — {details}")
         if len(open_items) > 5:
             lines.append(f"  - …另 {len(open_items) - 5} 条，/core:audit 查看全部")
-        emit_additional_context("\n".join(lines))
+        text = "\n".join(lines)
 
     state["last_prompt_injected_session_id"] = session_marker
     try:
         save_state(state)
     except Exception as e:
         print(f"[warn] failed to save activity-state: {e}", file=sys.stderr)
+    return text
 
+
+def main():
+    # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
+    if _harness.hook_outside_project():
+        return 0
+    payload = read_payload()
+    reminder = maintenance_text(load_state())
+    if reminder and len(reminder) > REMINDER_MAX:
+        reminder = reminder[:REMINDER_MAX].rstrip() + "…（已截断，/core:audit 查看全部）"
+    used = len(reminder.encode("utf-16-le")) // 2 + 2 if reminder else 0   # UTF-16 码元 ＋ 两段之间的空行
+    memory = mentioned_skill_memory(payload, used)
+    parts = [t for t in (reminder, memory) if t]
+    if parts:
+        emit_additional_context("\n\n".join(parts))
     sys.exit(0)
 
 

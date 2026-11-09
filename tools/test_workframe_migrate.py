@@ -402,6 +402,9 @@ def test_conflict_and_resume():
         (P / NEW["memory"]).mkdir(parents=True)
         plan = wm.compute_plan(P)
         check("新旧并存 ⇒ R-conflict", any(i["id"] == "R-conflict" and i["data"].get("kind") == "memory" for i in plan["items"]), True)
+        check("冲突条目自带出路（挪出新目录再重出 plan），不只写「需人工判断」",
+              all(any("怎么处理" in ln and "重出 plan" in ln for ln in i["lines"])
+                  for i in plan["items"] if i["id"] == "R-conflict"), True)
         check("新旧并存 ⇒ 该类无搬迁动作", [a for a in plan["payload"]["actions"] if a.get("item") == "R-memory"], [])
     with Proj() as P:
         plan = plan_for(P)
@@ -1602,16 +1605,26 @@ def test_codex_seal(when):
         rm(d)
 
 
-def main():
+ALL_TESTS = (test_plan_zero_write, test_apply_happy, test_conflict_and_resume, test_guards, test_terminal_hint,
+             test_session_signals, test_boundaries, test_link_fail_resume, test_nested_project, test_staged_inside,
+             test_reports, test_literal_boundaries, test_printed_inverse_runs, test_unfinished_exit,
+             test_residual_literals, test_code_paths_parser_loud, test_mirror_unrestorable, test_midstop_block,
+             test_skipped_moved_path, test_link_commit_hint, test_pending_source_mismatch,
+             test_located_rel_consumers, test_unknown_pending_item, test_link_hint_on_resume,
+             test_doctor_legacy_state_dir, test_doctor_auto_memory_old_pointer, test_cc_native_memory,
+             test_agents_goal_note, test_w3_keeps_project_constraints)
+
+# 一个用例子进程跑完时打的末行；父进程靠它判「这个用例跑完了」，并且不把它原样转印——
+# 否则子进程各自的结论行会混进总输出，「all passed」在总输出里就不再只由父进程说了算
+_DONE = "[test-done]"
+# 单个用例子进程的时限：明显低于 validate 给整套的上限，让卡死的用例由本进程点名并收掉，
+# 而不是整套被外层杀掉、留下没人管的孙进程（最慢的单个用例顺序跑约 30s）
+_PER_TEST_TIMEOUT = 120
+
+
+def _run_in_process(tests, done_line):
     test_codex_seal("开跑前")
-    for t in (test_plan_zero_write, test_apply_happy, test_conflict_and_resume, test_guards, test_terminal_hint,
-              test_session_signals, test_boundaries, test_link_fail_resume, test_nested_project, test_staged_inside,
-              test_reports, test_literal_boundaries, test_printed_inverse_runs, test_unfinished_exit,
-              test_residual_literals, test_code_paths_parser_loud, test_mirror_unrestorable, test_midstop_block,
-              test_skipped_moved_path, test_link_commit_hint, test_pending_source_mismatch,
-              test_located_rel_consumers, test_unknown_pending_item, test_link_hint_on_resume,
-              test_doctor_legacy_state_dir, test_doctor_auto_memory_old_pointer, test_cc_native_memory,
-              test_agents_goal_note, test_w3_keeps_project_constraints):
+    for t in tests:
         try:
             t()
         except Exception as e:  # noqa: BLE001
@@ -1620,9 +1633,67 @@ def main():
             FAILURES.append(f"{t.__name__} 抛异常: {type(e).__name__}: {e}")
     test_codex_seal("跑完")     # 中途有用例改了环境变量没复原，后面的用例就不再封闭——在这里说出来
     if FAILURES:
+        print(f"\n{len(FAILURES)} failed: {FAILURES}" if not done_line else f"{_DONE} {len(FAILURES)} failed: {FAILURES}")
+        return 1
+    print("\nall passed" if not done_line else f"{_DONE} passed")
+    return 0
+
+
+def _run_one_subprocess(t):
+    """一个用例一个子进程：返回 (用例名, 转印用的输出, 失败说明或 None)。"""
+    try:
+        r = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--test", t.__name__],
+                           capture_output=True, timeout=_PER_TEST_TIMEOUT)
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or b"").decode("utf-8", "replace") + (e.stderr or b"").decode("utf-8", "replace")
+        return t.__name__, out, f"{t.__name__} 超过 {_PER_TEST_TIMEOUT}s 未跑完，已终止"
+    out = r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
+    lines = out.rstrip("\n").splitlines()
+    last = lines[-1] if lines else ""
+    shown = "\n".join(ln for ln in lines if not ln.startswith(_DONE))
+    if r.returncode == 0 and last == f"{_DONE} passed":
+        return t.__name__, shown, None
+    return t.__name__, shown, f"{t.__name__}: 子进程 exit={r.returncode}，末行 {last[:300]!r}"
+
+
+def main(argv=None):
+    """缺省把用例分给并行子进程跑（每个用例一个进程）；`--jobs 1` 退回本进程内顺序跑；`--test <名>` 只跑一个。
+
+    **为什么要并行**：本套件的耗时几乎全在起 git 子进程上（被测脚本每算一次 plan / apply 都要问 git 几十次，
+    Windows 上起一个 git 进程约 40–50ms），父进程自己的 CPU 时间可以忽略——所以计时里 user 极小而 real 很长。
+    这类等待可以重叠：同机实测并行 4 路时单次 git 调用的摊销墙钟降到约四成。用例之间本来就互不依赖
+    （各自现造 fixture、mock 都用上下文管理器还原），一个用例一个进程只会比顺序跑更隔离。
+    输出按用例原顺序转印，断言与判定不变。"""
+    argv = sys.argv[1:] if argv is None else argv
+    by_name = {t.__name__: t for t in ALL_TESTS}
+    if argv[:1] == ["--test"]:
+        if len(argv) != 2 or argv[1] not in by_name:
+            print(f"--test 需要恰好一个用例名，可选：{', '.join(by_name)}", file=sys.stderr)
+            return 2
+        return _run_in_process([by_name[argv[1]]], done_line=True)
+    jobs = min(4, os.cpu_count() or 1)
+    if argv[:1] == ["--jobs"]:
+        if len(argv) != 2 or not argv[1].isdigit() or int(argv[1]) < 1:
+            print("--jobs 需要一个正整数", file=sys.stderr)
+            return 2
+        jobs = int(argv[1])
+    elif argv:
+        print(f"未知参数：{argv}（可用：--jobs N / --test <名>）", file=sys.stderr)
+        return 2
+    if jobs == 1:
+        return _run_in_process(ALL_TESTS, done_line=False)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=jobs) as ex:
+        results = list(ex.map(_run_one_subprocess, ALL_TESTS))
+    for _name, shown, problem in results:
+        if shown:
+            print(shown)
+        if problem:
+            FAILURES.append(problem)
+    if FAILURES:
         print(f"\n{len(FAILURES)} failed: {FAILURES}")
         return 1
-    print("\nall passed")
+    print(f"\nall passed（{len(ALL_TESTS)} 组用例，{jobs} 路并行）")
     return 0
 
 

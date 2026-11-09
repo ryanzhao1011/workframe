@@ -1,0 +1,29 @@
+{
+ "__doc__": "Workframe-private sidecar — not a Claude Code official file. Action -> role map for main-session role-memory delivery (scripts/_role_memory.py). Keys under each role are FULL skill names with the plugin prefix, exactly as the Skill tool's tool_input.skill and UserPromptExpansion's command_name carry them (e.g. core:test-case-design). A skill listed under no role is 'unmapped': it is logged, nothing is delivered. Path-triggered delivery (first edit inside a module's code_paths) always means dev and is NOT configured here. One copy in the framework, shipped with the plugin; no project override.",
+ "roles": {
+  "dev": [
+   "core:technical-design",
+   "core:systematic-debugging",
+   "core:code-to-doc"
+  ],
+  "qa": [
+   "core:test-case-design",
+   "core:code-review"
+  ],
+  "pm": [
+   "core:requirement-analysis",
+   "core:prd-writer",
+   "core:feature-breakdown",
+   "core:acceptance-criteria",
+   "core:competitive-analysis",
+   "core:user-feedback-analysis",
+   "core:product-metrics-design",
+   "core:html-demo",
+   "core:requirement-archiving"
+  ],
+  "prompt-eng": [
+   "core:prompt-design",
+   "core:prompt-evaluation"
+  ]
+ }
+}

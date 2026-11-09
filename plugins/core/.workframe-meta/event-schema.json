@@ -15,7 +15,7 @@
   "none": "No producer path on that harness — absence of this event type there carries no information.",
   "unknown": "No producer path is established on that door — nothing has been probed either way. Deliberately distinct from full: reporting an unverified path as available is the failure mode this value exists to prevent. Also distinct from partial, which requires at least one working path.",
   "note": "Free text, REQUIRED whenever cc or codex is not full; it must name which emission path is affected and what the reader would otherwise mis-read.",
-  "__how_to_judge__": "GRADING RULE (explicit so the next author reproduces it; the first version of this map left it implicit and graded three SessionEnd-driven events too generously). Ask, per door, of EACH producer path: is that path ESTABLISHED on this door? WHAT A 'PATH' IS, since this bit is easy to get wrong: a path runs from the EMISSION POINT (the function that actually appends the event) out to the mounts that can REACH that function — not to every mount the enclosing script happens to have. One script can be mounted on several hooks and still have emission points reachable from only one of them: check-stale-modules.py sits on both SessionStart and PostToolUse, yet process_postool_use() is reachable only from the latter and clear_stale() only from a CLI subcommand. Grading at script granularity instead of emission-point granularity mis-grades exactly those. Then: none = no path can ever run here; unknown = NO path is established; partial = at least one path IS established AND at least one is missing-or-unestablished; full = every path is established. WHAT COUNTS AS ESTABLISHED: (a) a door-agnostic path — the model runs a CLI command or a script directly, no harness mechanism involved; or (b) a hook-mounted path whose hook event has been OBSERVED EXECUTING on that door by a probe AND — where the mount is MATCHER-SCOPED — whose matcher has been established on that door too. The matcher half is a separate layer and must be asked separately: a hook event can be observed executing while its matcher still never fires for the intended targets, because matchers name tool names and the two doors do not share a tool vocabulary. Today NO matcher-scoped mount is established on Codex: the Codex hook table carries the CC matchers verbatim (Bash / Edit|Write|NotebookEdit / Skill) and whether those tool names ever match on Codex has not been verified (it takes one credentialed tool call), so a path that reaches its producer only through a matcher-scoped mount is UNESTABLISHED there even though its hook event sits in the observed list. Skipping this layer is how the first version of this rule failed to reproduce three of its own entries. For Codex seven hook events have been observed executing: SessionStart, SubagentStart, PostToolUse, Stop (the first probe batch), UserPromptSubmit and SessionEnd (the review-thread probe, then every zero-credential end-to-end run of the door — payloads captured), SubagentStop (the spawn_agent-type probe). The other five that the runtime enumerates (PreToolUse, PermissionRequest, PreCompact, PostCompact, Interrupt) have NOT been observed running — PreToolUse was mounted in one probe but no tool call happened in a zero-credential run, so it stays unobserved; the other four were never mounted. A hook event merely APPEARING in that enumeration does NOT make it established: the enumeration was read out of the binary, not observed running. Grading by 'is the event name in the list' instead of 'has it been seen running' is exactly the mistake this paragraph exists to stop. WHAT COUNTS AS DISPROVEN (this is what separates `none` from `unknown`, and the first version of this rule could not express it): a path is IMPOSSIBLE, not merely unestablished, in either of two ways. (i) THE MECHANISM IS ABSENT: the hook event name does not appear in that runtime's event enumeration at all, so no probe could ever see it fire. (ii) A PROBE RAN AND THE EVENT DID NOT COME: the mechanism exists and was exercised, and the trace was measured absent — this is a positive finding, not a missing measurement. `skill_invoked` is `none` on Codex through BOTH: UserPromptExpansion is absent by (i), and PostToolUse with the Skill matcher was exercised and produced no trace by (ii). When leaning on (ii), the `note` MUST carry the probe's scope verbatim — an entry path that was not exercised is not disproven, it is unknown, and blurring the two turns a bounded measurement into an unbounded claim. `turn_failed` and `config_changed` are `none` on Codex for that reason (StopFailure / ConfigChange are not among its events), whereas `signoff_guard_error` is only `unknown` (PostToolUse IS observed running, but both of its mounts are matcher-scoped and the matcher half is unverified). Both read as 'no established path', so grading on observation alone collapses them; ask whether the mechanism EXISTS before asking whether it has been SEEN. `session_ended` is the worked example of an entry that moved: it sat at `unknown` while SessionEnd was merely enumerated, and became `full` once SessionEnd was observed running on that door. MODEL-SIDE EVENTS (protocol_expected / model_mediated) are graded full on both doors because the write itself is door-agnostic — a model with shell and file access performs it identically. DECLARED CAVEAT, not an oversight: what is NOT yet established is whether the INSTRUCTION to write reaches the model on the Codex door (skill / rule / context delivery). Those events are therefore full-but-conditional; a reader seeing zero of them on Codex should suspect delivery before suspecting the model. This axis is deliberately not folded into the grade — folding it in would merge 'the mechanism may not exist' with 'the mechanism exists but is not wired yet', and only the first is a risk to the reader.",
+  "__how_to_judge__": "GRADING RULE (explicit so the next author reproduces it; the first version of this map left it implicit and graded three SessionEnd-driven events too generously). Ask, per door, of EACH producer path: is that path ESTABLISHED on this door? WHAT A 'PATH' IS, since this bit is easy to get wrong: a path runs from the EMISSION POINT (the function that actually appends the event) out to the mounts that can REACH that function — not to every mount the enclosing script happens to have. One script can be mounted on several hooks and still have emission points reachable from only one of them: check-stale-modules.py sits on both SessionStart and PostToolUse, yet process_postool_use() is reachable only from the latter and clear_stale() only from a CLI subcommand. Grading at script granularity instead of emission-point granularity mis-grades exactly those. Then: none = no path can ever run here; unknown = NO path is established; partial = at least one path IS established AND at least one is missing-or-unestablished; full = every path is established. WHAT COUNTS AS ESTABLISHED: (a) a door-agnostic path — the model runs a CLI command or a script directly, no harness mechanism involved; or (b) a hook-mounted path whose hook event has been OBSERVED EXECUTING on that door by a probe AND — where the mount is MATCHER-SCOPED — whose matcher has been established on that door too. The matcher half is a separate layer and must be asked separately: a hook event can be observed executing while its matcher still never fires for the intended targets, because matchers name tool names and the two doors do not share a tool vocabulary. Matcher-scoped mounts must be established individually. On Codex 0.166.0, credentialed app-server code-mode probes established the module-memory-inject.py PostToolUse matcher: exec_command arrived as canonical Bash, apply_patch reached the editing path, and ordinary fresh subthreads received the hook context. This establishes that module-memory mount only; it does not establish the other mounts merely because they retain CC matcher names (Bash / Edit|Write|NotebookEdit / Skill). A path through another unobserved matcher-scoped mount remains UNESTABLISHED even if its hook event is in the observed list. Skipping this layer is how the first version of this rule failed to reproduce three of its own entries. The earlier Codex probes observed SessionStart, SubagentStart, PostToolUse, Stop (the first probe batch), UserPromptSubmit and SessionEnd (the review-thread probe, then zero-credential end-to-end runs of the door — payloads captured), and SubagentStop (the spawn_agent-type probe). Codex 0.166.0 module-memory probes additionally observed PostCompact with trigger=manual after thread/compact/start; that operation did not emit SessionStart(compact). PreToolUse, PermissionRequest, PreCompact and Interrupt remain unobserved by these probes: PreToolUse was mounted earlier without a tool call in that zero-credential run, and the remaining events were not exercised. A hook event merely APPEARING in that enumeration does NOT make it established: the enumeration was read out of the binary, not observed running. Grading by 'is the event name in the list' instead of 'has it been seen running' is exactly the mistake this paragraph exists to stop. WHAT COUNTS AS DISPROVEN (this is what separates `none` from `unknown`, and the first version of this rule could not express it): a path is IMPOSSIBLE, not merely unestablished, in either of two ways. (i) THE MECHANISM IS ABSENT: the hook event name does not appear in that runtime's event enumeration at all, so no probe could ever see it fire. (ii) A PROBE RAN AND THE EVENT DID NOT COME: the mechanism exists and was exercised, and the trace was measured absent — this is a positive finding, not a missing measurement. `skill_invoked` is `none` on Codex through BOTH: UserPromptExpansion is absent by (i), and PostToolUse with the Skill matcher was exercised and produced no trace by (ii). When leaning on (ii), the `note` MUST carry the probe's scope verbatim — an entry path that was not exercised is not disproven, it is unknown, and blurring the two turns a bounded measurement into an unbounded claim. `turn_failed` and `config_changed` are `none` on Codex for that reason (StopFailure / ConfigChange are not among its events), whereas `signoff_guard_error` is only `unknown` (PostToolUse IS observed running, but both of its mounts are matcher-scoped and the matcher half is unverified). Both read as 'no established path', so grading on observation alone collapses them; ask whether the mechanism EXISTS before asking whether it has been SEEN. `session_ended` is the worked example of an entry that moved: it sat at `unknown` while SessionEnd was merely enumerated, and became `full` once SessionEnd was observed running on that door. MODEL-SIDE EVENTS (protocol_expected / model_mediated) are graded full on both doors because the write itself is door-agnostic — a model with shell and file access performs it identically. DECLARED CAVEAT, not an oversight: what is NOT yet established is whether the INSTRUCTION to write reaches the model on the Codex door (skill / rule / context delivery). Those events are therefore full-but-conditional; a reader seeing zero of them on Codex should suspect delivery before suspecting the model. This axis is deliberately not folded into the grade — folding it in would merge 'the mechanism may not exist' with 'the mechanism exists but is not wired yet', and only the first is a risk to the reader.",
   "__delivery_established__": {
    "__doc__": "Per door: is the chain that TELLS the model to write an event established there? Model-side events (protocol_expected / model_mediated) are graded `full` because the write itself is door-agnostic, but a reader still needs to know that zero of them on a door may mean 'never asked' rather than 'never happened'. This flag is what _harness.harness_breakdown() computes the full_but_delivery_unverified table from; flip a door to true when its skill / rule / context delivery lands and the table empties itself. WHAT 'LANDS' MEANS FOR codex, so the flip is not made on partial evidence: the instruction (use the workframe-event bin command) travels in the injected discipline shards; the main-thread shard has been observed arriving in a Codex rollout, and a review-type sub thread has been observed receiving the sub shard — that is the CHANNEL. It stays false until BOTH remaining halves are observed: (i) full-shard arrival in a `spawn_agent`-type sub thread (only the channel is verified there, not the whole shard), and (ii) a model on that door actually writing an event through the bin command after reading the shard. Flipping on channel evidence alone would turn 'never asked' into 'never happened' for exactly the reader this flag protects. Keep it a flag, not prose: a hand-written caveat in a report template is a copy, and copies drift — which is the one thing this whole section forbids.",
    "cc": true,
@@ -58,7 +58,7 @@
     "codex": "full",
     "note": "同 skill_used：模型手写，两门皆可；harness 由 `workframe-event` 打上，指令随纪律片投递、Codex 主线程实测抵达，模型是否照做未观察（`__delivery_established__.codex` 仍 false）。"
    },
-   "producer": "the correction-detection flow (judgement half in the injected main shard, procedure half in skill signal-intake) writes immediately when it writes the [纠正] entry (role/shared MEMORY, or auto-memory when scope=main per 两套记忆分工契约); agent wrap-up must not emit a duplicate user_correction for the same correction",
+   "producer": "the correction-detection flow (judgement half in the injected main shard, procedure half in skill signal-intake) writes immediately when it writes the [纠正] entry (role/shared MEMORY, or auto-memory when scope=main per the 记忆分工 contract), or updates authoritative module documents / module-memory.md when scope=module; agent wrap-up must not emit a duplicate user_correction for the same correction",
    "consumers": [
     "check-iteration-trigger.py (problem weight 3.0)",
     "librarian",
@@ -67,10 +67,12 @@
    "fields": {
     "ts": "ISO-8601 string, required",
     "type": "literal 'user_correction'",
-    "scope": "shared | <role> | main (main = 主 Claude 层纠正，落 auto-memory，无 sidecar)",
-    "role": "agent role string (if scope != shared); omitted when scope=main",
-    "entry_key": "string (memory-index sidecar key for the protected [纠正] entry); omitted when scope=main (auto-memory has no sidecar) and when the correction lands in a skill/rule file instead of MEMORY (sidecar only indexes MEMORY entries; put the target file path in summary)",
-    "summary": "short snapshot of the corrected fact, required so memory-log does not depend on current sidecar state",
+    "scope": "shared | actual role name | main | module (main = 主 Claude 层纠正，落 auto-memory，无 sidecar；module = 业务事实或模块作业提醒，落模块文档或模块记忆；literal role / <role> placeholders are rejected, custom role names remain valid)",
+    "role": "agent role string (if scope != shared); omitted when scope=main or module",
+    "entry_key": "string (memory-index sidecar key for the protected [纠正] entry); omitted when scope=main or module (neither has a sidecar entry) and when the correction lands in a skill/rule file instead of MEMORY (sidecar only indexes MEMORY entries; put the target file path in summary)",
+    "module": "string, required when scope=module — module identifier basic or basic/sub, not truncated",
+    "target_path": "string, required when scope=module — full target document or module-memory.md path, not truncated",
+    "summary": "short snapshot of the corrected fact (workframe-event keeps the first 80 characters), required so memory-log does not depend on current sidecar state; for scope=module keep the fact here and the full path separately in target_path",
     "source": "literal '[纠正]'"
    },
    "caveats": "Depends on the model recognizing the correction signal AND following the correction handling in the injected main-session signal-intake shard. Misses possible if the agent silently incorporates the correction without ceremony."
@@ -206,23 +208,25 @@
     "codex": "full",
     "note": "两条 producer 路径中，maintenance_workorder.py --commit 若经 bin/workframe-maintenance 拉起，那是 CC 专属的批量维护会话（claude -p --maintenance + Setup hook），Codex 门下不可用；而模型侧路径与直接跑 --commit / --close-pm 两门皆可，故事件类型本身不缺。**Setup hook 自身不产任何事件**（默认分支只写 flag 与工单文件），所以它虽是 Codex 缺口 hook，却不对应任何事件类型缺口。"
    },
-   "producer": "Two paths (both in use): (1) maintenance_workorder.py --commit writes it in code while processing manifest.promotions, together with the sidecar entry — deterministic; (2) librarian step 3 writes it after the model updates MEMORY.md and the sidecar. Only (2) was registered originally. Note the `reliability` tier stays `model_mediated` (the weaker of the two): which path fires is not knowable in advance, and the field is a fixed enum consumed by workframe_doctor's ACTIVE_TIERS filter — putting free text like \"mixed\" there silently drops this event type out of the producer reconciliation check.",
+   "producer": "Two paths (both in use): (1) maintenance_workorder.py --commit writes it in code while processing manifest.promotions, together with the sidecar entry — deterministic; (2) librarian step 3 writes it after the model updates MEMORY.md and the sidecar, or a skill/rule/module-memory.md without a sidecar entry. Module-memory promotion uses scope=module, keeps its source role for per-role notes accounting, and puts the module and target path in summary. Only (2) was registered originally. Note the `reliability` tier stays `model_mediated` (the weaker of the two): which path fires is not knowable in advance, and the field is a fixed enum consumed by workframe_doctor's ACTIVE_TIERS filter — putting free text like \"mixed\" there silently drops this event type out of the producer reconciliation check.",
    "consumers": [
     "memory-log",
     "audit",
     "workframe_doctor.py check_notes_backlog (per-role last-promoted timestamp for staleness)",
-    "check-iteration-trigger.py (global last-promoted timestamp for notes staleness)"
+    "check-iteration-trigger.py (global last-promoted timestamp for notes staleness)",
+    "assert_three_ledgers.py check A (each promotion mark in MEMORY.md is matched to an event by entry_key, not by date; events without entry_key count as date-level evidence only before 2026-08-18)",
+    "assert_three_ledgers.py check D (entry_key must exist in sidecar)"
    ],
    "fields": {
     "ts": "ISO-8601 string, required",
     "type": "literal 'memory_promoted'",
-    "scope": "shared | <role>",
-    "role": "agent role string (if scope != shared)",
-    "entry_key": "string (memory-index sidecar key)",
-    "summary": "short snapshot of the promoted MEMORY entry, required so memory-log can render history without reparsing MEMORY.md",
+    "scope": "shared | <role> | module (module = notes promoted into module-memory.md, not a sidecar scope)",
+    "role": "agent role string (if scope != shared); for scope=module, the source role whose notes were consumed",
+    "entry_key": "string (memory-index sidecar key); omitted for skill/rule/module destinations outside MEMORY.md",
+    "summary": "short snapshot of the promoted MEMORY entry, required so memory-log can render history without reparsing MEMORY.md; for non-MEMORY destinations, include the target path (and the module when scope=module)",
     "source": "notes.md | shared/notes.md | manual backfill",
-    "protected": "boolean copied from memory-index entry after promotion",
-    "provenance": "string enum 'user-decree'|'user-confirmed'|'inferred'|'external' copied from memory-index entry after promotion (source classification, never numeric scoring)"
+    "protected": "boolean copied from memory-index entry after promotion; omitted for non-MEMORY destinations",
+    "provenance": "string enum 'user-decree'|'user-confirmed'|'inferred'|'external' copied from memory-index entry after promotion (source classification, never numeric scoring); omitted for non-MEMORY destinations"
    }
   },
   "memory_decayed": {
@@ -231,10 +235,11 @@
     "cc": "full",
     "codex": "full"
    },
-   "producer": "librarian step 3 user-confirmed decay/capacity cleanup; must be appended before deleting the memory-index sidecar entry",
+   "producer": "librarian step 3 user-confirmed decay/capacity cleanup, including same-family generalization (the entries folded into the surviving one); must be appended before deleting the memory-index sidecar entry",
    "consumers": [
     "memory-log",
-    "audit"
+    "audit",
+    "assert_three_ledgers.py check D (exact source scope and original key, after the original event; same-second order follows append position)"
    ],
    "fields": {
     "ts": "ISO-8601 string, required",
@@ -375,8 +380,8 @@
    "reliability": "hook_deterministic",
    "availability": {
     "cc": "full",
-    "codex": "partial",
-    "note": "rebuild_full_index() 有三个调用点：scan_git_diff_for_stale()（SessionStart，两门可得）、main() 的 rebuild-index 子命令（CLI，两门可得）、lookup_submodules() 的损坏兜底（经 PostToolUse，Codex 侧 matcher 对等未验）。前两条可得、第三条未判定，故 partial。"
+    "codex": "full",
+    "note": "rebuild_full_index() 有三个调用点：scan_git_diff_for_stale()（SessionStart，两门可得）、main() 的 rebuild-index 子命令（CLI，两门可得）、lookup_submodules() 的损坏兜底（经 PostToolUse（codex-cli 0.166.0 真实会话实测：`Edit|Write|NotebookEdit` 这条 matcher 在 Codex 命中 `apply_patch`，check-stale-modules 从补丁头取路径））。三条都已确立，故 full。"
    },
    "producer": "check-stale-modules.py rebuild_full_index() — fallback 全量重建（损坏检测 / migrate-to-modules / 手动 `python check-stale-modules.py rebuild-index`）",
    "consumers": [
@@ -393,8 +398,8 @@
    "reliability": "hook_deterministic",
    "availability": {
     "cc": "full",
-    "codex": "unknown",
-    "note": "唯一发射点在 check-stale-modules.py 的 process_postool_use()，即挂 PostToolUse (matcher Edit|Write|NotebookEdit) 的那条。Codex 有 PostToolUse 事件（插件源上实测触发过），但 Codex 清单原样带着 CC 的这条 matcher，CC 这三个工具名在 Codex 是否命中**未验**（需一次带凭据的工具调用），故记 unknown 而不是 full——「未能判定」是结论，不许当成 full 顺过去。另已实证：Codex 的 PostToolUse 对**失败的**工具调用不触发，任何以它为输入的「尝试次数」类计数在 Codex 侧系统性偏低。"
+    "codex": "full",
+    "note": "唯一发射点在 check-stale-modules.py 的 process_postool_use()，即挂 PostToolUse (matcher Edit|Write|NotebookEdit) 的那条，Codex 侧事件与 matcher 两层都已确立（codex-cli 0.166.0 真实会话实测：`Edit|Write|NotebookEdit` 这条 matcher 在 Codex 命中 `apply_patch`，check-stale-modules 从补丁头取路径），故 full。另已实证：Codex 的 PostToolUse 对**失败的**工具调用不触发，任何以它为输入的「尝试次数」类计数在 Codex 侧系统性偏低。"
    },
    "producer": "check-stale-modules.py PostToolUse on **/submodule.yaml — 增量重建该子模块的索引段",
    "consumers": [
@@ -412,8 +417,8 @@
    "reliability": "hook_deterministic",
    "availability": {
     "cc": "full",
-    "codex": "unknown",
-    "note": "唯一发射点在 check-stale-modules.py 的 process_postool_use()，即挂 PostToolUse (matcher Edit|Write|NotebookEdit) 的那条。Codex 有 PostToolUse 事件（插件源上实测触发过），但 Codex 清单原样带着 CC 的这条 matcher，CC 这三个工具名在 Codex 是否命中**未验**（需一次带凭据的工具调用），故记 unknown 而不是 full——「未能判定」是结论，不许当成 full 顺过去。另已实证：Codex 的 PostToolUse 对**失败的**工具调用不触发，任何以它为输入的「尝试次数」类计数在 Codex 侧系统性偏低。"
+    "codex": "full",
+    "note": "唯一发射点在 check-stale-modules.py 的 process_postool_use()，即挂 PostToolUse (matcher Edit|Write|NotebookEdit) 的那条，Codex 侧事件与 matcher 两层都已确立（codex-cli 0.166.0 真实会话实测：`Edit|Write|NotebookEdit` 这条 matcher 在 Codex 命中 `apply_patch`，check-stale-modules 从补丁头取路径），故 full。另已实证：Codex 的 PostToolUse 对**失败的**工具调用不触发，任何以它为输入的「尝试次数」类计数在 Codex 侧系统性偏低。"
    },
    "producer": "check-stale-modules.py PostToolUse — 单次 lookup 超过 PERFORMANCE_BUDGET_MS (100ms) 时报警",
    "consumers": [
@@ -430,8 +435,8 @@
    "reliability": "hook_deterministic",
    "availability": {
     "cc": "full",
-    "codex": "unknown",
-    "note": "唯一发射点在 check-stale-modules.py 的 process_postool_use()，即挂 PostToolUse (matcher Edit|Write|NotebookEdit) 的那条。Codex 有 PostToolUse 事件（插件源上实测触发过），但 Codex 清单原样带着 CC 的这条 matcher，CC 这三个工具名在 Codex 是否命中**未验**（需一次带凭据的工具调用），故记 unknown 而不是 full——「未能判定」是结论，不许当成 full 顺过去。另已实证：Codex 的 PostToolUse 对**失败的**工具调用不触发，任何以它为输入的「尝试次数」类计数在 Codex 侧系统性偏低。"
+    "codex": "full",
+    "note": "唯一发射点在 check-stale-modules.py 的 process_postool_use()，即挂 PostToolUse (matcher Edit|Write|NotebookEdit) 的那条，Codex 侧事件与 matcher 两层都已确立（codex-cli 0.166.0 真实会话实测：`Edit|Write|NotebookEdit` 这条 matcher 在 Codex 命中 `apply_patch`，check-stale-modules 从补丁头取路径），故 full。另已实证：Codex 的 PostToolUse 对**失败的**工具调用不触发，任何以它为输入的「尝试次数」类计数在 Codex 侧系统性偏低。"
    },
    "producer": "check-stale-modules.py — submodule.yaml index rebuild 拿不到文件锁（5s 超时）",
    "consumers": [
@@ -447,8 +452,8 @@
    "reliability": "hook_deterministic",
    "availability": {
     "cc": "full",
-    "codex": "partial",
-    "note": "两条发射路径：process_postool_use()（PostToolUse，Codex 侧 matcher 对等未验，见 modules_index_segment_rebuilt 的说明）与 scan_git_diff_for_stale()（SessionStart，两门都有对等物）。SessionStart 那半在 Codex 可得、PostToolUse 那半未判定，故 partial。"
+    "codex": "full",
+    "note": "两条发射路径：process_postool_use()（PostToolUse，Codex 侧事件与 matcher 都已确立，见 modules_index_segment_rebuilt 的说明）与 scan_git_diff_for_stale()（SessionStart，两门都有对等物）。两条都已确立，故 full。"
    },
    "producer": "check-stale-modules.py — stale 标记链路拿不到文件锁（5s 超时）；PostToolUse 与 SessionStart scan-git-diff 两条路径同型留痕",
    "consumers": [
@@ -466,8 +471,8 @@
    "reliability": "hook_deterministic",
    "availability": {
     "cc": "full",
-    "codex": "partial",
-    "note": "三条发射路径：_git_lines() 与 scan_git_diff_for_stale()（均在 SessionStart 链路上，两门可得）、main() 的 PostToolUse 顶层兜底（Codex 侧 matcher 对等未验）。"
+    "codex": "full",
+    "note": "三条发射路径：_git_lines() 与 scan_git_diff_for_stale()（均在 SessionStart 链路上，两门可得）、main() 的 PostToolUse 顶层兜底（codex-cli 0.166.0 真实会话实测：`Edit|Write|NotebookEdit` 这条 matcher 在 Codex 命中 `apply_patch`，check-stale-modules 从补丁头取路径）。三条都已确立，故 full。"
    },
    "producer": "check-stale-modules.py — 故障留痕汇集点：process_postool_use() 顶层异常捕获，以及 scan-git-diff 路径的 git 命令失败（error 前缀 scan_git_failed）/ 入口索引保障锁超时（scan_ensure_index_lock_timeout）/ 扫描未预期崩溃兜底（scan_git_diff_crashed）",
    "consumers": [
@@ -547,8 +552,8 @@
    "consumers": [
     "memory-log",
     "audit",
-    "assert_three_ledgers.py check A (accepted as promotion evidence)",
-    "assert_three_ledgers.py check D (entry_key must exist in sidecar)"
+    "assert_three_ledgers.py check A' (each migration mark in MEMORY.md is matched to an event by entry_key) and check A (from_entry_key leads promotion marks made before the move to the source-scope events)",
+    "assert_three_ledgers.py check D (entry_key must exist in sidecar; a later event whose from_entry_key names a missing source key explains it)"
    ],
    "not_consumed_by": [
     "workframe_doctor.py check_notes_backlog — deliberate: migration does not consume notes backlog, so notes staleness must keep counting from the last real memory_promoted. Ruled 2026-08-15; do not 'fix' this by adding it.",
@@ -563,9 +568,59 @@
     "summary": "short snapshot of the migrated entry, required so memory-log can render history without reparsing MEMORY.md",
     "source": "auto-memory | <role>/MEMORY.md | shared/MEMORY.md — where it came FROM",
     "from_ref": "original filename or entry identifier at the source, for traceability",
+    "from_entry_key": "string, required when the source entry has a memory-index sidecar key (moving between role/shared scopes): that source key, verbatim. Omitted when the source has no sidecar (auto-memory). Without it the source key looks dangling once removed from the sidecar, and promotion marks made before the move cannot be matched to their events",
     "protected": "boolean copied from memory-index entry after migration",
     "provenance": "string enum 'user-decree'|'user-confirmed'|'inferred'|'external' carried over from the source entry (never re-derived — migration must not silently downgrade a user-decree entry)"
    }
+  },
+  "memory_moved_out": {
+   "reliability": "model_mediated",
+   "availability": {
+    "cc": "full",
+    "codex": "full"
+   },
+   "producer": "librarian / user-approved migration via workframe-event memory-moved-out: after preparing original-byte backup, archive and target, record recoverable evidence before changing MEMORY.md and removing the original sidecar entry; retries check the original key first",
+   "consumers": [
+    "memory-log",
+    "audit",
+    "assert_three_ledgers.py check D (exact source scope and original key, after the original event; same-second order follows append position)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required (UTC, second precision)",
+    "type": "literal 'memory_moved_out'",
+    "scope": "shared | actual role name — the source memory scope the entry moved OUT OF, not the module destination",
+    "entry_key": "string, required — original source sidecar key, preserved verbatim; its namespace must equal scope",
+    "archive_path": "string, required — original entry archive location, not truncated",
+    "target_path": "string, required — full destination document or module-memory.md path, not truncated",
+    "summary": "string, required — full snapshot of the moved fact, not truncated"
+   },
+   "caveats": "This is not memory_migrated: a document or module-memory.md has no destination memory scope or sidecar entry. Evidence is append-only and remains after rollback; it cannot excuse a different key, a different source scope, or a keyed event written after the move. The CLI only appends evidence; it does not change MEMORY.md, archive contents, targets or the sidecar."
+  },
+  "module_memory_injected": {
+   "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "Codex 0.166.0: the installed PostToolUse matcher emitted module_memory_injected events and delivered context for code-mode exec_command and apply_patch, including ordinary fresh subthreads; provenance was observed in rollouts. Claude Code 2.1.319: the PostToolUse matcher emitted events and the transcript carried the reminder as hook_additional_context for Read, Bash, PowerShell and a code_paths file, inside a subagent keyed by agent_id, and again after an auto-compaction fired PostCompact. This grade establishes emission and delivery paths, not whether the model acts correctly on the reminder."
+   },
+   "producer": "scripts/_module_memory.py via module-memory-inject.py (PostToolUse): one event per recognized basic or basic/sub module whose module-memory.md exists; no event when no valid module is recognized or the touched modules have no module-memory.md",
+   "consumers": [
+    "manual audit (module-memory trigger distribution, delivery outcome and character cost)"
+   ],
+   "fields": {
+    "ts": "ISO-8601 string, required (UTC, second precision)",
+    "type": "literal 'module_memory_injected'",
+    "session_id": "string, required — session identity used for deduplication",
+    "agent_id": "string, optional — subthread identity; omitted on the main thread",
+    "cycle": "integer, required — main-thread compaction cycle; subthread compaction does not restore module memory",
+    "module": "string, required — normalized module identifier basic or basic/sub",
+    "tool": "string, required — triggering tool name",
+    "chars": "integer, required — actual emitted block length in UTF-16 code units, including its allocated header / separator; zero when nothing is emitted. Capacity is separately measured with Python len()",
+    "outcome": "injected | skipped_dedup | missing | read_failed | over_budget | lock_timeout | error — only injected marks the module delivered; over_budget emits a path reminder and retries on the next touch",
+    "error": "string, optional — short unexpected exception cause when outcome=error",
+    "diagnostic": "string, optional — short read / lock / delivery failure cause"
+   },
+   "caveats": "A delivery decision is not proof that the harness put the text into model context. Module memory is delivered after tool use; it does not block a first write. Missing files, read failures, shortened path reminders and lock failures do not consume the dedup key."
   },
   "skill_invoked": {
    "reliability": "hook_deterministic",
@@ -590,35 +645,59 @@
     "plugin": "optional — the stripped plugin prefix (e.g. `core`), present only when the invocation carried one. Kept as a separate field so `skill` stays comparable with skill_used."
    }
   },
-  "self_signoff": {
-   "reliability": "model_mediated",
+  "role_memory_injected": {
+   "reliability": "hook_deterministic",
    "availability": {
     "cc": "full",
     "codex": "full",
-    "note": "由签发方在收口时手写，不经 hook——**因而它的输入不可信**，只能做趋势不能做证据（写的人正是被审计的人）。看板签发块的 schema 与四段闸门的重算由 signoff-guard.py 把关，那道闸挡的是**档位写松**，挡不住「干脆不写这条事件」。"
+    "note": "两门都接线，入口不同：CC 的 skill 入口是 Skill 工具与 UserPromptExpansion（trigger skill_tool / command_expansion）；Codex 没有这两样，skill 入口是 shell 读 SKILL.md 与提示里的 $skill（trigger skill_read / skill_mention）。改代码路径（CC 编辑工具 / Codex apply_patch）、开场、压缩补投两门同形。"
    },
-   "producer": "signoff 方在把研发任务从 pending_qa 流转到 completed 且未经 @qa 独立验证时手写一行；由 closeout-discipline §谁签发这次收口 要求",
+   "producer": "scripts/_role_memory.py, called from these hook entries: session-start-prep.py (SessionStart, opening: shared in full + per-role entry directory), log-skill-invoked.py (CC: PostToolUse matcher:Skill and UserPromptExpansion: a skill mapped to a role in .workframe-meta/role-memory-map.json), signoff-guard.py (PostToolUse matcher:Bash: a shell command that reads a skill's SKILL.md — Codex's way of selecting a skill), user-prompt-inject.py (UserPromptSubmit: a $skill mention in the prompt — Codex's explicit skill selection), check-stale-modules.py (PostToolUse Edit|Write|NotebookEdit, which in Codex also matches apply_patch: first edit inside a module's code_paths, dev only), plus role-memory-restore.py (SessionStart matcher:compact, re-delivers the roles already delivered in the ending compaction cycle). One line per delivery DECISION, including the ones that delivered nothing.",
    "consumers": [
-    "audit (分开统计两种成色的事后问题率——same_party=true 的那批是否更容易返工)",
-    "self-iteration (自签占比与事后问题率是流程分级是否过松的唯一反馈回路)"
+    "manual audit (reconcile code_paths edits or skill calls that have no delivery record)"
+   ],
+   "blind_spot": "Shows 'triggered but not delivered', 'not mapped' and 'read failed'. Does NOT show 'should have been delivered but no trigger fired' (read-only analysis that neither calls a skill nor edits a file) — the opening entry directory is the fallback for that cell.",
+   "fields": {
+    "ts": "ISO-8601 string, required（UTC ＋ 秒级）",
+    "type": "literal 'role_memory_injected'",
+    "role": "string or null — the role whose MEMORY.md was considered (`shared` for the opening); null when outcome=unmapped (or skipped_subthread on an unmapped skill)",
+    "outcome": "injected | skipped_dedup | skipped_subthread | unmapped | read_failed | over_budget — over_budget means a shortened form (entry directory + path, visibly marked 未完整加载) was delivered instead of the full text",
+    "trigger": "session_start | skill_tool | command_expansion | skill_read | skill_mention | code_path | compact",
+    "skill": "optional — FULL skill name with plugin prefix (e.g. core:test-case-design), the key used against role-memory-map.json. Unlike skill_invoked.skill it is NOT stripped, because it records the mapping lookup, not a usage count",
+    "file": "optional — project-relative path of the edit that fired a code_path trigger",
+    "session_id": "from hook stdin, omitted when unavailable",
+    "cycle": "optional int — compaction cycle number of the dedup state (main-thread work entries and compact only)",
+    "chars": "optional int — length of the delivered text in UTF-16 code units (the unit of CC's per-hook injection cap; 0 when a compact re-delivery had no room left and only the event was written)",
+    "agent_type": "optional — present on skipped_subthread when the payload carried it (e.g. fork)"
+   }
+  },
+  "self_signoff": {
+   "reliability": "hook_deterministic",
+   "availability": {
+    "cc": "full",
+    "codex": "full",
+    "note": "由 signoff-guard.py 在看板签注**本次新出现或改过且通过校验**时写，不再要求模型手写。CC 门经 Edit/Write 与 Bash 写看板都会写；Codex 门经 shell 与 `apply_patch` 写看板都会写（`apply_patch` 载荷无文件路径，hook 从补丁头取被改路径；两条 matcher 在 Codex 的命中 codex-cli 0.166.0 实测）。首次建快照那一轮不写（只建基线）。**写进事件不等于拦住了**：exit 2 在 Codex 下的处置未经真实会话验证。"
+   },
+   "producer": "signoff-guard.py（PostToolUse：Edit|Write|NotebookEdit 与 Bash），签注通过校验且相对快照是新出现或改过的那一条",
+   "consumers": [
+    "audit (分开统计「自理」与「独立验证」两种签发的事后问题率——自理那批是否更容易返工)",
+    "self-iteration (自理占比与事后问题率是签发分类是否过松的唯一反馈回路)"
    ],
    "fields": {
     "ts": "ISO-8601 string, required（UTC ＋ 秒级）",
     "type": "literal 'self_signoff'",
     "task_id": "string, required — 被签发的任务 id",
-    "tier": "string, required — 四档之一：自签 / 轻签注 / 完整验证 / 你拍板",
-    "same_party": "bool, **required** — 实现方与签发方是否同一方。允许同一方时这是唯一的补偿控制：它把「成色最低的那种」从散文变成可分组的字段，缺了它 audit 就只能看到一个混合池、分不出两种成色",
-    "radius": "int 1-4, optional — 声明的爆炸半径（模型判的输入，不是机器算的结论）",
-    "passport": "bool, optional — 通行证是否成立",
-    "role": "string, optional — 签发方（主 Claude 直做时填 main）"
+    "mode": "string, required — 签注的类别：自理 / 独立验证 / 你拍板",
+    "verifier": "string, optional — 独立验证方（签注 `verifier.who` 的前 80 字）；自理时省略",
+    "harness": "string — 由 event_json 统一盖章"
    }
   },
   "signoff_guard_error": {
    "reliability": "hook_deterministic",
    "availability": {
     "cc": "full",
-    "codex": "unknown",
-    "note": "事件在：Codex 有 `PostToolUse`，插件源上实测触发过（一次带凭据的探针运行里触发 9 次）。本 hook 的两条 mount 都是 matcher 限定的（`Bash` 与 `Edit|Write|NotebookEdit`，按 `tool_name` 正则匹配），而 CC 的工具名在 Codex 是否命中**未验**（需一次带凭据的工具调用）——按 `__how_to_judge__`，事件被观察到执行但 matcher 那一半未确立 ⇒ 无一条已确立路径 ⇒ `unknown`。**读法**：Codex 门下签发块的机器把关**按不存在对待**，四段举证纯靠自觉；「未验」不许读成「已有把关」，也不许读成「已知不触发」——后者是本条改口前的旧口径（`none`），已被「事件在、matcher 未验」取代。"
+    "codex": "full",
+    "note": "两条 mount（`Bash` 与 `Edit|Write|NotebookEdit`）在 Codex 都已确立：PostToolUse 事件实测触发过，codex-cli 0.166.0 真实会话实测 `Bash` 命中 shell 命令、`Edit|Write|NotebookEdit` 命中 `apply_patch`，故 full。**读法**：这条只说「本 hook 出错时留得下痕」，不说 Codex 门下的签注把关可靠——exit 2 在 Codex 下的处置未经真实会话验证。"
    },
    "producer": "signoff-guard.py 自身抛异常时写（它按 fail-open 处理内部错误，不阻断写入）——静默失败与通过在终端里同形，这条事件是唯一的区分处",
    "consumers": [

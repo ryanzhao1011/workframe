@@ -40,7 +40,7 @@ if _SCRIPTS_DIR not in sys.path:
 import _harness  # noqa: E402
 from _harness import project_dir as _project_dir  # noqa: E402
 from _state_io import (  # noqa: E402
-    append_line, event_json, load_activity, memory_dir_of, merge_spills,
+    append_line, event_json, legacy_present, legacy_rel, load_activity, memory_dir_of, merge_spills,
     save_activity,
     state_dir_of, update_activity,
 )
@@ -51,8 +51,8 @@ def _stdin_payload():
 
     **bytes 读 + 显式 UTF-8 解码**：Windows 上 PowerShell 起的 python 其 stdin 默认按本机
     ANSI 代码页解码（`chcp 65001` 也不改变它），含中文的 `cwd` 会变成另一串字符。
-    本脚本此前不读 stdin——项目根来自 `CLAUDE_PROJECT_DIR`；Codex 门下没有那个变量，
-    `cwd` 与会话号只能从载荷取。
+    本脚本此前不读 stdin——项目根来自 `CLAUDE_PROJECT_DIR`；Codex 门不提供那个变量（嵌套
+    在 CC 里起 Codex 时继承到的是父 CC 的值），`cwd` 与会话号只能从载荷取。
     """
     try:
         if sys.stdin is None or sys.stdin.isatty():
@@ -266,9 +266,11 @@ def check_summary_drift_and_repair(state, now):
         )
         return
 
-    # 修复 drift
+    # 修复 drift。把上面这次的解析结果交给 recompute：它重读到的文本与 `text` 逐字相同才复用、
+    # 否则自己重算——MB 级看板上不必为同一份文件付两次整份解析
     try:
-        result = recompute_board_summary()
+        result = recompute_board_summary(
+            known=(text, (actual_total, actual_counts, unknown_statuses, n_entries)))
     except Exception as e:
         append_event(
             "summary_drift_repair_skipped",
@@ -388,9 +390,11 @@ def run_first_session_acceptance():
     if problems is None:
         print("[workframe] 安装验收通过 —— 骨架 / 配置 / 订阅 / hook 链路全部就位。")
     else:
-        n_err = sum(1 for r in results if r["status"] == "error")
-        print(f"[workframe] 安装验收发现 {n_err} 个错误、"
-              f"{sum(1 for r in results if r['status'] == 'warn')} 个提醒：")
+        # 按下面逐行列出的条目计数，不按检查项计：一个检查项可以报好几行，按项计时抬头与逐行对不上
+        findings = [f for r in results for f in r.get("findings", [])]
+        n_err = sum(1 for f in findings if f.get("level") == "error")
+        n_warn = sum(1 for f in findings if f.get("level") == "warn")
+        print(f"[workframe] 安装验收发现 {n_err} 个错误、{n_warn} 个提醒：")
         print(problems)
         print("  复查：workframe-doctor --group install")
     # hook 的 stdout 进的是**模型上下文**，不是用户的终端显示——用户重启后看到的是空白屏。
@@ -525,13 +529,13 @@ def _agent_tagline(md_path):
 def print_memory_map():
     """打印角色域记忆地图（A0a）。
 
-    为什么需要：SessionStart 的其余脚本无一注入 role/shared MEMORY，SubagentStart
-    的注入又只在委派时发生——主 Claude 直做时对角色记忆的暴露为零，连"有哪些域、
-    该读哪份"都无从得知。这里每个 scope 打一行定位语，承担**领域发现**；具体内容
-    仍按主会话必载片 §直做前恒走显式 Read 由主 Claude 显式 Read。
+    为什么需要：SubagentStart 的注入只在委派时发生，主 Claude 直做时连"有哪些域、
+    该读哪份"都无从得知。这里每个 scope 打一行定位语，承担**领域发现**；记忆正文
+    由 hook 投递（开场 shared ＋ 条目目录，进入某域时投该域全文，见 `_role_memory`），两门相同。
 
     扫两处 agents 目录：plugin 内置 + 项目 `.claude/agents/`（自定义角色），
-    **同名以项目为准**（与 Claude Code 官方的同名覆盖优先级一致）。
+    同名时地图只列一行、取项目那份的定位语并标出来——**这是地图的取舍，不是覆盖**：实测项目级同名 agent
+    与 `core:<role>` 并存（init 的 agents 列表两个都在），点名派谁用谁，不点名由模型挑。
     """
     plugin_agents = Path(__file__).resolve().parents[1] / "agents"
     project_agents = PROJECT_DIR / ".claude" / "agents"
@@ -542,9 +546,9 @@ def print_memory_map():
             continue
         for f in sorted(d.glob("*.md")):
             if is_project:
-                # 覆盖 core 同名 vs 纯新增，对用户含义不同：前者意味着 core 版本
-                # 已被替换（该域的行为不再是出厂默认），值得在地图上看得见
-                mark = "（项目覆盖）" if f.stem in roles else "（项目自定义）"
+                # 与 core 同名 vs 纯新增，对用户含义不同：前者意味着同一个域有两份定义并存
+                # （派发时点名 `core:<role>` 与 `<role>` 拿到的是不同的契约），值得在地图上看得见
+                mark = f"（项目同名，与 core:{f.stem} 并存）" if f.stem in roles else "（项目自定义）"
             else:
                 mark = ""
             roles[f.stem] = (f, mark)
@@ -555,8 +559,10 @@ def print_memory_map():
 
     # 记忆目录问 `_state_io` 现算，不写死字面——目录位置只有那一个事实源
     mem_rel = mem_dir.relative_to(PROJECT_DIR).as_posix()
-    print("[memory-map] 角色域一览——直做该域工作前，读其契约 + MEMORY.md（内容不在此注入）")
-    print("  路径：契约 <plugin>/agents/<role>.md，项目侧角色在 .claude/agents/（同名则覆盖 core）"
+    # 一行写两门、不按门分支：hook 的 stdout 必须与带不带 `--harness` 无关（validate `hook_scripts_tolerate_harness_arg`）
+    print("[memory-map] 角色域一览——直做该域工作前读其契约与 MEMORY.md"
+          "（MEMORY.md 在进入该域时由 hook 投递，没投到就按路径读）")
+    print("  路径：契约 <plugin>/agents/<role>.md，项目侧角色在 .claude/agents/（同名与 core 并存，点名派谁用谁）"
           f"｜记忆 {mem_rel}/<role>/MEMORY.md")
     for role in sorted(roles):
         path, mark = roles[role]
@@ -736,6 +742,33 @@ def skills_form_note(project, codex):
     return None
 
 
+def warn_unmigrated_legacy():
+    """旧布局运行态目录还没迁移时，每次会话启动打一行提示。
+
+    没迁移就开会话时框架只读新目录：计数从零、**子 agent 的角色记忆注入为空**，而那一路没有任何别的
+    出口会说话（doctor 只在被人跑时才报）。判定复用 doctor 的 `_legacy_layout`（旧记忆目录按框架出厂
+    形态判，Claude Code 原生子 agent 记忆不算），文案里的命令也取 doctor 的 `_migrate_how`。
+    便宜的前置：三类旧路径一个都不在时不 import doctor。任何异常都吞掉——提示失败不能挡会话启动。
+    """
+    try:
+        if not any(legacy_present(PROJECT_DIR, k) for k in ("state", "memory", "archive")):
+            return
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import workframe_doctor as doc
+        P = doc.Paths(PROJECT_DIR)
+        lay = doc._legacy_layout(P)
+        kinds = lay["old"] + lay["both"]
+        if not kinds:
+            return
+        olds = "、".join(f"{legacy_rel(k)}/" for k in kinds)
+        print(f"[workframe] ⚠ 旧布局运行态目录没迁移：{olds} 还在，本版框架只读新目录——计数从零、"
+              "子 agent 角色记忆注入为空。请转述给用户：" + doc._migrate_how(P) +
+              ("；新旧目录并存时迁移工具判冲突不动，先按 `workframe-doctor --group install` 的"
+               " [legacy_state_dir] 处理" if lay["both"] else ""))
+    except Exception:
+        pass
+
+
 def main():
     # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
     if _harness.hook_outside_project(PAYLOAD):  # 载荷已在模块顶层读过
@@ -748,6 +781,7 @@ def main():
     write_session_marker(PAYLOAD)
     ensure_agents_md_present()
     ensure_project_skills_link_present()
+    warn_unmigrated_legacy()
     try:
         flush_event_spills()
     except Exception as e:
@@ -840,6 +874,17 @@ def main():
             print_memory_map()
         except Exception as e:
             print(f"[warn] memory map failed: {type(e).__name__}: {e}", file=sys.stderr)
+
+    # 开场记忆投递（两门）：shared 全文 ＋ 角色条目目录。**不进上面那道守卫**——wake-up 会话恰恰最需要
+    # 跨角色纪律；也不并进 print_memory_map，它整段被那道守卫跳过。Codex 门经 `--output hook-json` 投 JSON，
+    # 该事件的 `additionalContextLimit` 为 0（不限），预算仍按 `_role_memory.OPENING_BUDGET` 自己控。
+    try:
+        import _role_memory
+        opening = _role_memory.opening_text(PROJECT_DIR, PAYLOAD)
+        if opening:
+            print(opening)
+    except Exception as e:
+        print(f"[warn] role memory opening failed: {type(e).__name__}: {e}", file=sys.stderr)
 
     # 首个会话的运行时验收（安装是否真的成功，由代码回答一次）
     if state["session_counter"] == 1:

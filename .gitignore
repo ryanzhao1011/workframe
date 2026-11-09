@@ -19,6 +19,11 @@ desktop.ini
 # Claude Code runtime state (per-project, not for repo)
 .heartbeat-state.json
 .claude/workframe-state/
+# 当前运行态命名空间（与 plugins/core/templates/gitignore-template 同口径；锚定仓根，免得误盖插件内同名目录）
+/.workframe/state/
+/logs/
+/tmp/
+/.tmp/
 
 # Test artifacts
 /examples/**/node_modules

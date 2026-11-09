@@ -259,7 +259,32 @@ def main():
         含 "/" 的目标先按 vault 根解析,失败再按所在文件目录相对解析
         (Obsidian 两种写法都合法;只按根解析会把相对写法误报断链)。
         两个分支最后都要过 exists_outside——范围外的合法引用不是断链。
+
+        模块记忆另有契约:`projects/...` 从项目根解析,其余一律相对本文件目录
+        (与加载器投递头同一口径)。按通用顺序先查根、再按短名全库匹配,会让
+        相对目标缺失时被根下或别处的同名文件顶替成「存在」——假绿。
         """
+        if src.endswith("/module-memory.md"):
+            # 两种写法各只查自己的基准,不互相回退:回退会让缺失目标被另一处同名文件顶替
+            base = proj if t.startswith("projects/") else proj / Path(src).parent
+            tgt = t if t.endswith(".md") else t + ".md"
+            try:
+                cand = (base / tgt).resolve().relative_to(proj).as_posix()
+            except (ValueError, OSError):
+                cand = None
+            if cand and cand in file_set:
+                inlinks[cand] += 1
+                return
+            for name in ((t,) if t.endswith(".md") else (tgt, t)):
+                try:
+                    p = (base / name).resolve()
+                    # 写明 .md 的必须是文件:同名目录不能顶替消失的文档
+                    if p.is_file() if name.endswith(".md") else p.exists():
+                        return              # 目录 / 非 md / 扫描范围外:只验存在,不计入度
+                except (ValueError, OSError):
+                    continue
+            broken.append((src, origin))
+            return
         if "/" in t:
             tgt = t + ".md" if not t.endswith(".md") else t
             if tgt in file_set:
@@ -285,7 +310,11 @@ def main():
 
     fm_strip_re = re.compile(r"^---\r?\n.*?\r?\n---\r?\n", re.S)
 
+    report_rel = rel(report_path)
     for src, text in texts.items():
+        # 报告自身把上一轮的断链原样列在表里,扫它会把旧断链再计一遍(且逐轮累积)
+        if src == report_rel:
+            continue
         src_dir = Path(src).parent
         # 正文与 frontmatter 分开扫:正文走 wikilink/md 链接,frontmatter 走 related 通道。
         # (旧版全文扫描会让 related 里的 wikilink 被计两次,断链虚高)
@@ -361,9 +390,10 @@ def main():
             else:
                 broken.append((src, f"related: {entry}"))
 
-    # 孤儿(豁免结构性文件:current-state 四件套、requirements 清单页——位置约定即入口)
+    # 孤儿(豁免结构性文件:current-state 四件套、requirements 清单页、模块记忆——位置约定即入口)
     def structural(f):
-        return "/current-state/" in f or f.endswith("requirements/overview.md")
+        return ("/current-state/" in f or f.endswith("requirements/overview.md")
+                or f.endswith("/module-memory.md"))
     orphans = sorted(f for f, n in inlinks.items()
                      if n == 0 and f not in ORPHAN_WHITELIST and not structural(f))
     # hub
@@ -458,11 +488,42 @@ def main():
     L.append("")
     L.append("## 1. 断链(含 frontmatter related)")
     L.append("")
+    # 模块记忆的断链单列且不截断:librarian 复查提醒依据时只读这一段,
+    # 混在总表里会被下面的前 50 条截断静默吞掉
+    # 本段无论全局有无断链都输出:零断链时缺段,读者分不清「没断链」还是「旧报告 / 没扫到」
+    mm_broken = [(s, t) for s, t in broken if s.endswith("/module-memory.md")]
+    # 未纳入扫描的模块记忆按路径列出(被排除目录等):只给份数时读者分不清漏的是哪份。
+    # 枚举口径与 librarian 第 1 步一致——两级目录、同目录带 module.yaml / submodule.yaml
+    mm_all = sorted(rel(p) for pat, marker in (("*/module-memory.md", "module.yaml"),
+                                                ("*/*/module-memory.md", "submodule.yaml"))
+                    for p in (proj / "projects" / "modules").glob(pat)
+                    if p.is_file() and (p.parent / marker).is_file())
+    mm_unscanned = [f for f in mm_all if f not in file_set]
+    L.append(f"### 1a. 模块记忆断链(全部列出;模块记忆 {len(mm_all)} 份,"
+             f"未纳入扫描 {len(mm_unscanned)} 份)")
+    L.append("")
+    for f in mm_unscanned:
+        L.append(f"- 未纳入扫描(不在本段结果内,需逐个核):{f}")
+    if mm_unscanned:
+        L.append("")
+    if mm_broken:
+        L.append("| 所在文件 | 链接 |")
+        L.append("|---|---|")
+        for src, t in mm_broken:
+            L.append(f"| {src} | `{t}` |")
+    else:
+        L.append("_模块记忆无断链。_")
+    L.append("")
+    L.append("### 1b. 全部断链")
+    L.append("")
     if broken:
         L.append("| 所在文件 | 链接 |")
         L.append("|---|---|")
         for src, t in broken[:50]:
             L.append(f"| {src} | `{t}` |")
+        if len(broken) > 50:
+            L.append("")
+            L.append(f"_共 {len(broken)} 条,仅列前 50 条。_")
     else:
         L.append("_无断链。_")
     L.append("")

@@ -19,12 +19,15 @@
   （`workframe-event`）要靠这一行知道自己在哪扇门、哪个会话。**那一行的门标识在
   `--harness` 缺失时落到 `codex`**：`--shard all` 只有 Codex 清单在用，而剥掉 `--harness`
   的行为探针（validate 的 `hook_scripts_tolerate_harness_arg`）要求 stdout 逐字节相同。
+- 上两种模式下 `--scope sub` 遇到 fork 线程（`_harness.is_fork`）零输出，只往 inject-log 记一行
+  `kind=skipped_fork`：fork 继承父线程上下文，父线程那一片已在其中（CC 与 Codex 的认法见 `_harness.is_fork`）。
 - **`--scope prompt`**（Codex，挂 `UserPromptSubmit`）：不装新片，按 stdin 载荷判「这是
   哪类线程」再决定投什么——
     thread_id := transcript_path 文件名里的 UUID（解析不出 ⇒ None）
     is_sub    := (thread_id is None) or (thread_id != session_id)
-  子线程（review 型等 `SessionStart` / `SubagentStart` 都不触发的线程）：同 (thread_id,
-  turn_id) 已由 `SubagentStart` 注过则零输出，否则投 sub 全片；主线程：记一行 turn，距上一次
+  子线程（review 型等 `SessionStart` / `SubagentStart` 都不触发的线程）：fork（rollout 首行带
+  `forked_from_id`）零输出、记一行 `kind=skipped_fork`；同 (thread_id, turn_id) 已由 `SubagentStart`
+  注过则零输出，否则投 sub 全片；主线程：记一行 turn，距上一次
   main 注入满 K 个 prompt 就重发 main 全片（compact 后的保险）。**缺失 `transcript_path`
   按子线程处理**——误判为子线程多投一片、inject-log 可见；误判为主线程则该线程整段无
   纪律、与模型犯错同形。K 读 `.workframe-config.json` 的 `codex.reinject_every_turns`
@@ -99,6 +102,8 @@ SCOPE_LABEL = {"main": "主会话", "sub": "子 agent"}
 # `--scope prompt` 主线程分支：每隔多少个 prompt 重发一遍 main 全片。配置键与缺省值。
 REINJECT_KEY = ("codex", "reinject_every_turns")
 REINJECT_DEFAULT = 30
+# inject-log 里 fork 线程跳过 sub 片的那一行的 `kind`
+SKIP_FORK = "skipped_fork"
 _UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 # 片头（B' 形态）。**它的地位**：框架句是二进制字串实证指认的、rules 与 hook 注入
@@ -421,6 +426,12 @@ def prompt_mode(harness, payload):
     rows = read_inject_log(project_dir)
 
     if is_sub:
+        # fork 子线程：父线程那一片已在继承的历史里，再补 sub 片就是两套口径并存（同 SubagentStart 那条）。
+        # 直接看 rollout 首行、不经 `is_fork` 的 `agent_id` 前提：UserPromptSubmit 在子线程上的载荷形态没有实测
+        if _harness.is_fork(payload) or _harness.rollout_forked(
+                payload.get("transcript_path") if isinstance(payload, dict) else None):
+            _log(project_dir, _row(harness, "sub", payload, event, shard=SHARD_ALL, kind=SKIP_FORK, thread_id=thread_id))
+            return 0
         if turn_id and any(r.get("scope") == "sub" and r.get("thread_id") == thread_id
                            and r.get("turn_id") == turn_id for r in rows):
             return 0                      # 同轮已由 SubagentStart 注过
@@ -506,6 +517,13 @@ def main():
     payload = _stdin_payload()
     project_dir = _harness.project_dir(payload)
     event = SCOPE_EVENT[scope]
+    if scope == "sub" and _harness.is_fork(payload):
+        # fork 已带着主会话片，再投子 agent 片就是两套口径并存（见 `_harness.is_fork`）。照记一行
+        # （chars=0）：inject-log 里「判过、没投」与「这条 hook 没跑」分得开
+        _log(project_dir, _row(harness, scope, payload, event,
+                               shard=SHARD_ALL if idx is None else f"{idx}/{len(shards)}",
+                               kind=SKIP_FORK))
+        return 0
     if idx is None:
         text = all_text(scope, shards, harness, _harness.session_id(payload))
         _log(project_dir, _row(harness, scope, payload, event, shard=SHARD_ALL,

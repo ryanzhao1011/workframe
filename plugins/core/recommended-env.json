@@ -9,8 +9,8 @@
       "default_action": "skip",
       "min_cli_version": "2.1.32",
       "category": "experimental",
-      "description_zh": "Agent Teams 是 Claude Code 实验功能。workframe 不依赖它。启用后可能改善部分多代理续聊体验，但会改变 Claude Code 的代理协作能力范围。",
-      "description_en": "Agent Teams is an experimental Claude Code feature. workframe does not depend on it. Enabling may improve some multi-agent continuation experiences but will change the agent collaboration capability scope of Claude Code.",
+      "description_zh": "Agent Teams 是 Claude Code 实验功能。workframe 不依赖它：续派子 agent 用 SendMessage 发给 agentId，不需要开它。启用后带 name 的派发会变成队友，workframe 会拦下给出厂角色（core:*）起名的派发。",
+      "description_en": "Agent Teams is an experimental Claude Code feature. workframe does not depend on it: continuing a subagent works by sending SendMessage to its agentId without it. When enabled, a dispatch that sets name launches a teammate, and workframe blocks dispatches that name a built-in role (core:*).",
       "official_doc": "https://code.claude.com/docs/zh-CN/agent-teams",
       "scopes": [
         {

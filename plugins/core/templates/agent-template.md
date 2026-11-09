@@ -46,7 +46,7 @@ tools:
 
 {{ROLE_CONSTRAINTS}}
 
-> 协作边界（不派发其他 agent）、响应正文优先于文件写入、shared memory 启动读取契约等已由注入的必载片定义，不在此重复。
+> 协作边界（子 agent 不派发其他 agent）、响应正文优先于文件写入、shared memory 启动读取契约等已由注入的必载片定义，不在此重复。
 
 ## Step 3 扩展 — {{ROLE_DISPLAY_NAME}} 任务流转
 

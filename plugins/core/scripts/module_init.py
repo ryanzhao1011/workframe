@@ -18,14 +18,14 @@ module_init.py — modules/ 体系 basic / sub 两层骨架的确定性落盘（
 params JSON（launcher setup / module-init SKILL 采集对话后写出）：
     {
       "basics": [
-        { "name": "催收策略",
+        { "name": "订单管理",
           "owner": "pm",                       # 可选，默认 pm
           "positioning": "一句话定位",          # 可选；写进 overview 定位段并成为索引摘要
           "subs": [
-            { "name": "策略生成",
+            { "name": "订单创建",
               "owner": "pm",                   # 可选
               "positioning": "一句话定位",      # 可选
-              "code_paths": ["src/strategy/**"] # 可选；非空时初始化反向索引
+              "code_paths": ["src/order/**"]    # 可选；非空时初始化反向索引
             } ] } ] }
 
 职责边界：

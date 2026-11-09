@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""YAML 可解析性探针：`module-close-check` 与 `workframe-doctor` 共用的**唯一**判定式。
+"""YAML 可解析性探针：`module-close-check` 与 `workframe-doctor` 共用的**唯一**判定式；
+另带框架读 YAML 数据文件的共用解析入口 `safe_load`（libyaml 优先，见该函数；判定式本身不用它）。
 
 为什么单独成模块：两处闸问的是同一个问题（「这份文件是不是合法 YAML」），但喂进来的
 是**不相交的两个文件集**——close-check 喂 `projects/modules/**`（模块收口面），
@@ -154,12 +155,51 @@ def probe_yaml_text(text, line_offset=0):
     m = _PLACEHOLDER_RE.search(text)
     if m:
         return PLACEHOLDER, m.group(1)
+    # **这里必须用纯 Python 解析器，不用下面的 `safe_load`**：本函数回答「这是不是合法 YAML」，
+    # 而 libyaml 接受一些纯 Python 拒绝的形态（实测：tab 作分隔符，如 `a: 1\t# c`、流式序列里的
+    # tab）。用 C 实现判，一份在没装 libyaml 的机器上读不进来的文件会在装了的机器上报绿。
     import yaml
     try:
         yaml.safe_load(text)
     except Exception as e:
         return PARSE_ERROR, _describe(e, text, line_offset)
     return OK, ""
+
+
+def safe_load(text):
+    """框架读 YAML 数据文件的**共用入口**：装了 libyaml 用 `CSafeLoader`，否则用纯 Python 的 `SafeLoader`。
+
+    **为什么要它**：`yaml.safe_load` 恒走纯 Python 解析器，不会自动挑已装的 C 实现。看板会长到
+    MB 级，同一份 1.8MB 看板纯 Python 约 640–720ms、C 实现约 50–60ms，而读看板的 hook 每次都
+    整份解析。各消费方各写一份「有 C 用 C」会漂，所以只此一份。
+
+    **只用于读数据，不用于判「是不是合法 YAML」**——后者是 `probe_yaml_text`，它坚持用纯 Python。
+    与 `yaml.safe_load` 的口径差在哪：
+
+    - **原来读得进的，现在照样读得进**：C 实现报错时不直接抛，改用纯 Python 再解析一次、以它为准
+      ——成功就返回它的结果，失败就抛**它的**异常（类型、行列、原话与 `yaml.safe_load` 逐字相同；
+      C 实现的报错原话与位置不是同一套）。实测 C 拒、纯 Python 收的形态：`%YAML 1.3` 指令、
+      文档中间的 U+FEFF。代价：C 实现读不进的文件要解析两遍（坏文件，以及刚列的这几种形态）
+    - **原来读不进的，有一部分现在读得进**：C 实现接受而纯 Python 拒绝的形态（实测：tab 作分隔符，
+      如 `a: 1\t# c`、流式序列里的 tab）直接返回 C 的结果。对读数据的消费方这是放宽成「照常检查」
+      而不是「跳过」；同一份文件在没装 libyaml 的机器上仍读不进，那由 doctor 的 `yaml_parse`
+      （走 `probe_yaml_text`、纯 Python）报出来
+    - **两者都成功时取 C 的结果**。真实看板与一组边界样本（空值、块 / 流式、多行标量、锚点、合并键、
+      重复键、日期、BOM、CRLF、各类数字与时间戳）上两者取值相同；没覆盖到的「两边都成功但取值
+      不同」本入口看不见——与 `probe_yaml_text` 的能力边界同族
+    - **缺 PyYAML 时原样抛 ImportError**：「没装库」与「文件坏了」是两条红灯，调用方各自先判可用性
+      （`pyyaml_status()`），本函数不替它们降级
+
+    不碰 stdout、不写任何东西；`import yaml` 在函数内，保持本模块 import 无副作用。
+    """
+    import yaml
+    fast = getattr(yaml, "CSafeLoader", None)
+    if fast is not None:
+        try:
+            return yaml.load(text, Loader=fast)
+        except Exception:
+            pass
+    return yaml.safe_load(text)
 
 
 def bom_blinds_frontmatter(raw_bytes):

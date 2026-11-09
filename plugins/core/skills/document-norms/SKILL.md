@@ -52,9 +52,11 @@ allowed-tools: [Read, Write, Edit, Grep, Glob]
 | 全产品架构总图 | `projects/modules/overview.md` | `overview` | `module-init` / `module-index-refresh` |
 | 基础模块导览 | `projects/modules/<basic>/overview.md` | `overview` | 同上 |
 | 基础模块 schema | `projects/modules/<basic>/module.yaml` | YAML | `module-init` |
+| 基础模块作业提醒（跨子模块） | `projects/modules/<basic>/module-memory.md` | 不带 frontmatter | 按需手动创建 / `librarian` |
 | 跨子模块共享实体 | `projects/modules/<basic>/shared/<name>.md` | `concept` | 手动 |
 | 子模块导览 | `projects/modules/<basic>/<sub>/overview.md` | `overview` | `module-init` / `module-index-refresh` |
 | 子模块 schema | `projects/modules/<basic>/<sub>/submodule.yaml` | YAML | `module-init` |
+| 子模块作业提醒 | `projects/modules/<basic>/<sub>/module-memory.md` | 不带 frontmatter | 按需手动创建 / `librarian` |
 | 代码现状（架构）| `<sub>/current-state/architecture.md` | `current-state` | `code-to-doc` |
 | 代码现状（API）| `<sub>/current-state/api-surface.md` | `current-state` | `code-to-doc` |
 | 代码现状（数据模型）| `<sub>/current-state/data-model.md` | `current-state` | `code-to-doc` |
@@ -77,6 +79,10 @@ allowed-tools: [Read, Write, Edit, Grep, Glob]
 | 跨模块分析产物（指标体系 / 反馈分析 / 竞品分析）| `projects/specs/{METRICS,FEEDBACK,COMP}-{序号}.md` | `research` / `concept` | `product-metrics-design` / `user-feedback-analysis` / `competitive-analysis` |
 | Issues | `projects/issues/{TYPE}-{seq}.yaml`（扁平 + 全局序号；TYPE = BUG / SEC）| YAML schema（`projects/issues/TEMPLATES.md`）| 手动 / qa |
 | Tasks | `projects/board.yaml` | YAML | `task-management` |
+
+**内容先分流**：产品或系统是什么、应该怎样 → 需求 PRD，跨需求进 `<sub>/shared/` 或 `<basic>/shared/`；技术设计理由仍进 ADR。进度与状态进看板或 `meta.yaml`。不改变产品定义、只对在本模块动手的人有用的提醒 → 模块记忆；换模块仍成立的执行经验 → 角色记忆。一条混合内容拆开写，分流不放宽需求草稿与落盘确认要求。
+
+**模块记忆按需存在**：`module-init` 不建空文件，不建需求级模块记忆；只对单个需求成立的内容进该需求 PRD。文件是纯条目清单，**不带 frontmatter**——加载器整份投递、容量按整份计，元数据没有消费方。一行一条 `- 做 X 时 → 要做 Y / 必读 Z`，写清何时触发、做什么、依据在哪；环境与工序参数（如启动命令）可写，并写明适用环境或复核入口；不写产品结论。每文件 ≤1,500 字符（`len()` 口径），doctor 超限 warn。必读的文档写成 wikilink `[[路径]]`，章节写在链接外（如 `[[shared/字段口径.md]] §0.7`），`doc-graph-health` 据此报断链、Obsidian 据此显示反链；代码、目录与命令写行内代码。路径以本文件所在目录为基准，`projects/...` 从项目根解析。改模块文档时复查同目录模块记忆，由 `librarian` 定期扫描；提醒的语义是否仍对没有机器闸。
 
 ### 1.2 周边资产层归属（手动维护）
 
@@ -128,6 +134,8 @@ tags: []
 ---
 ```
 
+例外：`module-memory.md` 不带 frontmatter（见 §1.1 模块记忆段）。
+
 **`description` 写作口径**（prd / overview / current-state 必填，其余 type 推荐）：
 
 - 1-2 句、≤200 字，说清「这是什么 / 解决什么」
@@ -137,7 +145,7 @@ tags: []
 - 这类骨架/占位文档 `tags` 只打 `moc`，不硬套能力域标签
 - 仅批量补齐存量 description / tags 等元数据（正文零变化）时**不更新 `updated`**（元数据回填例外，详见 §2.7）
 
-**`related` 格式**：YAML 中 wikilink **必须整体加引号**——`related: ["[[projects/modules/agent话术/overview|agent话术]]"]`；不加引号时 `[[` 会被 YAML 解析为嵌套 flow 序列导致 parse 错误。
+**`related` 格式**：YAML 中 wikilink **必须整体加引号**——`related: ["[[projects/modules/订单管理/overview|订单管理]]"]`；不加引号时 `[[` 会被 YAML 解析为嵌套 flow 序列导致 parse 错误。
 
 ### 2.2 status 流转
 
@@ -169,7 +177,7 @@ tags: []
 | `research` | 调研 | `research/` |
 | `overview` | 各层导览 | 各 `overview.md` |
 | `plan` | 跨模块实施方案 | `projects/specs/plans/` |
-| `concept` / `meeting` / `scratch` | 杂项 | 自由 |
+| `concept` / `meeting` / `scratch` | 杂项 | 自由；模块记忆（`<basic>/module-memory.md` 或 `<basic>/<sub>/module-memory.md`）不带 frontmatter、不用任何 type |
 
 ### 2.4 按 type 选填字段
 

@@ -7,7 +7,7 @@
 | 文档 | 内容 |
 |---|---|
 | [quickstart.md](./quickstart.md) | 10 分钟上手：装 launcher → 对话式创建 / 接入项目 → 重启验证 → 升级与协作 |
-| [concepts.md](./concepts.md) | 核心概念：Plugin / 项目级 / 用户级 三层原理，项目级同名 agent 与插件角色并存，modules/ 体系，记忆与看板 |
+| [concepts.md](./concepts.md) | 核心概念：Plugin / 项目级 / 用户级 三层原理，角色与子 agent 的分工，项目级同名 agent 与插件角色并存，modules/ 体系，记忆与看板 |
 | [setup-guide.md](./setup-guide.md) | 初始化流程完整细节：目录判定、A/B 路径、确认页、执行步骤、降级与故障 |
 | [onboarding.md](./onboarding.md) | `/core:onboard` 可选配置引导（默认全部跳过；workframe 不依赖任何被引导项） |
 | [context-injection.md](./context-injection.md) | 必载纪律怎么进上下文：源在哪、两扇门各自的挂载、生效时序、片数怎么查 |
@@ -26,4 +26,4 @@
 
 ## 关键提示
 
-**每次安装或升级框架后，请重启会话**（Claude Code 与 Codex 各自重启；Codex 侧升级后失信任的 hook 由种信任 hook 在下一次会话补种、再下一次会话才跑），确保插件的 hooks、必载纪律与 agents 全部加载生效。上一版装的项目（运行态还在 `.claude/` 下）升级后**先迁移、再重启会话**，见 [setup-guide.md](./setup-guide.md)「已装项目迁移」。参见 [context-injection.md](./context-injection.md) 与 [quickstart.md](./quickstart.md) §升级框架。
+**每次安装或升级框架后，请重启会话**（Claude Code 与 Codex 各自重启；Codex 侧先运行 `workframe-door --upgrade` 完成信任恢复，再重开会话；仅重开不能恢复失信 hook），确保插件的 hooks、必载纪律与 agents 全部加载生效。上一版装的项目（运行态还在 `.claude/` 下）升级后**先迁移、再重启会话**，见 [setup-guide.md](./setup-guide.md)「已装项目迁移」。参见 [context-injection.md](./context-injection.md) 与 [quickstart.md](./quickstart.md) §升级框架。

@@ -18,6 +18,8 @@ additionalContext 注入 subagent 上下文，把启动协议的"必读记忆"�
   映射规则：agent_type 去掉 plugin 前缀（"core:pm" → "pm"）；项目级 agent 用裸名。
 - notes.md 不注入（缓冲区，未达 D/U/R/A，维持启动协议口径）。
 - 两份记忆都拿不出 → 静默退出，零注入。
+- fork（CC：`agent_type == "fork"`；Codex：子线程 rollout 首行带 `forked_from_id`；判定在 `_harness.is_fork`）
+  → 零注入：它继承父线程上下文，父线程拿到的那一套（开场投递的 shared，或角色线程的本角色记忆）已在其中。
 
 stdin: Claude Code SubagentStart JSON（含 agent_type / agent_id / cwd 等）。
 stdout: hookSpecificOutput.additionalContext JSON。中文内容必须显式 UTF-8 输出，
@@ -81,6 +83,10 @@ def main():
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         payload = {}
+    if not isinstance(payload, dict):
+        payload = {}  # 合法 JSON 但不是对象（如数组）：下面的 `.get` 会抛，shared 也跟着注不进去
+    if _harness.is_fork(payload):
+        return
 
     project_dir = _project_dir(payload)
     memory_dir = memory_dir_of(project_dir)
@@ -122,8 +128,8 @@ def main():
     # `agent_type` 对**具名 teammate 就是那个名字**（实测：`core:qa` 拿到 5,350 单元，
     # `qa-080-pkg2-t102` 拿到 1,857），而它照样通过 `ROLE_NAME_RE`，于是角色记忆**静默落空**。
     # **teammate 形态只在开启 agent teams 时出现**：未开启时具名派发仍是普通 subagent，
-    # `agent_type` 是定义名；而 teammate 连插件内的 agent 定义本身都不应用（官方口径：只套用
-    # project / user / managed scope 的定义），缺的不止角色记忆。原文案「本 agent 无角色记忆
+    # `agent_type` 是定义名；而 teammate 不应用定义的 `skills`（官方口径；正文与 `tools` 的应用
+    # 随 CC 版本变过），缺的不止角色记忆。原文案「本 agent 无角色记忆
     # 目录」对一个确实有目录的角色是假话，且读的人无从知道为什么。**CC 的 SubagentStart
     # payload 里没有第二个字段能拿到真实角色类型**（实测该 payload 只有 7 个字段，
     # `agent_type` 取到的就是自定义 agent 名）⇒ 猜不了，也**有意不猜**（前缀猜角色如

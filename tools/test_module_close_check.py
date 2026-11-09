@@ -17,7 +17,7 @@
   - `[ledger]` 账本：无配置跳过 / 日期过老 error / 缺字段 error / 今天日期+字段齐 ok
   - `[yaml-parse]` YAML 可解析性：占位符残留 / C0 控制字符 / 标量提前终止 /
     frontmatter BOM 失明 / 显式 config 豁免 / 合法文件不误伤。**本组需要 PyYAML**
-    （`pip install pyyaml==6.0.2`，CI 装的就是这一版）；没装时整组由前置守卫拦下并
+    （`pip install pyyaml==6.0.3`，CI 装的就是这一版）；没装时整组由前置守卫拦下并
     报一条点名环境的失败——是报红不是跳过，「没跑」不等于「通过」
   - 回归：_load_csm 同进程多次调用不炸（首跑实测双重包流炸过）+ 换 project_dir
     后 csm 路径常量正确重定向
@@ -151,6 +151,24 @@ def test_load_csm_regression(mcc):
         if Path(csm2.STALE_FILE).parts[:len(Path(t2).resolve().parts)] != Path(t2).resolve().parts:
             failures.append(f"换 project_dir 后 STALE_FILE 未重定向: {csm2.STALE_FILE}")
         print("test stdout 存活探针 ✓")  # 双重包流的典型死法是流被关掉——真打印一下
+    return failures
+
+
+def test_cli_survives_gbk_pipe(mcc):
+    """回归：被管道接走的输出按 GBK 编码时（中文 Windows 上模型经 shell 调用的常态），
+    CLI 自己把流改成 UTF-8，打印 ✓✗ 不崩。check-stale-modules.py import 时不再替宿主包流，
+    这条只能由 module_close_check 自己兜；CI 的 UTF-8 环境看不见它，所以显式指定 gbk。"""
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        make_fixture(tmp)
+        env = {**os.environ, "PYTHONIOENCODING": "gbk", "PYTHONUTF8": "0"}
+        r = subprocess.run([sys.executable, str(SCRIPT_PATH), "--project", tmp],
+                           capture_output=True, env=env)
+        err = r.stderr.decode("utf-8", errors="replace")
+        if "UnicodeEncodeError" in err or r.returncode not in (0, 1):
+            failures.append(f"GBK 管道下 CLI 崩溃 rc={r.returncode}: {err[-300:]}")
+        elif "结果:".encode("utf-8") not in r.stdout:
+            failures.append("GBK 管道下 stdout 不是 UTF-8 或缺结果行")
     return failures
 
 
@@ -391,7 +409,7 @@ def test_yaml_parse(mcc):
             f"[yaml-parse] 组整组未跑：本机导入 PyYAML 失败（{detail}）。本组测的是"
             f"「PyYAML 可用时 check_yaml_parse 各分支的行为」——缺库时每条断言都只会读到"
             f"同一条『未验证』finding，逐条报失败会把人送去查 fixture 和判定式，而真正要"
-            f"改的是环境。两条出路：①`pip install pyyaml==6.0.2`（CI 钉的就是这一版）；"
+            f"改的是环境。两条出路：①`pip install pyyaml==6.0.3`（CI 钉的就是这一版）；"
             f"②接受这一组不跑——但 `tools/validate.py` 仍会红，「没跑」不等于「通过」。"
             f"（`close_check.yaml_parse: false` 是**用户侧**关闭收口检查的声明，关不掉也"
             f"不该关掉本单测：那是两个层级。）"
@@ -656,6 +674,135 @@ def test_yaml_parse(mcc):
         if any(lv == "error" for lv, _ in _yaml_findings(mcc, tmp)):
             failures.append("恢复 loader 后应回绿（上一组红须来自注入）")
 
+    return failures
+
+
+def test_yaml_safe_load(mcc):
+    """`_yaml_probe.safe_load`（读 YAML 数据文件的共用入口）的五条契约，各配一个自己的失败方式：
+
+    ① 装了 libyaml 时**真的走 C 实现**——只比结果的话，「永远走纯 Python」也全绿，提速就是假的
+    ② 两者都成功时结果与 `yaml.safe_load` 相同（边界样本逐个比）
+    ③ C 实现报错时以纯 Python 为准：能读进来的照样读进来，读不进来的抛**纯 Python 的**异常
+       （类型与原话逐字相同——doctor / close-check 的行列描述依赖它）
+    ④ 没有 libyaml 时回退纯 Python；缺 PyYAML 原样抛 ImportError（不替调用方降级）
+    ⑤ C 收、纯 Python 拒的形态：读数据的入口读得进，判合法性的 `probe_yaml_text` 仍报解析失败
+    """
+    failures = []
+    probe = mcc._load_yaml_probe()
+    if not probe.pyyaml_status()[0]:
+        return ["safe_load 组整组未跑：本机导入 PyYAML 失败——「没跑」不等于「通过」"
+                "（`pip install pyyaml==6.0.3`）"]
+    import yaml
+
+    samples = {
+        "空串": "", "只有注释": "# c\n", "块映射": "a: 1\nb:\n  - x\n  - y\n",
+        "流式": "a: {b: [1, 2], c: null}\n", "块标量": "a: |\n  l1\n  l2\nb: >\n  f1\n  f2\n",
+        "双引号续行": 'a: "x\n  y"\n', "转义": 'a: "t\\tn\\nu\\u4e2d"\n',
+        "锚点与合并键": "base: &b {x: 1}\nd:\n  <<: *b\n  y: 2\n",
+        "重复键（两者都取后一个）": "a: 1\na: 2\n", "日期与布尔": "d: 2026-11-02\nt: yes\nn: ~\n",
+        "BOM": "\ufeffa: 1\n", "CRLF": "a: 1\r\nb: [1,\r\n  2]\r\n", "中文": "标题: 看板\n",
+    }
+    broken = {
+        "未闭合流式": "a: [1, 2\n", "裸双引号": 'a: "x"y"\n', "C0 控制字符": "a: 1\x01\n",
+        "tab 缩进": "a:\n\t- 1\n", "不安全标签": "a: !!python/object:os.system x\n",
+    }
+
+    has_c = getattr(yaml, "CSafeLoader", None) is not None
+    # ① 真的走 C 实现
+    if has_c:
+        seen = []
+        real_load = yaml.load
+        yaml.load = lambda s, Loader: (seen.append(Loader), real_load(s, Loader=Loader))[1]
+        try:
+            probe.safe_load("a: 1\n")
+        finally:
+            yaml.load = real_load
+        if seen != [yaml.CSafeLoader]:
+            failures.append(f"装了 libyaml 却没走 CSafeLoader（实际 Loader 序列 {seen}）——提速是假的")
+    else:
+        print("    i 本机 PyYAML 无 libyaml：①②两格退化为纯 Python 自比，只证回退路径")
+
+    # ② 结果相同
+    for label, s in samples.items():
+        try:
+            want = yaml.safe_load(s)
+        except Exception as e:
+            failures.append(f"样本「{label}」本应是合法 YAML：{e!r}")
+            continue
+        got = probe.safe_load(s)
+        if got != want:
+            failures.append(f"「{label}」取值与 yaml.safe_load 不同：{got!r} vs {want!r}")
+
+    # ③ 坏文件：抛的是纯 Python 的异常，原话逐字相同
+    for label, s in broken.items():
+        try:
+            yaml.safe_load(s)
+            failures.append(f"探针自身失效：「{label}」本应读不进来")
+            continue
+        except Exception as e:
+            want = (type(e).__name__, str(e))
+        try:
+            probe.safe_load(s)
+            failures.append(f"「{label}」：共用入口读进来了，纯 Python 读不进来——口径放宽了")
+        except Exception as e:
+            if (type(e).__name__, str(e)) != want:
+                failures.append(f"「{label}」异常与纯 Python 不同：{type(e).__name__}: {e} vs {want}")
+
+    # ⑤ 两种实现真实分歧的一格：C 收、纯 Python 拒（tab 作分隔符）。读数据的入口读得进，
+    # 但判「是不是合法 YAML」的 probe_yaml_text 必须仍按纯 Python 报解析失败——否则一份在没装
+    # libyaml 的机器上读不进的文件，会在装了的机器上被 doctor / close-check 报绿
+    tab_sep = "a: 1\t# c\n"
+    try:
+        yaml.safe_load(tab_sep)
+        failures.append("探针自身失效：tab 作分隔符本应被纯 Python 拒绝（PyYAML 行为变了？换一个分歧样本）")
+    except Exception:
+        if has_c:
+            if probe.safe_load(tab_sep) != {"a": 1}:
+                failures.append("C 收、纯 Python 拒的形态：读数据的入口本应读得进")
+        kind, _ = probe.probe_yaml_text(tab_sep)
+        if kind != probe.PARSE_ERROR:
+            failures.append(f"判定闸对纯 Python 读不进的文件报了 {kind}——判合法性必须用最严口径")
+
+    # ③ C 报错而纯 Python 读得进 → 以纯 Python 为准（用替身模拟两者分歧）
+    class _Boom:
+        def __init__(self, *_a, **_k):
+            raise yaml.YAMLError("替身：C 实现拒绝")
+    real_c = getattr(yaml, "CSafeLoader", None)
+    yaml.CSafeLoader = _Boom
+    try:
+        got = probe.safe_load("a: [1, 2]\n")
+        if got != {"a": [1, 2]}:
+            failures.append(f"C 报错时没回退纯 Python：{got!r}")
+    except Exception as e:
+        failures.append(f"C 报错时把它的异常抛出来了（应以纯 Python 为准）：{e!r}")
+    finally:
+        if real_c is None:
+            del yaml.CSafeLoader
+        else:
+            yaml.CSafeLoader = real_c
+
+    # ④ 没有 libyaml → 纯 Python
+    if has_c:
+        del yaml.CSafeLoader
+        try:
+            if probe.safe_load("a: [1]\n") != {"a": [1]}:
+                failures.append("无 libyaml 时回退结果不对")
+        except Exception as e:
+            failures.append(f"无 libyaml 时没有回退：{e!r}")
+        finally:
+            yaml.CSafeLoader = real_c
+    # ④ 缺 PyYAML → ImportError（sys.modules 置 None 即让 import 失败）
+    saved = sys.modules.get("yaml")
+    sys.modules["yaml"] = None
+    try:
+        probe.safe_load("a: 1\n")
+        failures.append("缺 PyYAML 时没抛 ImportError")
+    except ImportError:
+        pass
+    except Exception as e:
+        failures.append(f"缺 PyYAML 时抛的不是 ImportError：{e!r}")
+    finally:
+        sys.modules["yaml"] = saved
     return failures
 
 
@@ -1517,9 +1664,10 @@ def test_discipline_mark_command(mcc):
 
 def main():
     mcc = _load_mcc()
-    mcc._load_csm(REPO_ROOT)  # 先完成唯一一次 exec（包流在此发生），后续全走重定向
+    mcc._load_csm(REPO_ROOT)  # 先完成唯一一次 exec，后续全走重定向
     tests = [
         ("load_csm 双载回归", test_load_csm_regression),
+        ("CLI 在 GBK 管道下输出 UTF-8", test_cli_survives_gbk_pipe),
         ("检查1 stale + reason 事件", test_stale_and_reason_event),
         ("检查2 code_paths 形态与指向", test_code_paths_health),
         ("检查3 基准同值性", test_ref_consistency),
@@ -1529,6 +1677,7 @@ def main():
         ("检查6 code-map 覆盖率对账", test_code_map_coverage),
         ("[ledger] 账本字段", test_ledger),
         ("[yaml-parse] YAML 可解析性", test_yaml_parse),
+        ("_yaml_probe.safe_load 共用解析入口", test_yaml_safe_load),
         ("BUG-001 输入健壮性回归", test_bug001_input_robustness),
         ("run_all 结构与退化", test_run_all_shapes),
         ("[discipline-trace] 三判据与前提", test_discipline_trace_criteria),
@@ -1553,4 +1702,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # 被加载的两个脚本 import 时都不改宿主的流，这里自己原地设 UTF-8（不新建 wrapper）
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

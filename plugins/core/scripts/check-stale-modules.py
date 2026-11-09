@@ -2,10 +2,10 @@
 """
 PostToolUse Hook — modules/ stale 检测 + 反向索引维护
 
-触发条件（hooks.json PostToolUse 段配 matcher，当前 Edit|Write|NotebookEdit）：
-  - Edit/Write/NotebookEdit 命中代码路径（任何在 code_paths glob 范围的文件）
+触发条件（hooks.json PostToolUse 段配 matcher，当前 Edit|Write|NotebookEdit；Codex 门下它也命中 apply_patch）：
+  - Edit/Write/NotebookEdit（Codex：apply_patch 补丁头里的每个路径）命中代码路径（任何在 code_paths glob 范围的文件）
   - 同上命中 **/submodule.yaml
-  （下方白名单里的 MultiEdit 是历史工具残留，保留仅为向后兼容）
+  （`EDIT_TOOLS` 里的 MultiEdit 是历史工具残留，保留仅为向后兼容）
 
 处理逻辑：
   - 代码改动 → 反向 lookup code-paths-index.json → 写 stale-modules.yaml
@@ -43,11 +43,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-try:
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-except Exception:
-    pass
+if __name__ == "__main__":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # 锁与原子写在 _state_io 里共用一份实现——本文件是它们的出处，提取出去后
 # 四个 activity-state hook 也复用同一套，不再各写各的（见 _state_io.py 抬头）。
@@ -55,6 +56,7 @@ _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 import _harness  # noqa: E402
+import _module_paths  # noqa: E402
 from _harness import project_dir as _project_dir, strip_harness  # noqa: E402
 from _state_io import (  # noqa: E402,F401
     FileLock, LOCK_TIMEOUT_SEC, append_line, atomic_write, event_json, state_dir_of,
@@ -157,16 +159,17 @@ def first_static_segment(pat):
 # ---------- 索引读写 ----------
 
 
-def load_index():
+def load_index(index_file=None):
     """读 code-paths-index.json；损坏返回 None 触发 rebuild。
 
     文件不存在时返回**不带 `built_at`** 的空骨架——该字段是"是否已真正构建过"的标记，
     lookup 用它区分「从未构建」与「构建过但结果确实为空」（见 lookup_submodules）。
     """
-    if not INDEX_FILE.exists():
+    index_file = INDEX_FILE if index_file is None else Path(index_file)
+    if not index_file.exists():
         return {"__schema__": "workframe.code-paths-index.v1", "buckets": {}}
     try:
-        data = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
+        data = json.loads(index_file.read_text(encoding="utf-8"))
         # 只校验「顶层是 dict 且有 buckets 键」不够：`buckets: []` 能过这一关，
         # 后续 .get()/.items() 才在别处抛异常。buckets 的值也必须是
         # 映射，损坏就当 None 处理 → 触发全量重建，这是本来就设计好的兜底路径。
@@ -177,10 +180,11 @@ def load_index():
         return None
 
 
-def save_index(index):
+def save_index(index, index_file=None):
     # 任何一次成功写盘都视为"索引已构建"，避免无 code_paths 声明的项目被反复判定为未构建
     index.setdefault("built_at", now_iso())
-    atomic_write(INDEX_FILE, json.dumps(index, indent=2, ensure_ascii=False))
+    atomic_write(INDEX_FILE if index_file is None else index_file,
+                 json.dumps(index, indent=2, ensure_ascii=False))
 
 
 def init_index_for_submodule(submodule_path):
@@ -214,17 +218,18 @@ def init_index_for_submodule(submodule_path):
         save_index(index)
 
 
-def rebuild_full_index_inner():
+def rebuild_full_index_inner(modules_dir=None):
     """全量扫 projects/modules/**/submodule.yaml 重建索引（不持锁，由调用方持锁）。"""
     index = {
         "__schema__": "workframe.code-paths-index.v1",
         "built_at": now_iso(),
         "buckets": {},
     }
-    if not MODULES_DIR.exists():
+    modules_dir = MODULES_DIR if modules_dir is None else Path(modules_dir)
+    if not modules_dir.exists():
         return index
-    for sub_yaml in MODULES_DIR.glob("*/*/submodule.yaml"):
-        sub_path = "/".join(sub_yaml.parent.relative_to(MODULES_DIR).parts)
+    for sub_yaml in modules_dir.glob("*/*/submodule.yaml"):
+        sub_path = "/".join(sub_yaml.parent.relative_to(modules_dir).parts)
         for pat in parse_code_paths(sub_yaml):
             bucket_key = first_static_segment(pat)
             bucket = index["buckets"].setdefault(bucket_key, {})
@@ -232,19 +237,26 @@ def rebuild_full_index_inner():
     return index
 
 
-def rebuild_full_index(trigger="fallback"):
+def rebuild_full_index(trigger="fallback", project_dir=None):
     """全量重建（持锁、原子写入）。
 
     `trigger` 必须传实值：event-schema 给的枚举是 fallback | manual | migration，
     而所有路径都走本函数，此前一律记 fallback——audit 里分不出「索引损坏自动重建」
     和「人手动跑 rebuild-index」。
     """
-    if not is_modules_project():
+    modules_dir = MODULES_DIR if project_dir is None else Path(project_dir) / "projects" / "modules"
+    state_dir = STATE_DIR if project_dir is None else state_dir_of(project_dir)
+    if not modules_dir.is_dir():
         return
-    with FileLock(LOCK_FILE):
-        index = rebuild_full_index_inner()
-        save_index(index)
-        append_event("modules_index_rebuilt", trigger=trigger, buckets=len(index["buckets"]))
+    with FileLock(LOCK_FILE if project_dir is None else state_dir / "modules-index.lock"):
+        index = rebuild_full_index_inner() if project_dir is None else rebuild_full_index_inner(modules_dir)
+        save_index(index) if project_dir is None else save_index(index, state_dir / "code-paths-index.json")
+        if project_dir is None:
+            append_event("modules_index_rebuilt", trigger=trigger, buckets=len(index["buckets"]))
+        else:
+            append_line(state_dir / "events.jsonl", event_json({
+                "ts": now_iso(), "type": "modules_index_rebuilt", "trigger": trigger,
+                "buckets": len(index["buckets"])}))
 
 
 def parse_code_paths(yaml_path):
@@ -255,7 +267,7 @@ def parse_code_paths(yaml_path):
     引号包裹的值会去引号。
 
     **另有一个调用方不 import 本模块**：`workframe_migrate._code_paths_parser` 只把本函数的源码抽出来单独执行，
-    命名空间里只有 `re`（本模块在 import 期替换 `sys.stdout`，被 door 进程二次包装会关掉底层 buffer）。所以本函数
+    命名空间里只有 `re`，以避免引入入口脚本的项目解析和模块初始化依赖。所以本函数
     **只能依赖 `re`、名字与签名（一个带 `read_text(encoding=...)` 的路径参数）不能改**。改了之后那边的自检会在 plan 里
     报「算不出来」，不会静默漏列，但迁移工具的模块清单就此失效。
     """
@@ -378,7 +390,7 @@ def clear_stale(submodule_path, reason=None):
 # ---------- 反向 lookup ----------
 
 
-def lookup_submodules(file_path):
+def lookup_submodules(file_path, project_dir=None):
     """给定 changed file（项目根相对路径），返回命中的子模块列表。
 
     若索引文件不存在（首次启用 modules/ 体系还没跑过 init/PostToolUse）或损坏，
@@ -389,14 +401,15 @@ def lookup_submodules(file_path):
     if rel.startswith("./"):
         rel = rel[2:]
     bucket_key = rel.split("/", 1)[0]
-    index = load_index()
+    index_file = None if project_dir is None else state_dir_of(project_dir) / "code-paths-index.json"
+    index = load_index() if index_file is None else load_index(index_file)
     # 仅在「损坏」或「从未构建过」时 rebuild。
     # 不能用 `not index.get("buckets")` 作判据——纯文档项目（submodule.yaml 均未声明
     # code_paths）的空 buckets 是合法终态，用空判据会导致每次 lookup 都重建、重建结果仍为空的
     # 死循环（实测某项目 2.5 个月累积 4774 条 modules_index_rebuilt，占事件流 90%）。
     if index is None or not index.get("built_at"):
-        rebuild_full_index()
-        index = load_index() or {"buckets": {}}
+        rebuild_full_index() if project_dir is None else rebuild_full_index(project_dir=project_dir)
+        index = (load_index() if index_file is None else load_index(index_file)) or {"buckets": {}}
     candidates = []
     # 主桶 + 通配桶（无静态前缀）
     for key in (bucket_key, ""):
@@ -412,30 +425,55 @@ def lookup_submodules(file_path):
 # ---------- 处理 hook input ----------
 
 
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+PATCH_TOOL = "apply_patch"
+# Codex 的 apply_patch 补丁头：四种形态各带一个路径，`Move to` 跟在 `Update File` 之后（移动 = 旧路径 ＋ 新路径）
+_PATCH_HEAD_RE = re.compile(r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)[ \t]*\r?$", re.M)
+
+
+def edited_paths(payload):
+    """一次编辑工具调用改到的文件（原样路径，可能是相对路径），按出现顺序去重。
+
+    - CC 的编辑工具：`tool_input.file_path` / `notebook_path`，恰一个
+    - Codex 的 `apply_patch`：载荷**没有** `file_path`，只有整段补丁文本（`tool_input.command`），一次可改多个文件；
+      从补丁头取路径，移动保留前后两个（实测 0.166.0：框架实际 matcher `Edit|Write|NotebookEdit` 命中
+      `apply_patch`；补丁头路径可能是绝对路径，也可能相对于会话目录）
+    """
+    return _module_paths.edited_paths(payload)
+
+
+def _project_rel(path, cwd):
+    """编辑路径 → 项目根相对路径；不在项目根内返回 None。相对路径按载荷 `cwd`（没有就按项目根）解析。"""
+    try:
+        p = Path(path)
+        if not p.is_absolute():
+            p = Path(cwd) / p if isinstance(cwd, str) and cwd.strip() else PROJECT_DIR / p
+        return str(p.resolve().relative_to(PROJECT_DIR)).replace("\\", "/")
+    except Exception:
+        return None
+
+
 def process_postool_use(tool_input):
     """入口：PostToolUse 收到 hook input 后调用。
 
-    tool_input: dict，含 tool_name / tool_input.file_path 等
+    tool_input: dict，含 tool_name / tool_input（CC 编辑工具的 file_path，或 Codex apply_patch 的补丁文本）等。
+    一次调用改到多个文件时逐个处理；dev 记忆按第一个命中 `code_paths` 的文件投（之后同周期去重）。
     """
     if not is_modules_project():
         return  # 静默
+    first_hit = None
+    for path in edited_paths(tool_input):
+        rel = _project_rel(path, tool_input.get("cwd"))
+        if rel is None:
+            continue  # 不在项目根内 → 跳过
+        if _process_file(rel) and first_hit is None:
+            first_hit = rel
+    if first_hit:
+        _deliver_dev_memory(tool_input, first_hit)
 
-    tool_name = tool_input.get("tool_name", "")
-    if tool_name not in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
-        return
 
-    raw = tool_input.get("tool_input", {}) or {}
-    file_path = raw.get("file_path") or raw.get("notebook_path") or ""
-    if not file_path:
-        return
-
-    # 转项目根相对路径
-    try:
-        rel = str(Path(file_path).resolve().relative_to(PROJECT_DIR)).replace("\\", "/")
-    except Exception:
-        # 不在项目根内 → 跳过
-        return
-
+def _process_file(rel):
+    """单个改动文件（项目根相对路径）：submodule.yaml 重建索引段；代码文件反查 stale。返回是否命中 `code_paths`。"""
     start_t = time.monotonic()
 
     # 触发条件 1：submodule.yaml 改动 → 重建该子模块索引段
@@ -451,7 +489,7 @@ def process_postool_use(tool_input):
         except TimeoutError:
             mark_stale(sub_path, "lock_timeout_during_index_rebuild")
             append_event("modules_index_rebuild_skipped_lock_timeout", submodule=sub_path)
-        return
+        return False
 
     # 触发条件 2：代码改动 → 反向 lookup → 写 stale
     try:
@@ -462,17 +500,34 @@ def process_postool_use(tool_input):
         # current-state 悄悄过期而没有任何信号。
         append_event("modules_stale_write_skipped_lock_timeout", file=rel,
                      reason="index_lookup_lock_timeout")
-        return
+        return False
     duration_ms = int((time.monotonic() - start_t) * 1000)
     if duration_ms > PERFORMANCE_BUDGET_MS:
         append_event("modules_index_lookup_slow", file=rel, duration_ms=duration_ms)
     if not hits:
-        return
+        return False
     for sub in hits:
         try:
             mark_stale(sub, f"code_changed:{rel}")
         except TimeoutError:
             append_event("modules_stale_write_skipped_lock_timeout", submodule=sub, file=rel)
+    return True
+
+
+def _deliver_dev_memory(payload, rel):
+    """首次改到模块代码路径 → 投 dev 记忆（主线程；判定与去重在 `_role_memory.deliver`）。
+
+    **路径触发只投 dev**：文件归属不等于正在承担的职责——改一个被 qa 用例覆盖的文件，干的仍是实现。
+    PostToolUse 的纯文本 stdout 不进模型，这里输出 `hookSpecificOutput` JSON，且它是本进程 stdout 的唯一内容
+    （默认 PostToolUse 路径此前零 stdout）。投递失败一律吞掉，不影响 stale 标记。两门同一路径。
+    """
+    try:
+        import _role_memory
+        text = _role_memory.deliver(PROJECT_DIR, payload, "dev", _role_memory.TRIGGER_CODE_PATH, file=rel)
+        if text:
+            print(_role_memory.hook_output("PostToolUse", text))
+    except Exception:
+        pass
 
 
 # ---------- SessionStart 扫 git diff ----------
@@ -546,8 +601,8 @@ def discover_nested_repos(patterns):
     """嵌套 git 仓发现——实现在 `_git_scan`，这里只绑定本模块当前的 PROJECT_DIR。
 
     保留本函数是因为它有第二批调用方（`module_close_check` 的检查 2/4/5/7 与单测按
-    `csm.discover_nested_repos(patterns)` 调用），签名不能变；实现移出去是因为判定类
-    脚本要吃同一份扫描面，两处手写必漂（见 `_git_scan` 抬头）。
+    `csm.discover_nested_repos(patterns)` 调用），签名不能变；实现移出去是为了让扫描面
+    只有一份实现，两处手写必漂（见 `_git_scan` 抬头）。
     """
     return _discover_nested_repos(PROJECT_DIR, patterns)
 
@@ -561,7 +616,7 @@ def scan_git_diff_for_stale():
     **不覆盖**跨会话已 commit 改动的基线比较——已 commit 的改动不在上述三类差异里，
     这是有意的验收边界。
 
-    扫描面本身实现在 `_git_scan.collect_changed_files`（另一个消费方是签发档判定脚本）；
+    扫描面本身实现在 `_git_scan.collect_changed_files`；
     本函数负责索引保障、留痕策略与 stale 落盘。
     """
     if not is_modules_project():

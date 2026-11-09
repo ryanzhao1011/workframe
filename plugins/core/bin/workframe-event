@@ -7,7 +7,9 @@
 
 用法（在 workframe 项目内任意位置）：
     workframe-event skill-used --skill <name> --role <role> [--success true|false] [--harness cc]
-    workframe-event user-correction --scope <shared|role|main> [--role r] [--summary "..."]
+    workframe-event user-correction --scope <shared|实际角色名|main|module> [--role r] [--summary "..."]
+    workframe-event user-correction --scope module --module basic/sub --target-path <path> --summary "事实快照"
+    workframe-event memory-moved-out --scope dev --entry-key <original-key> --archive-path <archive> --target-path <path> --summary "事实快照"
     workframe-event task-blocked --task-id TASK-123 --role qa
     workframe-event discipline-spotcheck --sessions-sampled cc=3,codex=0 --criterion S1=4/1 --criteria-version 1
 

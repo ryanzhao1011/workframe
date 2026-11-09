@@ -249,7 +249,9 @@ Write `.workframe/state/onboarded.json`：
 
 ## 受保护资产例外
 
-受保护资产片把 `.claude/settings*.json` 列为受保护资产。**该规则的豁免入口有两个**：本 skill（`/core:onboard`，可选环境配置）与装机链路（只写订阅声明那几个键；它有两个面——**经 launcher setup 走**时有确认页，**直接敲命令**时没有、授权是用户亲手敲了命令，`workframe-door --backfill` 与脱离 launcher 直接跑的 `project_scaffold.py --write-subscription` 都属后者）。**本 skill 这一侧**的前提：
+必载片 §受保护资产清单 把 `.claude/settings*.json`、用户级 settings 与用户级插件市场注册表列为受保护资产。**豁免写入入口只有两个：本 skill（`/core:onboard`，可选环境配置）与装机链路**，其余任何路径都不得写。两者的共同前提：备份 + JSON merge 保留原字段 + 写不成只输出手动补丁、不留半写文件。
+
+**本 skill 这一侧**的前提：
 
 - 写入前必须用户当面交互式确认（Step 3 / Step 4）
 - 写入必须备份 + JSON merge + 失败兜底（Step 6）
@@ -257,7 +259,17 @@ Write `.workframe/state/onboarded.json`：
 
 不满足上述前提时，本 skill 自身**不写入**，输出手动补丁让用户处理。
 
-装机链路那一侧的前提不在本 skill 内，写在它自己的实现里（`_settings_io` 的备份 ＋ merge ＋ 回读 ＋ 失败回滚；结构闸对「会被修改的已存在文件」逐个点名**只在经 launcher setup 走的那条路径上**，直接敲命令那一面没有确认页、靠的是用户亲手敲命令）——两侧各管各的前提，本节只为「不是只有 onboard 能写」这件事留下指路。
+**装机链路那一侧**的前提不在本 skill 内，写在它自己的实现里（`_settings_io` 的备份 ＋ merge ＋ 回读 ＋ 失败回滚）。它写**两类**：
+
+1. 订阅声明那几个键（`extraKnownMarketplaces` / `enabledPlugins` / 市场注册条目）
+2. **这台机器上装了 `codex` 时**的 Codex 门那一步——用户级 `config.toml`（本插件 hook 的信任 ＋ 本项目的 trust ＋ 本插件 `enabled`）与项目 `.codex/`。这一类**代用户信任本插件的全部 hook，而受信 hook 脱离沙盒执行**，且不再单问一层确认
+
+装机链路有两个面，**授权形态不同，别混成一句**：
+
+- **经 launcher setup 走**：用户确认的是装机这件事本身，写入前由确认页对「会被修改的已存在文件」逐个点名；第 2 类的事前授权也落在这张确认页上，与第 1 类同一个闸
+- **直接敲命令**（`workframe-door --backfill`，以及脱离 launcher 直接跑 `project_scaffold.py --write-subscription`——doctor 的修复指引就会让你走这条）：**没有确认页**，授权就是用户亲手敲了命令。`--write-subscription` 是个独立 flag，按前一面的写法要求它「先有确认页」，等于把一条正确的修复路堵死
+
+**两面的共同前提相同，写入面不相同**：`project_scaffold.py --write-subscription` 只写第 1 类；`workframe-door --backfill` 与经 launcher 的整条链路两类都写。
 
 ## 与其他 skill / hook 协作
 

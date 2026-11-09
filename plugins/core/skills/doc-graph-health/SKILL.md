@@ -28,7 +28,7 @@ python "$(cat .workframe/state/plugin-root.txt)/skills/doc-graph-health/scripts/
 
 | 检测 | 含义 | 处置 |
 |---|---|---|
-| 断链 | wikilink / md 链接 / frontmatter `related` 目标不存在 | 少量直接修；成批查根因（改名未同步等） |
+| 断链 | wikilink / md 链接 / frontmatter `related` 目标不存在；报告单列「模块记忆断链」段全部列出，总表只列前 50 条 | 少量直接修；成批查根因（改名未同步等）；模块记忆断链按 `librarian` 复查处置 |
 | 孤儿 | 入链=0 的文档（三源计入度；结构性文件已豁免） | 有价值 → 补上级 related / 正文链接；过时 → 归档 `projects/archive/`；两者都不做时留在报告里可见 |
 | Hub | 被引 top10 | 只读参考——横向核心资产，重构/改名时优先评估影响面 |
 | stale current-state | 超 45 天未同步 | stub 形态 → 排期 code-to-doc；有内容 → 让 @dev 核对代码后刷新 |
@@ -45,7 +45,7 @@ python "$(cat .workframe/state/plugin-root.txt)/skills/doc-graph-health/scripts/
 ## 排除纪律（与巡检口径一致，勿放宽）
 
 - 基线排除目录：`prototypes/`（含 demo 整仓）、`node_modules/`、`.claude/`、`tmp/`、`_draft/`、`assets/`；项目可经 config `graph_health.extra_exclude_dirs` 追加
-- 结构性豁免：`current-state/` 四件套、`requirements/overview.md` 清单页（位置约定即入口，不计孤儿）
+- 结构性豁免：`current-state/` 四件套、`requirements/overview.md` 清单页、`module-memory.md`（位置约定即入口，不计孤儿）
 - 行级噪声：骨架模板的固定 checklist 行会虚增热点计数——把该行的特征子串配进 config `graph_health.noise_line_markers`，命中行不计热点
 
 ## 矛盾确认后的修复边界

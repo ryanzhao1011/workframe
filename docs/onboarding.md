@@ -16,11 +16,12 @@
 `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
 
 - **是什么**：Claude Code 的实验功能，允许多个独立 Claude Code 实例作为团队协作（共享任务列表 + 队友间通信）。具体交互形态随 Claude Code 版本演进，以 [官方文档](https://code.claude.com/docs/zh-CN/agent-teams) 为准。
-- **workframe 是否依赖**：否。workframe 多角色协作（@pm / @dev / @qa / @prompt-eng）建立在 subagent 之上，flag 关闭时不影响功能。
+- **workframe 是否依赖**：否。workframe 的角色（@pm / @dev / @qa / @prompt-eng）缺省由主会话直接承担，只在独立验证等少数情形派子 agent（见 [concepts.md](./concepts.md) §角色是领域，不是派出去的人），派出去的也是普通 subagent，flag 关闭时不影响功能；续派某个子 agent 用 `SendMessage` 发给它的 agentId，同样不需要开它。
+- **开启后的派发**：带 `name` 的派发会以队友形态启动，SubagentStart 拿到的 `agent_type` 变成那个名字、角色记忆投不到。所以 workframe 会拦下给出厂角色（`core:*`）起名的派发，提示去掉 `name` 重派；项目级角色起名不拦。这道闸认的是 Claude Code 2.1.63 起的工具名 `Agent`，更早的版本上不触发。
 - **版本要求**：Claude Code v2.1.32+
 - **令牌成本**：启用后多 Claude Code 实例并行会显著增加令牌消耗，仅推荐有明确并行协作需求时启用。
 
-**为什么默认 skip**：workframe 的多角色协作建立在 subagent 之上，与 Agent Teams 没有依赖关系——不开也不缺任何功能；而开启后多个 Claude Code 实例并行会显著抬高令牌消耗。既然「不开无损失、开了有成本」，默认就该是 skip，由你在确有并行协作需求时主动开。这也是 `/core:onboard` 全程零默认写入的原因：所有条目都要你当面确认才落盘。
+**为什么默认 skip**：workframe 与 Agent Teams 没有依赖关系——角色的活缺省由主会话做，需要派出去时用的是普通 subagent，不开也不缺任何功能；而开启后多个 Claude Code 实例并行会显著抬高令牌消耗。既然「不开无损失、开了有成本」，默认就该是 skip，由你在确有并行协作需求时主动开。这也是 `/core:onboard` 全程零默认写入的原因：所有条目都要你当面确认才落盘。
 
 ## 通过 `/core:onboard` 启用
 
@@ -133,5 +134,5 @@ $j | ConvertTo-Json -Depth 20 | Set-Content $f -Encoding UTF8
 
 ## 相关文档
 
-- 受保护资产例外：[`plugins/core/context/both/40-protected-assets.md`](../plugins/core/context/both/40-protected-assets.md) §"受保护资产例外"
+- 受保护资产例外（两个豁免写入入口的前提、授权形态与写入面）：[`plugins/core/skills/onboard/SKILL.md`](../plugins/core/skills/onboard/SKILL.md) §"受保护资产例外"
 - onboard skill 完整规范：[`plugins/core/skills/onboard/SKILL.md`](../plugins/core/skills/onboard/SKILL.md)

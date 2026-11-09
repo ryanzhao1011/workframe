@@ -86,12 +86,62 @@ def session_id(payload=None):
 
     取不到返回空串——调用方按「没有会话号」处理，不要编一个。
     旧名 `$CLAUDE_SESSION_ID` 从来不是环境变量，不要读。
+
+    **环境里同时有 Codex 的命令环境标记时不采信 `CLAUDE_CODE_SESSION_ID`**：在 CC 的 Bash 里起 `codex`
+    时，CC 的变量原样漏进 Codex 的命令环境，按它取到的是**父 CC 会话**的号（实测：Codex 侧 `skill_used`
+    落成了外层 CC 的会话号）。两种标记并存时分不清哪一层是当前会话，宁可返回空串、让调用方落到下一级兜底
+    （`workframe-event` 的会话标记文件），也不给一个确信而错误的号。反向嵌套（Codex 里起 CC）同样落空。
     """
     if isinstance(payload, dict):
         sid = payload.get("session_id")
         if isinstance(sid, str) and sid.strip():
             return sid
+    if any(os.environ.get(k) for k in CODEX_COMMAND_ENV_MARKERS):
+        return ""
     return os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
+
+
+# Codex 给模型命令环境无条件插的会话标记（见下方 `AGENT_ENV_MARKERS` 的出处说明）；`session_id()` 用它判「当前
+# 进程在 Codex 命令环境里」。只取这两条：沙盒那两条随平台 / 网络设置时有时无，不当判据
+CODEX_COMMAND_ENV_MARKERS = ("CODEX_THREAD_ID", "CODEX_SESSION_ID")
+
+
+# CC 的 fork（Agent 工具 `subagent_type: "fork"`）继承父会话的完整上下文——主会话纪律片、开场投递的
+# shared 与条目目录都已在里面。实测（CC 2.1.314）：fork 线程的 SubagentStart / PostToolUse 载荷带
+# `agent_id`、`agent_type == "fork"`、`session_id` 为父会话。
+FORK_AGENT_TYPE = "fork"
+# Codex 的 fork（`spawn_agent` 继承父对话）载荷里没有 fork 字段；指定角色时 `agent_type` 可以是该角色，
+# 与新派生的角色子线程同形。能分辨的只有子线程 rollout（载荷 `transcript_path`）
+# 首行 `session_meta` 里的 `forked_from_id`。实测（codex-cli 0.166.0）：完整历史与部分历史两种 fork 都带、
+# 新派生不带；该行在 SubagentStart 之前已写好；两种 fork 的历史里都有父线程开场注入的那一套。
+_ROLLOUT_HEAD_MAX = 1 << 20   # 首行含 base_instructions，实测约 23 KB；读不完整就按「不是 fork」处理
+
+
+def rollout_forked(path):
+    """rollout 首行是 `session_meta` 且带 `forked_from_id`。读不到 / 不是 JSON / 超长一律 False——退回现状（照常注入）。"""
+    if not isinstance(path, str) or not path.strip():
+        return False
+    try:
+        import json
+        with open(path, "rb") as f:
+            head = json.loads(f.readline(_ROLLOUT_HEAD_MAX).decode("utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return False
+    meta = head.get("payload") if isinstance(head, dict) and head.get("type") == "session_meta" else None
+    return isinstance(meta, dict) and bool(meta.get("forked_from_id"))
+
+
+def is_fork(payload):
+    """载荷来自 fork 线程。SubagentStart 上的子 agent 注入（sub 片、角色记忆）据此跳过：再投一份子 agent
+    协议，fork 就同时拿着父线程与子 agent 两套口径（派发、选择题澄清、记忆读取各不相同）。
+
+    CC 看 `agent_type == "fork"`；Codex 看子线程 rollout 首行（见 `rollout_forked`），只在载荷带 `agent_id`
+    （子线程）时读，主线程零读盘。不分门：CC 的 rollout 首行不是 `session_meta`，读了也是 False。"""
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("agent_type") == FORK_AGENT_TYPE:
+        return True
+    return bool(payload.get("agent_id")) and rollout_forked(payload.get("transcript_path"))
 
 
 # ---------- hook 载荷读取 ＋ 「不在 workframe 项目内就早退」的守卫 ----------

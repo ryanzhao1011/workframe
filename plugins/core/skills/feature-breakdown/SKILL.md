@@ -119,9 +119,9 @@ Epic: EPIC-{序号}
   status: pending
   priority: P1
   assigned_to: dev        # 实现类 → dev；Prompt 变更 → prompt-eng；需求/调研 → pm；测试/签发 → qa
-                          # `assigned_to` 是**领域归属**，不是签发档：签发档在收口那一刻由
-                          # 四段闸门现算（closeout-discipline §谁签发这次收口），拆解阶段
-                          # 算不出来也不要预先写死——拆解时还不知道届时有没有独立结论
+                          # `assigned_to` 是**领域归属**，不是签发类别：要不要独立验证在收口那一刻
+                          # 按 closeout-discipline §谁签发这次收口 判，拆解阶段不要预先写死——
+                          # 拆解时还不知道届时改到了什么
   created_at: "YYYY-MM-DD"
   updated_at: "YYYY-MM-DD"
   deadline: null
