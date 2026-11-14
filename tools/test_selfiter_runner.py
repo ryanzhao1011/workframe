@@ -178,12 +178,15 @@ class RunnerTests(unittest.TestCase):
                                      capture_output=True, text=True, errors="replace", timeout=15)
             self.assertNotIn(f'"{pid}"', listing.stdout)
         else:
-            status = Path(f"/proc/{pid}/stat")
-            if status.exists():
-                self.assertEqual(status.read_text().split()[2], "Z")
-            else:
+            try:
+                state = Path(f"/proc/{pid}/stat").read_text().split()[2]
+            except (FileNotFoundError, ProcessLookupError):
+                # Reaped between the kill and this read (reading the stat of an exiting
+                # process raises ProcessLookupError): gone is what the test wants.
                 with self.assertRaises(ProcessLookupError):
                     os.kill(pid, 0)
+            else:
+                self.assertEqual(state, "Z")
 
     def test_cli_discovery_and_missing_executable(self):
         with patch.object(runner.shutil, "which", return_value="claude.cmd") as which:
