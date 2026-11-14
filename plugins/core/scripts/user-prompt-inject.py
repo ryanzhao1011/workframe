@@ -126,6 +126,10 @@ def maintenance_text(state):
 
     items = state.get("pending_maintenance") or []
     open_items = format_pending_items(items)
+    from _selfiter_hooks import suppress_cadence
+    if suppress_cadence(PROJECT_DIR):
+        open_items = [item for item in open_items if item.get('kind') not in (
+            'cadence_timeout', 'activity_threshold', 'completed_delta')]
     text = None
     if open_items:
         lines = [f"[workframe] 待处理维护项 {len(open_items)} 条（按 severity 排序）："]
@@ -151,13 +155,18 @@ def main():
     # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
     if _harness.hook_outside_project():
         return 0
+    from _selfiter_policy import in_job
+    if in_job():
+        return 0
     payload = read_payload()
     reminder = maintenance_text(load_state())
     if reminder and len(reminder) > REMINDER_MAX:
         reminder = reminder[:REMINDER_MAX].rstrip() + "…（已截断，/core:audit 查看全部）"
     used = len(reminder.encode("utf-16-le")) // 2 + 2 if reminder else 0   # UTF-16 码元 ＋ 两段之间的空行
     memory = mentioned_skill_memory(payload, used)
-    parts = [t for t in (reminder, memory) if t]
+    from _selfiter_hooks import on_hook
+    selfiter = on_hook(PROJECT_DIR, _harness.harness(), 'UserPromptSubmit', _harness.session_id(payload))
+    parts = [t for t in (reminder, memory, selfiter) if t]
     if parts:
         emit_additional_context("\n\n".join(parts))
     sys.exit(0)

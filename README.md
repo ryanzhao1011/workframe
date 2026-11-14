@@ -2,19 +2,19 @@
 
 > 让 Claude Code（或 Codex）成为一个专属于你的产品团队：需求、研发、测试、Prompt 各有一套专属的纪律、技能和记忆，项目自带看板。装一次插件，新老项目都能用；一份源、两扇门，同一个项目可以同时挂两边。
 
-**Status:** v1.2.0 · [CHANGELOG](./CHANGELOG.md) · [![validate](https://github.com/ryanzhao1011/workframe/actions/workflows/validate.yml/badge.svg)](https://github.com/ryanzhao1011/workframe/actions/workflows/validate.yml)
+**Status:** v1.3.0 · [CHANGELOG](./CHANGELOG.md) · [![validate](https://github.com/ryanzhao1011/workframe/actions/workflows/validate.yml/badge.svg)](https://github.com/ryanzhao1011/workframe/actions/workflows/validate.yml)
 
 ## 肺腑之言
 
-我是一名toB的AI产品经理，已经3个月没有手搓过需求文档和原型。
+我是一名产品经理，已经很长一段时间没有手搓过需求文档和原型，完全交给了AI。
 
-这两年 AI 把我的工作方式翻了个底朝天，AI提效这件事，过程真的相当痛苦。
+经过实践了近一年的时间，参考了很多优秀的 agent 架构和 skills 设计，在日常工作里一点点升级，才形成一套适合自己的工作框架。摸索的过程很痛苦，但这是一个越沉淀越轻松的过程。
 
-我自己摸索了大半年，参考了很多优秀的 agent 架构和 skills 设计，在日常工作里一点点升级，才形成一套适合自己的工作框架。但这是一个越沉淀越轻松的过程。现在，从需求分析、PRD 到交互 demo，我已经全部通过 Claude Code 加这套框架聊天产出，质量符合真实工作的交付要求。
+现在，从需求分析、PRD 到交互 demo，甚至是可落地应用，我都已经可以通过这套框架快速产出，并且质量符合真实工作的交付要求。
 
-Workframe 就是这套沉淀的开源版。希望它能帮你少走弯路，通过这套框架沉淀一套适合自己的工作方式。
+Workframe 就是这套沉淀的开源版，目前支持 Claude Code 和 Codex 来使用。
 
-最后，祝愿你把提效的时间，都能留给工作之外的你，好好爱自己。
+最后，希望这个项目能帮你少走AI产品的弯路，通过这套框架沉淀一套适合自己的工作方式，极大提高工作效率。
 
 ## 项目特点和作用
 
@@ -29,9 +29,11 @@ Workframe 就是这套沉淀的开源版。希望它能帮你少走弯路，通�
 
 ## 前置依赖
 
+后台自迭代在有新有效证据且执行器隔离能力已确认时使用你已登录的 CLI 自动分析；每项目滚动七天最多一次、全机 UTC 每日最多一次，两门合计，默认十五分钟超时，不设费用限额。角色记忆和模块提醒可有限融合；冲突、重组、受保护资产交用户确认。后续对话会提示待批事项，`workframe-selfiter status` 查看日志与恢复依据。用户级 `<home>/.workframe/user-config.json` 设置 `{"version":1,"self_iteration":{"mode":"off"}}` 可关闭后台模型运行；缺配置默认 apply，损坏配置关闭。后台执行器需要 Python 3.11+；旧 Python 下保留手动入口。详见 [安装与配置](./docs/setup-guide.md#后台自迭代)。
+
 - **Claude Code**（2.1.x 上验证过）：框架挂了 11 个 hook 事件，其中五个较新，旧版本会静默忽略它们、对应能力不可用。
 - **Codex**（可选，codex-cli 0.153.4+，Windows 上实测）：同一个项目可以同时挂 Claude Code 与 Codex 两扇门，跑的是同一份框架；装法 `workframe-door --codex`，见 [docs/setup-guide.md](./docs/setup-guide.md) §Codex 门。
-- **Python 3**（3.8+）：能从命令行调用。
+- **Python 3**（3.8+）：能从命令行调用。Codex 门相关功能需要 Python 3.11+。
 - **git**：用来判断哪些代码改过（据此标记文档待更新）、以及检查 `.gitignore` 配置。没有也能跑，这两项降级但不报错。macOS 需先装 Xcode Command Line Tools。
 
 以下是部分按需功能
@@ -100,7 +102,7 @@ cd <你的项目> && claude plugin update core@workframe -s project
 
 面向 Windows 11 / macOS / Linux 设计。
 
-Windows 11 已完成真实会话全流程 E2E（覆盖全新创建、存量接入、升级、断点续做等九场景）与 `validate.py` 全量验证（当前 216 项检查，随新增检查增长）。
+Windows 11 已完成真实会话全流程 E2E（覆盖全新创建、存量接入、升级、断点续做等九场景）与 `validate.py` 全量验证（当前 219 项检查，随新增检查增长；后台自迭代的两门执行器另按各自能力证据披露）。
 
 macOS / Linux 的兼容优化尚不够完整，后续会持续改进——遇到问题欢迎提 issue。
 

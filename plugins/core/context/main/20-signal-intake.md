@@ -84,7 +84,7 @@ supersedes:
 | 业务事实 / 需求口径（消费者是做该模块的人） | 改对应模块权威文档，PRD 在「变更与决策记录」留痕（触及需求范围的按上表「需求变更」走草稿确认）；只对动手者有用的提醒写该模块 `module-memory.md`。不写 role/shared，**跳过 sidecar**，事件仍写（`scope: module`，填 `module` 与完整 `target_path`，省略 `entry_key`） |
 | 主会话协作行为（配合方式 / 输出形态 / 工作流程） | 主会话侧的官方记忆机制（**两扇门各用各自的原生机制，不共享**）；不写 role/shared，**跳过 sidecar**，事件仍写（`scope` 填 `main`、省略 `entry_key`）|
 | 角色执行 / 跨角色口径 | 对应 `<role>/MEMORY.md` 或 `shared/MEMORY.md` 高置信区 |
-| 双消费（主会话和角色都要遵守） | `shared/MEMORY.md` 存全文为权威 + 主会话记忆只留一行指针，不复制全文 |
+| 双消费（主会话和角色都要遵守） | `shared/MEMORY.md` 存全文为权威 + 主会话记忆至多留一行 scope 级指针，不复制全文、不写条目级指针 |
 
 **判定要写入之后 → 调 skill `signal-intake`**：落盘那一步的全部工序（A.U.N. 写入前必做、Issue 模板与编号、执行规范八条、`[纠正]` 条目的写入格式、sidecar 字段与 `entry_key` 归一、supersede 的落盘动作）都在那里，本段只管判据。
 

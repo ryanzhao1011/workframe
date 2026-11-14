@@ -773,6 +773,9 @@ def main():
     # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
     if _harness.hook_outside_project(PAYLOAD):  # 载荷已在模块顶层读过
         return
+    from _selfiter_policy import in_job
+    if in_job():
+        return
     # 接管 stdout，退出时一次写出。Codex 清单带 `--output hook-json`：本脚本的 stdout 以 `[workframe]` /
     # `[memory-map]` 起头，Codex 按 JSON 解析失败后整条丢弃；该模式下把全部输出收成一条 hookSpecificOutput。
     # CC 不带此参数：原样写回，只有本次补建 / 重指了 `.claude/skills` 时改投带 reloadSkills 的 JSON。
@@ -911,6 +914,11 @@ def main():
         save_state(state)
     except Exception as e:
         print(f"[warn] failed to save activity-state: {e}", file=sys.stderr)
+
+    from _selfiter_hooks import on_hook
+    selfiter_notice = on_hook(PROJECT_DIR, _harness.harness(), 'SessionStart', _harness.session_id(PAYLOAD))
+    if selfiter_notice:
+        print(selfiter_notice)
 
     sys.exit(0)
 

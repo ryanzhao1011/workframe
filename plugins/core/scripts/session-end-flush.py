@@ -274,6 +274,9 @@ def main():
     # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
     if _harness.hook_outside_project():
         return 0
+    from _selfiter_policy import in_job
+    if in_job():
+        return 0
     # 官方 SessionEnd stdin JSON 的字段名是 `reason`（核实于 code.claude.com/docs/en/hooks.md，
     # 取值：clear / resume / logout / prompt_input_exit / bypass_permissions_disabled / other）
     # v0.2.0 误用 exit_reason 导致永远拿到 unknown，v0.2.1 修正。
@@ -299,6 +302,8 @@ def main():
     except Exception:
         pass
 
+    from _selfiter_hooks import on_hook
+    on_hook(PROJECT_DIR, _harness.harness(), 'SessionEnd', _harness.session_id(payload))
     digest_ok = _stage("digest 骨架", write_digest_skeleton, reason)
     _stage("rollback 索引", snapshot_rollback_index)
     _stage("session_ended 事件", append_event, "session_ended", reason=reason)

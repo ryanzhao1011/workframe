@@ -7,6 +7,8 @@ user-invocable: true
 
 # Workframe 项目初始化
 
+交付时向用户说明：安装后的后台自迭代可能使用当前 CLI 的配额，每项目滚动七天最多一次、全机 UTC 每日最多一次，两门合计，默认十五分钟超时，不设费用限额；只自动处理有限记忆融合，待批事项在后续对话提示。用户可在本机用户级配置把 `self_iteration.mode` 设为 off；不代用户改配置。执行器能力未确立时延期，不绕过权限；详细操作交项目 core 的 self-iteration 技能说明。
+
 ## 定位
 
 Workframe 的**唯一入口**：在任意目录发起，创建新项目或接入存量项目，完成后由 core 插件接管项目内的日常工作。
@@ -162,6 +164,10 @@ launcher 常在**尚未接入 Workframe 的目录**运行，此时项目根还�
 ### 1.1 判定目录状态
 
 按顺序判，前面命中就不往下走：
+
+先运行 `python "$CORE/scripts/project_scaffold.py" --project "<目标目录>" --classify-directory`，
+取共用目录检测函数的结果：`connected` / `project` / `container` / `near_empty` 分别对应下表前四步；
+`plain` / `unknown` 继续走第 5、6 步的模型判断。该入口只读，保留本流程原有优先级与近空豁免。
 
 | 步 | 判据 | 结论 |
 |---|---|---|
@@ -753,6 +759,8 @@ python "<CORE>/scripts/workframe_doctor.py" --project "<目标>" --group install
 
 **Codex 门（探测到 `codex` 可执行文件即作为装机的一部分执行，不再单问一层——它的事前授权在
 §4 结构闸那一页的动作清单里，见 `reference/proposal-page.md` 第 8 项第三条展开）**：
+
+Codex 门相关功能需要 Python 3.11+；向用户说明运行下面命令的解释器需要满足该版本要求。
 
 ```bash
 python "<CORE>/scripts/workframe_door.py" --codex --project "<目标>"      # 默认市场源 owner/repo；--marketplace 可覆盖

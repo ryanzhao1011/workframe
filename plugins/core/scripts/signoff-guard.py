@@ -148,8 +148,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    # Read-only consumers import load_board; importing must preserve their
+    # streams. Configure the CLI in place without creating another wrapper.
+    if __name__ == "__main__":
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
@@ -204,7 +207,7 @@ _RULE_FILES = ("signoff-guard.py", "signoff_tier_check.py")
 def _cfg(project_dir):
     p = Path(project_dir) / ".workframe-config.json"
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        return json.loads(p.read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
 

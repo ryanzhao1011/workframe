@@ -7,6 +7,32 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 
 # 自迭代技能
 
+## 后台作业与待批处理
+
+默认后台路径由控制器执行：冻结证据 → 模型只输出结构化建议 → 校验与有限融合写入 → 作业日志 → 到期观察。每项目滚动七天最多一次、全机 UTC 每日最多一次（两门合计），默认单次超时十五分钟；不设费用限额。用户级 `self_iteration.mode` 为 off / propose / apply，项目只能收紧。缺省 apply 只授权非冲突的角色记忆与模块提醒，不授权修改框架、shared 权威记忆、项目指令、skills、配置、权限或代码。
+
+模型作业说明见 `reference/job-instructions.md`。记忆内容按 librarian 第 2.5 步融合，不以新增数量衡量效果；已有覆盖不写、同主题局部并进、新主题才新增。冲突、判断不清、受保护纠正、删除、迁移、章节重组、容量不足均待批。控制器的结构与容量检查不能证明语义正确。
+
+证据在输入上限内合并能容纳的完整主题，未选主题留到后续额度窗口，主题不截断。模型输入保留目标全文与相关现行权威；整份看板、历史事件和归档原文留作本地审计，已选任务与事件直接放入证据。单主题必要上下文仍超限时，在状态目录 `selfiter/manual-review/` 保存原因与完整必要上下文并转人工，不反复以输入超限延期；`status` 可查看。同主题有新证据时更新原记录，旧版进入 review_history，不另建一份。
+
+新 CLI 程序先在隔离夹具中做实际能力自检，验证项目 hook、外部工具与文件写入的隔离；版本号本身不授予运行权。通过记录绑定平台、可执行程序与适配器指纹，任一变化重新验证；失败继续延期。自检与分析共享一次作业额度和总超时，自检用量单独记录。
+
+用户在后续对话收到摘要后，选择查看或稍后；稍后不算驳回。新自动改动或需处理的失败报告跨会话只提示一次；不改和自检延期报告只在 status 留存，不另发报告提示。待批、转人工和当前延期仍在新会话提示，同会话相同状态不重复。每个作业的 report-notice.json 保存报告提示回执，notices.json 只保留最近六十四个会话的待办提示指纹；已有历史报告不重播。用 `workframe-selfiter status --project <项目根>` 读取完整作业结果和 AUTO 提案，逐项展示改前、改后、理由、影响、恢复依据与 `review_hash` 后请用户确认；不得只展示数量就执行。
+
+用户明确决定后，对仍在白名单中的局部变更调用 `workframe-selfiter decide --project <项目根> --proposal-id <AUTO-id> --decision accept --review-hash <用户所看版本的hash>`；驳回用 `--decision reject`。草稿有变化须重新展示，不复用旧批准。受保护资产、重组、删除等提案仍走各资产现有 owner/审批流程，此命令不新增越权入口。有新有效证据才重评驳回事项；相同待批问题补证据，不重复建单。
+
+人工项先完整展示原因、当前证据、上下文、manual_id 与 review_hash。用户按对应资产的现有流程实际处理后，可确认 `workframe-selfiter manual-decide --project <项目根> --manual-id <id> --decision handled --review-hash <所看版本hash>`；明确忽略当前证据则用 `--decision ignore`。只消费该版证据并关闭提示，原记录与旧版历史保留；两个动作都不代写内容、不授予受保护资产写权。同主题新证据重开原记录，必须重新展示和确认。
+
+AUTO 预览的完整 `after` 是批准后将落盘的 UTF-8 字节，包含来源注记、原有行尾与尾空行；执行前仍核对基线和来源。没有完整改后内容时不显示虚假的整文件替换 diff，也不直接批准；旧预览用 `workframe-selfiter preview --project <项目根> --proposal-id <AUTO-id>` 更新并重新展示，新 hash 须重新确认。无法安全渲染的建议只作为片段展示，交资产 owner 处理。
+
+作业目录内的 evidence、transport、journal、result 与 `selfiter/history.md` 分别记录输入、真实执行器输出、逐操作恢复进度、结果及人类可读摘要；路径由状态目录配置推导。不得用模型的“完成”声明代替实际落盘结果。先用 `workframe-selfiter rollback --project <项目根> --job-id <id>` 展示精确回退预览；用户确认该版后加 `--review-hash` 才执行。后续编辑冲突时停止，不覆盖。未完成的 journal 用 `recover` 恢复，不能换新 job 重复追加。
+
+复测分 pass / fail / inconclusive。缺少可归因的相关使用机会不能判 pass；最多延长两次十四天观察窗后保持 inconclusive 结案，保留恢复材料。普通自动记忆变更由作业台账跟踪，不逐份新建 QA 任务；仍需独立验证的资产照既有规则执行。控制器不可用或隔离能力未确立时延期并报告，不放宽权限重试。作业期间目标或来源被改动时不写入，冲突报告保留模型原拟改动并提示一次，证据不消费、下个额度窗口重评。
+
+连续三次作业失败或两次尚未人工处理的复测失败会将自动写入熔断为待批；成功生成一份待批建议不会自行解除熔断。用户查看日志、解决原因并明确恢复后运行 `workframe-selfiter resume --project <项目根>`；该命令保留历史记录，配置中的 off / propose 仍然生效。只读 doctor 报出熔断和未补齐的记账尾部。
+
+以下五阶段保留作手动分析与既有提案处理参考；评分不赋予后台自动写入权。后台 AUTO 提案的状态、复测、记账以控制器为准，不重复执行旧阶段的建 QA 单、移动文件或关闭信号步骤。
+
 ## 5 阶段流程
 
 ### 阶段 1：数据收集 + 已应用提案闭环验证
@@ -172,7 +198,7 @@ proposal:
 Verify by: 2026-05-08 | Signal: 同主题 user_correction = 0 且 memory_promoted 均带 entry_key
 ```
 
-- **L1 + confidence ≥ 0.8**：展示摘要后默认执行推荐候选（用户可事后 `/core:rollback`）
+- **L1 + confidence ≥ 0.8**：作为手动分析参考展示推荐候选；评分不授予后台自动写入权，后台按上方控制器白名单和融合条件执行，待批内容须明确确认（用户可事后 `/core:rollback`）
 - **L1 + confidence 0.5~0.79**：等用户明确选哪个候选
 - **L2（含 core 文件变更）**：必须等用户明确选哪个候选 + 若 `eval_cases_required=true` 则须先补 eval cases
 
@@ -191,7 +217,7 @@ Verify by: 2026-05-08 | Signal: 同主题 user_correction = 0 且 memory_promote
 3. **执行变更**：按选中的候选 `proposed_change.description` 修改目标文件
 4. **记录 changelog / MEMORY / board tracking**：
    - 在 `projects/changelog.md` 追加变更摘要
-   - 若变更影响角色行为，在对应 MEMORY.md 添加说明
+   - 变更影响角色行为时，影响说明进上面那条 changelog 摘要，**不往 MEMORY.md 抄一份**——变更已落在目标文件里，记忆里再写一遍就是第二份手写口径。只有目标文件没承载、角色执行时又要知道的增量，才按必载片 §Step 2 的归属判据另行沉淀
    - 追加 board tracking 任务前先检查 `projects/board.yaml` 是否已有 `PROP-{id}` 标签的 open 任务；有则跳过；无则追加：
      ```yaml
      - id: "TASK-<next-id>"

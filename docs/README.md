@@ -12,6 +12,7 @@
 | [onboarding.md](./onboarding.md) | `/core:onboard` 可选配置引导（默认全部跳过；workframe 不依赖任何被引导项） |
 | [context-injection.md](./context-injection.md) | 必载纪律怎么进上下文：源在哪、两扇门各自的挂载、生效时序、片数怎么查 |
 | [one-round.md](./one-round.md) | **装完之后怎么用**：一轮改动从动手到收口的顺序、基准引用要刷哪几处、`module-close-check` 何时跑与九项各查什么 |
+| [query-commands.md](./query-commands.md) | **给外部程序用的只读接口**：`workframe-query` 的六个主题与能力查询、返回信封与错误码、格式版本与兼容、Codex 信任检查与窄恢复入口的副作用边界；日常使用框架用不到，写读取框架状态的程序时才看 |
 
 ## 深入了解
 

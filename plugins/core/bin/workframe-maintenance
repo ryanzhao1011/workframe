@@ -60,6 +60,10 @@ def main():
     cmd += sys.argv[1:]
     cmd.append(PROMPT)
     rc = subprocess.run(cmd).returncode
+    if rc:
+        # An unsuccessful model run cannot authorize bookkeeping from a stale
+        # manifest left by an earlier run. Keep it for explicit inspection.
+        return rc
     commit_rc = subprocess.run(
         [sys.executable, str(PLUGIN_ROOT / "scripts" / "maintenance_workorder.py"), "--commit"]
     ).returncode

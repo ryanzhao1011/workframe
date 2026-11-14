@@ -4,6 +4,7 @@
     workframe-door --codex   [--project P] [--marketplace SRC] [--marketplace-name N]
     workframe-door --check   [--live] [--project P]
     workframe-door --upgrade [--project P] [--marketplace-name N]
+    workframe-door --codex --project P --expect-source '{"kind":"directory","source":"/path/to/market"}'
     workframe-door --cc      [--project P]
     workframe-door --backfill [--project P] [--marketplace-name N]       # 已装项目：只补缺的那扇门
     workframe-door --both    [...]      # 默认：探测到 codex 可执行文件就装 Codex 门；CC 门只读核
@@ -13,6 +14,13 @@
 **`--migrate`**：实现在 `workframe_migrate.py`（防误跑与能力边界见那里的抬头）。`--apply` / `--confirm` 只能与
 `--migrate` 同用，否则参数错、零写入——漏打 `--migrate` 时不能落进默认的 `--both` 分支去装 Codex 门；
 `--confirm` 还必须带 `--apply`——漏打 `--apply` 时不能静默重出 plan、让人以为执行过了。
+
+**`--expect-source`**：仅 --codex / --upgrade，接受 project-status 的 {kind, source} JSON。
+Codex 门相关功能需要 Python 3.11+；带来源入口缺少 tomllib 时在任何写入前以 2 停下，提示当前 Python 版本。
+注册或升级前核对本次来源与目标市场已有登记；不一致、登记损坏或无法核对时退出 2，不改登记。
+省略 --marketplace 时用期望来源；同时给出时必须一致。不带 --expect-source 保留现有默认入口。
+--codex 先在 CODEX_HOME 的隔离临时目录中由 Codex 解析实际市场名，再核对真实登记；目录源交给
+实际注册命令的是同一个绝对路径。Git 来源可能被读取两次；临时目录清理失败也会在真实注册前停止。
 
 **为什么放 core 而不是 launcher**：launcher 定位 core 的方式只读 CC 专属的市场清单，只装了
 Codex 的用户跑 setup 会起不来；core 脚本恒可 `parents[1]` 自定位。launcher 只剩薄壳。
@@ -187,13 +195,19 @@ https URL）；需要鉴权的远端未验）。装机时用 `--marketplace` 覆
 被删）时，其余先后组合也会被换（见 §已知形态）。
 """
 
+import sys
+
+# Cover argparse's accepted abbreviations before importing local modules.
+if any(arg.startswith("--e") and "--expect-source".startswith(arg.partition("=")[0])
+       for arg in sys.argv[1:]):
+    sys.dont_write_bytecode = True
+
 import argparse
 import io
 import json
 import os
 import re
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -211,6 +225,7 @@ import _codex_appserver as cas  # noqa: E402
 import _codex_hooks as ch  # noqa: E402
 import _harness  # noqa: E402
 import _settings_io  # noqa: E402
+import _marketplace_source as market_source  # noqa: E402
 import codex_roles  # noqa: E402
 from _state_io import state_dir_of  # noqa: E402
 
@@ -900,7 +915,7 @@ def manifest_count(installed_root):
 def _norm_path(p):
     """比较两个路径是不是同一处之前的归一：剥 `\\\\?\\` 前缀（`resolve()` 不剥它）→ `resolve()`（8.3 短名、`..`、大小写之外
     的差异）→ `normcase`。只用于比较，不用来打开文件。"""
-    return os.path.normcase(str(Path(_unc_strip(p)).resolve()))
+    return market_source.norm_path(p)
 
 
 def _door_market_root_now():
@@ -1547,9 +1562,7 @@ def codex_door_state(project, mkt_name):
 
 def _unc_strip(s):
     """Windows 扩展长度前缀 `\\\\?\\`——原样写进 JSON 就是一条解析不到的坏路径，必须剥掉。"""
-    prefix = "\\\\?\\"
-    s = str(s or "")
-    return s[len(prefix):] if s.startswith(prefix) else s
+    return market_source.strip_extended(s)
 
 
 def _project_declared_source(project, mkt_name):
@@ -1808,16 +1821,37 @@ def do_backfill(a, project):
 # ---- 主流程 ----
 
 def do_codex(a, project, upgrade=False, wrote=None):
+    expected_source = getattr(a, "expect_source", None)
+    if expected_source is not None:
+        try:
+            market_source.require_same({"kind": expected_source["kind"], "source": a.marketplace},
+                                       expected_source, "Requested marketplace")
+            if expected_source["kind"] == "directory":
+                # The guard resolves relative paths in this process. Do not let
+                # the CLI reinterpret the same string relative to the project.
+                a.marketplace = _norm_path(a.marketplace)
+            if upgrade:
+                market_source.require_codex(expected_source, a.marketplace_name, a.marketplace, trust_diag.codex_home())
+        except market_source.SourceError as exc:
+            raise DoorError(EXIT_ENV, str(exc)) from exc
     # 本次运行实际写过的项目文件（相对项目根；`--backfill` 把它自己写过的也带进来）。try 内任何失败的文案末尾
     # 都由下面的统一收尾说写没写（`_wrote_note`），各 raise 点不手写这半句
     wrote = [] if wrote is None else wrote
     require_own_version(wrote)                                 # 门自己的根坏了：连预检都不必做，更不动用户配置
-    step_preflight(project, a.marketplace_name, wrote=wrote)   # 写任何东西之前：项目树 / 用户 config / 插件缓存都还没动
+    prepared_exe = None
+    if expected_source is not None and not upgrade:
+        try:
+            prepared_exe = codex_exe()
+            a.marketplace_name = market_source.probe_codex_market(
+                prepared_exe, a.marketplace, expected_source, trust_diag.codex_home(), run_codex)
+        except market_source.SourceError as exc:
+            raise DoorError(EXIT_ENV, str(exc)) from exc
+    step_preflight(project, a.marketplace_name, wrote=wrote)   # 正式项目配置 / 用户 config / 插件缓存写入前；来源入口的隔离解析已结束
     user_true_now = False          # 失败文案要不要带「用户层此刻为 true」：--codex 在步 3 plugin add 之后才成立
                                    # （实测写回 true）；--upgrade 只在**本地源重装**那一路成立，git 源那一路恒 false
     trust_written = False          # [7/11] 的 batchWrite 写进去没有：app-server 中途失联时那句文案据此说写没写
     try:
-        exe = codex_exe()          # 这两步也在 try 内：`--backfill` 先写过 CC 那半时，它们的失败同样要说写没写
+        exe = prepared_exe or codex_exe()  # 这两步也在 try 内：`--backfill` 先写过 CC 那半时，它们的失败同样要说写没写
         step_version(exe)
         if upgrade:
             mkt_name = a.marketplace_name
@@ -1965,7 +1999,8 @@ def do_check(a, project):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
+                                 epilog="Codex 门相关功能需要 Python 3.11+。")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--codex", action="store_true", help="装 Codex 门（按项目启用）")
     mode.add_argument("--cc", action="store_true", help="只读核 CC 门订阅")
@@ -1980,9 +2015,26 @@ def main(argv=None):
     ap.add_argument("--apply", action="store_true", help="只与 --migrate 同用：照 plan 执行（由你本人跑，模型不得传）")
     ap.add_argument("--confirm", default=None, help="只与 --migrate --apply 同用：plan 打印的确认码")
     ap.add_argument("--project", default=None, help="项目根；缺省从 cwd 向上找 .workframe-config.json")
-    ap.add_argument("--marketplace", default=DEFAULT_MARKETPLACE, help="市场源（owner/repo、git URL 或本地目录）")
+    ap.add_argument("--marketplace", default=None, help="市场源（owner/repo、git URL 或本地目录）")
     ap.add_argument("--marketplace-name", default=DEFAULT_MARKETPLACE_NAME)
+    ap.add_argument("--expect-source", help="仅 --codex / --upgrade：期望的 {kind, source} JSON；登记不同即停")
     a = ap.parse_args(argv)
+    if a.expect_source is not None:
+        if not (a.codex or a.upgrade):
+            ap.error("--expect-source 只能与 --codex / --upgrade 同用")
+        try:
+            a.expect_source = market_source.parse_expected(a.expect_source)
+        except market_source.SourceError as exc:
+            ap.error(str(exc))
+        try:
+            import tomllib  # noqa: F401 — check availability before any installation side effect
+        except ImportError:
+            current = ".".join(str(part) for part in sys.version_info[:3])
+            say(f"workframe-door 失败（exit {EXIT_ENV}）：Codex 门相关功能需要 Python 3.11 或更高版本"
+                f"（当前 Python {current}；无法导入 tomllib）。未写入任何文件。")
+            return EXIT_ENV
+    if a.marketplace is None:
+        a.marketplace = a.expect_source["source"] if a.expect_source is not None else DEFAULT_MARKETPLACE
     # `--apply` 单独出现时不能落进下面的默认分支——那一支探测到 codex 就装 Codex 门、写用户配置
     if (a.apply or a.confirm is not None) and not a.migrate:
         ap.error("--apply / --confirm 只能与 --migrate 同用")

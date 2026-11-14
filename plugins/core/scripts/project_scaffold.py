@@ -12,6 +12,8 @@ launcher 调它，无人值守 / CI 场景也直接调它。
         --params params.json --create-missing
     python "<插件根>/scripts/project_scaffold.py" --project "<目标>" \
         --params params.json --write-subscription
+    # 调用方可在订阅命令后加 --expect-source '{"kind":"directory","source":"/path/to/market"}'
+    # 匹配则继续；来源不同或登记读不出时退出 1，骨架落盘前停止；不带参数保留原流程。
     # 只读预演（确认页的动作清单取它的输出，逐字贴）：把上面任意一条原样加 --print-plan
     python "<插件根>/scripts/project_scaffold.py" --project "<目标>" \
         --params params.json --create-missing --require-empty --write-subscription --print-plan
@@ -65,6 +67,9 @@ _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 import _settings_io  # noqa: E402
+import _marketplace_source as market_source  # noqa: E402
+from _project_directory import classify_directory, substantive_entries  # noqa: E402
+from _project_directory import NEAR_EMPTY_ALLOWLIST  # noqa: E402 — compatibility export
 from _state_io import memory_dir_of, runtime_rel, state_dir_of  # noqa: E402
 from _harness import (SKILLS_ABSENT, SKILLS_DIR_CC, SKILLS_DIR_NEUTRAL,  # noqa: E402
                       SKILLS_LINK_OK, SKILLS_LINK_TARGET_MISSING, project_skills_conflict,
@@ -91,14 +96,9 @@ def ensure_dir(path: Path):
 
 
 # 「近空」豁免：这些东西的存在不代表目录已被占用（与 launcher SKILL §1 的近空口径一致）
-NEAR_EMPTY_ALLOWLIST = {
-    ".git", ".gitignore", ".gitkeep", ".gitattributes",
-    "readme.md", "readme", "readme.txt",
-    ".ds_store", "thumbs.db", "desktop.ini",
-    # 装机自己的中间产物：launcher 应当把它们写在目标目录之外（setup SKILL §5 已写明），
-    # 这里兜一道——真写进来了也不该让目标目录看起来「已被占用」而把新建误导成接入。
-    "params.json", "tree.json",
-}
+# 装机自己的中间产物：launcher 应当把它们写在目标目录之外（setup SKILL §5 已写明），
+# 这里兜一道——真写进来了也不该让目标目录看起来「已被占用」而把新建误导成接入。
+# 白名单由 _project_directory 提供，并继续以原名导出给既有调用方。
 
 
 def _substantive_entries(project_dir: Path):
@@ -114,8 +114,7 @@ def _substantive_entries(project_dir: Path):
     吞掉异常等于让 --require-empty 这道闸在权限或路径异常下自动失效
     。
     """
-    return sorted(e.name for e in project_dir.iterdir()
-                  if e.name.lower() not in NEAR_EMPTY_ALLOWLIST)
+    return substantive_entries(project_dir)
 
 
 def _copy_if_absent(src: Path, dst: Path, created_list, skipped_list):
@@ -1366,7 +1365,7 @@ def preflight_subscription(params: dict, write_subscription: bool):
     return sub
 
 
-def write_subscription(project_dir: Path, sub: dict):
+def write_subscription(project_dir: Path, sub: dict, *, expected_source=None):
     """写两项订阅声明 ＋ 用户级市场注册表。**merge 不覆盖，备份 ＋ 回读 ＋ 失败回滚。**
 
     两处的失败后果不同，所以处置也不同（这是有意的不对称，不是漏写）：
@@ -1393,6 +1392,9 @@ def write_subscription(project_dir: Path, sub: dict):
     保留了原声明」或「② 未写入」时，它非空。没有它的话，这两种情形唯一的痕迹只在 stdout，
     会话一结束就没了：装机自称成功，而项目实际订阅的可能是**用户刚才没选的那个框架副本**。
 
+    可选 expected_source 为 {kind, source}：先核对请求、用户登记与项目声明；不一致或读不出即
+    ok=False、零写入。CLI 还会在建骨架前预检一次；两次之间没有跨进程锁。
+
     **能力边界：写进 ① 的是市场**来源**（`SOURCE` 对象），不是本机落地路径——这一条
     「换台机器也解析得到」的语义本身从未跨机实测过。** 单机语义已验（写进去的确实是
     source 对象而不是 root / installLocation），跨机那一半只有推理：directory 绝对路径那一档
@@ -1408,6 +1410,12 @@ def write_subscription(project_dir: Path, sub: dict):
     flags = []          # 进 setup-state 的持久痕迹，见 docstring
     market = str(sub.get("marketplace_name") or "").strip()
     source = sub.get("source")
+    if expected_source is not None:
+        try:
+            market_source.require_claude(expected_source, market, source, project_dir)
+            source = market_source.claude_write_source(source)
+        except market_source.SourceError as exc:
+            return False, ["ERROR: " + str(exc)], str(exc)
     settings_path = Path(project_dir) / ".claude" / "settings.json"
     backup_dir = Path(project_dir) / "logs"
 
@@ -2245,6 +2253,10 @@ def main():
         help="Target project directory (default: current directory)",
     )
     parser.add_argument(
+        "--classify-directory", action="store_true",
+        help="Read-only directory classification for setup; preserves setup priority",
+    )
+    parser.add_argument(
         "--params",
         help="JSON file with dialogue-collected values; enables CLAUDE.md / modules / "
              "peripheral-asset rendering (see PARAM_REQUIRED / PARAM_DEFAULTS)",
@@ -2268,9 +2280,22 @@ def main():
              "（含项目外的用户级市场注册表）并打印，**一个字节都不写**。"
              "把真跑那条命令原样加上本参数即可——两边走同一套 preflight，退出码对齐",
     )
+    parser.add_argument("--expect-source", help="期望的 {kind, source} JSON；仅与 --write-subscription 同用")
     args = parser.parse_args()
+    expected_source = None
+    if args.expect_source is not None:
+        if not args.write_subscription:
+            parser.error("--expect-source requires --write-subscription")
+        try:
+            expected_source = market_source.parse_expected(args.expect_source)
+        except market_source.SourceError as exc:
+            parser.error(str(exc))
 
     project_dir = Path(args.project).resolve()
+    if args.classify_directory:
+        print(json.dumps({"directory_kind": classify_directory(project_dir, for_setup=True)},
+                         ensure_ascii=True))
+        return 0
     # 目录**到 preflight 之后才建**（见下方 mkdir 处）。这里只判存在性，不落任何盘。
     dir_existed = project_dir.exists()
     if not dir_existed:
@@ -2314,6 +2339,13 @@ def main():
             preflight_params(params)   # 必须在写配置与建目录之前（见该函数 docstring）
         # 订阅参数同样前置校验：它写的是受保护资产，坏参数必须在建目录之前就退出
         subscription = preflight_subscription(params, args.write_subscription)
+        if expected_source is not None:
+            market_source.require_claude(expected_source, subscription["marketplace_name"],
+                                         subscription["source"], project_dir)
+            subscription = dict(subscription, source=market_source.claude_write_source(subscription["source"]))
+    except market_source.SourceError as exc:
+        print(f"[scaffold] ERROR: {exc}; no files were written")
+        return 1
     except ParamError as e:
         print(f"[scaffold] ERROR: {e}")
         print("[scaffold]        参数无效，未写入任何文件——修正 params.json 后重跑。")
@@ -2412,7 +2444,11 @@ def main():
     # doctor 判「装到哪一步」的依据。
     subscription_ok = True
     if subscription:
-        subscription_ok, sub_lines, sub_detail = write_subscription(project_dir, subscription)
+        if expected_source is None:
+            subscription_ok, sub_lines, sub_detail = write_subscription(project_dir, subscription)
+        else:
+            subscription_ok, sub_lines, sub_detail = write_subscription(
+                project_dir, subscription, expected_source=expected_source)
         for ln in sub_lines:
             print(f"[scaffold] {ln}")
         # detail 非空时一起落盘：`ok: <detail>` 仍以 `ok` 开头，doctor 的失败判定

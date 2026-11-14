@@ -167,8 +167,13 @@ def _load_events(P):
     events, malformed, total = [], [], 0
     if not P.events.exists():
         return events, malformed, total
-    for lineno, line in enumerate(
-            P.events.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+    return parse_event_lines(P.events.read_text(encoding="utf-8", errors="replace").splitlines())
+
+
+def parse_event_lines(lines):
+    """Shared read-only event parsing, retaining malformed line locations."""
+    events, malformed, total = [], [], 0
+    for lineno, line in enumerate(lines, 1):
         s = line.strip()
         if not s or s.startswith("#"):
             continue
@@ -344,7 +349,7 @@ def check_sidecar_health(ctx):
     # librarian-promoted 只读不新写——真正的自造值（如 user-explicit-project-fact）
     # 仍会被本闸抓出来。
     source_enum = ("[纠正]", "notes.md", "shared/notes.md", "auto-memory",
-                   "librarian-promoted", "manual backfill")
+                   "librarian-promoted", "manual backfill", "selfiter-evidence")
     bad_scope, mismatch, missing, bad_prov, bad_src = [], [], [], [], []
     for key, e in entries.items():
         if not isinstance(e, dict):
@@ -370,7 +375,7 @@ def check_sidecar_health(ctx):
     for label, items, level in (("scope 非法枚举", bad_scope, "warn"),
                                 ("provenance 非法枚举", bad_prov, "warn"),
                                 ("source 非法枚举（改成 notes.md / [纠正] / auto-memory "
-                                 "/ manual backfill 之一即可消除）", bad_src, "warn"),
+                                 "/ manual backfill / selfiter-evidence 之一即可消除）", bad_src, "warn"),
                                 ("key/scope 不一致", mismatch, "warn"),
                                 ("字段缺失", missing, "warn"),
                                 ("疑似重复 key（前缀包含）", dups, "warn")):
@@ -578,6 +583,50 @@ def check_memory_capacity(ctx):
         out.append(("ok" if not any(l == "warn" for l, _ in out) else "info", "体量: " + "；".join(sizes)))
     elif not out:
         out.append(("ok", "尚无 MEMORY.md 或 module-memory.md"))
+    return out
+
+
+# 已装项目 MEMORY.md 文件头里的旧口径句。装机只在文件不存在时写骨架（不覆盖存量），
+# 所以生成源改口径后，老项目的文件头不会自己跟上——读到旧句的人会按旧口径写记忆。
+# 只认已知旧句的字面：判定是确定性的，不猜文件头里别的措辞。
+_STALE_MEMORY_HEADER_PHRASES = (
+    ("至多留一行指针", "业务知识现行口径是不新增 role/shared 指针"),
+    ("至多留指针", "业务知识现行口径是不新增 role/shared 指针"),
+    ("≤ 100 行", "容量现行口径按字符计"),
+    ("≤100 行", "容量现行口径按字符计"),
+)
+
+
+def _memory_header(text):
+    """MEMORY.md 第一个二级标题之前的部分（H1 与说明引用块）。"""
+    head = []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            break
+        head.append(line)
+    return "\n".join(head)
+
+
+def check_memory_header_stale(ctx):
+    """各域 MEMORY.md 文件头是否还留着已知的旧口径句；命中只报 info，不改写用户文件。"""
+    P = ctx["paths"]
+    out = []
+    for scope in ctx["scopes"]:
+        f = P.memory / scope / "MEMORY.md"
+        if not f.is_file():
+            continue
+        head = _memory_header(f.read_text(encoding="utf-8", errors="replace"))
+        hits, seen = [], set()
+        for phrase, why in _STALE_MEMORY_HEADER_PHRASES:
+            if phrase in head and why not in seen:
+                hits.append(f"「{phrase}」（{why}）")
+                seen.add(why)
+        if hits:
+            tpl = "templates/shared-memory-template.md" if scope == "shared" else "scripts/project_scaffold.py 的 role MEMORY 骨架"
+            out.append(("info", f"{scope}/MEMORY.md 文件头含旧口径：{'、'.join(hits)}——"
+                                f"对照插件 {tpl} 手改文件头那几行，正文条目不受影响"))
+    if not out:
+        out.append(("ok", "各域 MEMORY.md 文件头无已知旧口径句"))
     return out
 
 
@@ -1876,26 +1925,97 @@ SETUP_SELF_RECORDED_STEPS = ("acceptance",)
 SETUP_HOOK_RECORDED_STEPS = ("agents_md",)
 
 
+def inspect_setup_state(P):
+    """Read initialization once; expose shared judgement and doctor diagnostics.
+
+    No acceptance recording or repair is performed. The legacy doctor message
+    categories are retained separately from the structured query presentation.
+    Acceptance has no per-step timestamp in existing records, so its time is
+    explicitly unavailable rather than inferred from the record's updated_at.
+    Paused follow-up batches affect the state only while required steps remain
+    incomplete; step failures still take precedence over a pause.
+    """
+    data = {"state": "none", "steps": [], "completed_count": 0, "last_acceptance": None}
+    result = {"kind": "absent", "data": data, "warnings": []}
+    if not P.setup_state.exists():
+        return result
+    try:
+        st = json.loads(P.setup_state.read_text(encoding="utf-8"))
+    except Exception as exc:
+        result.update(kind="parse", problem=str(exc))
+        data["state"] = "unknown"
+        result["warnings"].append(f"Initialization record cannot be read: {exc}")
+        return result
+    result["record"] = st
+    if not isinstance(st, dict):
+        result.update(kind="root", problem=type(st).__name__)
+    else:
+        steps = st.get("steps") or {}
+        if not isinstance(steps, dict):
+            result.update(kind="steps", problem=type(steps).__name__)
+        else:
+            result.update(kind="recorded", raw_steps=steps)
+    if result["kind"] in ("root", "steps"):
+        data["state"] = "unknown"
+        result["warnings"].append("Initialization record has an invalid structure")
+        return result
+    steps = result["raw_steps"]
+    acceptance = steps.get("acceptance")
+    if isinstance(acceptance, str):
+        data["last_acceptance"] = {"at": None, "ok": acceptance.startswith("ok")}
+        result["warnings"].append("Initialization acceptance time is unavailable in this record")
+    raw_pending = st.get("pending_work", {})
+    pending = raw_pending if isinstance(raw_pending, dict) else {}
+    raw_batches = pending.get("batches", [])
+    batches = raw_batches if isinstance(raw_batches, list) else []
+    invalid = (not isinstance(st.get("steps", {}), dict)
+               or any(not isinstance(value, str) for value in steps.values())
+               or not isinstance(raw_pending, dict) or not isinstance(raw_batches, list)
+               or any(not isinstance(batch, dict) for batch in batches))
+    if invalid:
+        data["state"] = "unknown"
+        result["warnings"].append("Initialization record has an invalid structure")
+    if steps and all(k in SETUP_SELF_RECORDED_STEPS + SETUP_HOOK_RECORDED_STEPS for k in steps):
+        result["kind"] = "unrecorded"
+        return result
+    failed = [k for k, v in steps.items()
+              if k not in SETUP_SELF_RECORDED_STEPS and not str(v).startswith("ok")]
+    missing = [k for k in SETUP_REQUIRED_STEPS if k not in steps]
+    deferred = [k for k in missing if k in SETUP_HOOK_RECORDED_STEPS and P.agents_md.exists()]
+    missing = [k for k in missing if k not in deferred]
+    result.update(failed=failed, missing=missing, deferred=deferred)
+    data["steps"] = [{"name": k, "state": "failed" if k in failed else "ok"}
+                     for k in steps if k not in SETUP_SELF_RECORDED_STEPS]
+    data["steps"] += [{"name": k, "state": "deferred" if k in deferred else "pending"}
+                      for k in SETUP_REQUIRED_STEPS if k not in steps]
+    data["completed_count"] = sum(s["state"] in ("ok", "deferred") for s in data["steps"])
+    paused = any(isinstance(batch, dict) and batch.get("pace") == "paused"
+                 for batch in batches) if isinstance(batches, list) else False
+    data["state"] = ("unknown" if invalid else "failed" if failed else "paused" if paused and missing else
+                     "in_progress" if missing else "complete")
+    return result
+
+
 def check_setup_state(ctx):
     """消费 setup-state.json 识别「上次装到哪一步」。"""
     P = ctx["paths"]
-    if not P.setup_state.exists():
+    snapshot = inspect_setup_state(P)
+    if snapshot["kind"] == "absent":
         return [("info", "无 setup-state.json（手工接入、克隆下来的项目、或早于该机制的项目，"
                          "不影响使用）")]
-    try:
-        st = json.loads(P.setup_state.read_text(encoding="utf-8"))
-    except Exception as e:
-        return [("warn", f"setup-state.json 解析失败: {e}")]
+    if snapshot["kind"] == "parse":
+        return [("warn", f"setup-state.json 解析失败: {snapshot['problem']}")]
+    st = snapshot["record"]
     # 结构兜底：合法 JSON 不等于本文件的形状。顶层非 dict ⇒ 下一行 `.get` 抛 AttributeError；
     # `steps` 非 dict ⇒ 后面的 `.items()` / `in` 抛。两处都被上层收成「检查自身异常」——
     # 看不出问题在文件结构上，还把一份读得出来的文件说成是体检自己坏了。
     # **这两格从本版起才够得着**：以前 SessionStart 的无条件记步会把它们整份重建掉，
     # 现在守卫保住原文件（那正是带 BOM 的健康记录不再被抹掉的同一个改动），于是它们会一直在。
-    if not isinstance(st, dict):
+    if snapshot["kind"] == "root":
         return [("warn", f"setup-state.json 结构非法：顶层不是对象（实际 {type(st).__name__}）"
                          "——该文件是派生状态，删掉后重跑 launcher 即可重建")]
     steps = st.get("steps") or {}
-    if not isinstance(steps, dict):
+    if snapshot["kind"] == "steps":
         return [("warn", f"setup-state.json 结构非法：steps 不是对象（实际 "
                          f"{type(steps).__name__}）——该文件是派生状态，删掉后重跑 launcher 即可重建")]
     # 自愈：文件里一个 launcher 步骤都没有，只剩两类**不证明 launcher 来过**的步骤——
@@ -1905,18 +2025,16 @@ def check_setup_state(ctx):
     # 按「无有效 launcher 记录」放行，等同于文件不存在。
     # **谓词要求 steps 非空**：空集上 `all(...)` 恒真，`{"steps": {}}` 会跟着变 info，
     # 而那一形态只能由手改 / 截断产生，不是本条要救的人群。
-    if steps and all(k in SETUP_SELF_RECORDED_STEPS + SETUP_HOOK_RECORDED_STEPS for k in steps):
+    if snapshot["kind"] == "unrecorded":
         return [("info", "setup-state.json 里没有任何 launcher 步骤——只有本工具的验收记录 / "
                          "会话启动 hook 补记的那一步，按手工接入或克隆下来的项目处理"
                          "（旧版会凭空建这份文件，可安全删除）")]
-    failed = [k for k, v in steps.items()
-              if k not in SETUP_SELF_RECORDED_STEPS and not str(v).startswith("ok")]
-    missing = [k for k in SETUP_REQUIRED_STEPS if k not in steps]
+    failed = snapshot["failed"]
+    missing = snapshot["missing"]
     # 只缺 hook 补记的那一步、而它要的文件已在位：迁移 apply 之后、首会话之前就是这一态
     # （`ensure_agents_md_present()` 下次会话启动确认文件在位就补记），不是装机没走完——
     # 报 error 并指向 launcher §5 等于引人重跑装机。文件不在时照旧报缺。
-    deferred = [k for k in missing if k in SETUP_HOOK_RECORDED_STEPS and P.agents_md.exists()]
-    missing = [k for k in missing if k not in deferred]
+    deferred = snapshot["deferred"]
     out = []
     if failed:
         out.append(("error", f"初始化有步骤失败: "
@@ -2307,13 +2425,47 @@ INSTALL_CHECKS = [
     ("env", "环境与 hook 活性", "python 可达；hook 层事件产物存在即链路存活（重启前降 info）；两扇门各自记录的插件根版本相等", check_env),
 ]
 
+def check_self_iteration(ctx):
+    """Read-only policy and durable-job diagnostics; never launch an executor."""
+    if sys.version_info < (3, 11):
+        return [('info', '后台自迭代需要 Python 3.11；保留手动维护入口')]
+    from selfiter_controller import Controller, read_json
+    controller = Controller(ctx['paths'].project)
+    try:
+        config = controller.configuration()
+    except (OSError, ValueError) as exc:
+        return [('warn', '后台自迭代已关闭：配置不可用：' + str(exc))]
+    if config['mode'] == 'off':
+        return [('info', '后台自迭代已关闭；日志与待批结果保留')]
+    out = []
+    try:
+        deferred = read_json(controller.base / 'deferred.json', {})
+        progress = read_json(controller.base / 'progress.json', {})
+    except (OSError, ValueError) as exc:
+        return [('error', '后台自迭代运行态损坏，停止新作业：' + str(exc))]
+    if deferred.get('status') == 'deferred':
+        out.append(('warn', '后台自迭代延期：' + str(deferred.get('reason'))))
+    if progress.get('circuit_open') or progress.get('failures', 0) >= 3:
+        out.append(('warn', '连续作业失败，自动内容写入降为待批'))
+    for path in (controller.base / 'jobs').glob('*/journal.json'):
+        try:
+            record = read_json(path)
+            if record.get('status') != 'completed' or not record.get('bookkeeping_complete'):
+                out.append(('warn', '作业待恢复：' + str(record.get('job_id'))))
+        except (OSError, ValueError) as exc:
+            out.append(('error', '作业日志损坏：' + str(exc)))
+    return out or [('info', '后台自迭代配置有效；此项不证明执行器或语义效果有效')]
+
+
 CHECKS = [
+    ("self_iteration", "后台自迭代", "只读检查配置、延期、熔断与待恢复作业；不启动模型", check_self_iteration),
     ("events_parse", "事件流可解析率", "events.jsonl 逐行 JSON 解析；坏行=error", check_events_parse),
     ("sidecar_health", "sidecar 健康", "memory-index.json 字段 schema / scope 枚举 / key-scope 一致 / 疑似重复 key", check_sidecar_health),
     ("proposal_dates", "提案日期字段", "applied 须有 applied_at、rejected 须有 rejected_at（迭代日期派生的输入质量）", check_proposal_dates),
     ("yaml_parse", "数据文件 YAML 可解析性", "board.yaml / issues / proposals 过真 YAML 解析器；坏行=error（与 close-check `[yaml-parse]` 共用判定式、文件集不相交）", check_data_yaml_parse),
     ("notes_backlog", "notes 积压", f"内容行 > {NOTES_BACKLOG_LINES} 或 内容行>5 且距上次提升 > {NOTES_STALE_DAYS} 天（体积口径；开场卡问询按条目数另计，见 memory-ask.py）", check_notes_backlog),
     ("memory_capacity", "MEMORY 容量", f"字符预算 role ≤ {ROLE_MEMORY_MAX_CHARS} / shared ≤ {SHARED_MEMORY_MAX_CHARS} / module ≤ {MODULE_MEMORY_MAX_CHARS}；附 token 估算（×{TOKEN_PER_CHAR}）", check_memory_capacity),
+    ("memory_header_stale", "MEMORY 文件头口径", "各域 MEMORY.md 文件头里已知的旧口径句（如「至多留指针」「≤ 100 行」）；装机不覆盖存量文件，命中只报 info", check_memory_header_stale),
     ("auto_memory", "auto-memory 体量", f"单条 ≤ {AUTO_MEMORY_ENTRY_MAX_CHARS} 字符；索引 ≤ {AUTO_MEMORY_INDEX_MAX_LINES} 行；只报警不动手", check_auto_memory),
     ("promise_producer", "承诺-producer 对账与死信号三态", "schema 全事件类型 × (事件计数, producer 文本存在性) → normal / starved / broken-promise", check_promise_producer),
     ("protected_assets", "受保护资产对账", f"近 {PROTECTED_WINDOW_DAYS} 天 git 提交 vs changelog 痕迹（启发式，仅提示级）", check_protected_assets),
@@ -2328,11 +2480,12 @@ GROUPS = {
 }
 
 
-def run_all(project_dir=None, group=None):
+def run_all(project_dir=None, group=None, *, codex_check=None):
     """跑体检。`group` 为 None 时跑全部组。
 
     可被 import 复用——`session-start-prep` 在首个会话内联调用 `run_all(dir, "install")`
     做运行时验收，不必起子进程、也不依赖模型自觉。
+    `codex_check` 供只读查询注入已冻结上下文、已核对副作用范围的信任检查。
     """
     P = Paths(project_dir or default_project_dir())
     # 预检（事件流预读 + 记忆目录枚举）此前在逐项隔离之外：事件文件是个目录、权限不足、
@@ -2363,6 +2516,8 @@ def run_all(project_dir=None, group=None):
         if group and gname != group:
             continue
         for cid, name, crit, fn in checks:
+            if cid == "codex_trust" and codex_check is not None:
+                fn = codex_check
             try:
                 findings = fn(ctx)
             except Exception as e:

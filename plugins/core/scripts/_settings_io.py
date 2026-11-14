@@ -51,12 +51,13 @@ class SettingsError(Exception):
     """
 
 
-def read_settings(path):
+def read_settings(path, *, object_pairs_hook=None):
     """读一份 settings 家族的 JSON 对象。
 
     返回 dict。**文件不存在 → `{}`**（「还没有」是合法起点，不是错误）；
     解析失败 / 顶层不是对象 → `SettingsError`（那是坏文件，不能当成空对象往上盖，
     盖上去等于把用户原有的键一次性抹掉）。
+    可选 object_pairs_hook 交给 JSON 解码器；来源检查用它拒绝重复键，hook 的 ValueError 由调用方处理。
     """
     p = Path(path)
     try:
@@ -71,7 +72,7 @@ def read_settings(path):
         raise SettingsError(f"{p} 是空文件——这不是「还没配置」，是写到一半断了；"
                             f"确认内容后再重跑，或先把它删掉")
     try:
-        data = json.loads(raw.decode("utf-8-sig"))
+        data = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=object_pairs_hook)
     except UnicodeDecodeError as e:
         raise SettingsError(f"{p} 不是 UTF-8 文本（{e}）")
     except json.JSONDecodeError as e:

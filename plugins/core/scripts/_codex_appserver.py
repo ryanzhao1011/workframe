@@ -102,7 +102,8 @@ def kill_tree(proc):
 class AppServer:
     """`with AppServer(...) as s: s.hooks_list(cwd)`。退出 with 时按进程树杀。"""
 
-    def __init__(self, exe=None, codex_home=None, cwd=None, env=None, timeout=DEFAULT_TIMEOUT):
+    def __init__(self, exe=None, codex_home=None, cwd=None, env=None, timeout=DEFAULT_TIMEOUT,
+                 *, profile=None, config_overrides=(), deadline=None):
         self.exe = exe or find_codex_exe(env)
         if not self.exe:
             raise AppServerError("找不到 codex 可执行文件（PATH 上没有 codex，也未设 WF_CODEX_EXE）")
@@ -111,6 +112,9 @@ class AppServer:
             self.env["CODEX_HOME"] = str(codex_home)
         self.cwd = str(cwd) if cwd else None
         self.timeout = timeout
+        self.profile = profile
+        self.config_overrides = tuple(config_overrides)
+        self.deadline = deadline
         self.proc = None
         self.notifications = []
         self.stderr_lines = []
@@ -131,21 +135,36 @@ class AppServer:
         return False
 
     def start(self):
+        command = [self.exe]
+        if self.profile is not None:
+            command += ["--profile", self.profile]
+        for value in self.config_overrides:
+            command += ["--config", value]
+        command.append("app-server")
         self.proc = subprocess.Popen(
-            [self.exe, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, cwd=self.cwd, env=self.env)
         self._reader = threading.Thread(target=self._read_stdout, daemon=True)
         self._reader.start()
         self._stderr_reader = threading.Thread(target=self._read_stderr, daemon=True)
         self._stderr_reader.start()
-        self.initialize_result = self.request(
-            "initialize", {"clientInfo": {"name": CLIENT_NAME, "version": CLIENT_VERSION}})
-        self.notify("initialized", {})
+        try:
+            self.initialize_result = self.request(
+                "initialize", {"clientInfo": {"name": CLIENT_NAME, "version": CLIENT_VERSION}})
+            self.notify("initialized", {})
+        except BaseException:
+            self.close()
+            raise
         return self
 
     def close(self):
         kill_tree(self.proc)
         self._dead.set()
+        if self.proc is not None:
+            try:
+                self.proc.wait(timeout=1)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
 
     # ---- 收发 ----
     def _read_stdout(self):
@@ -188,10 +207,14 @@ class AppServer:
 
     def request(self, method, params=None, timeout=None):
         """发一条请求、等它的响应；`error` 对象转 `AppServerError`。返回 `result`。"""
+        deadline = time.monotonic() + (self.timeout if timeout is None else timeout)
+        if self.deadline is not None:
+            deadline = min(deadline, self.deadline)
+        if time.monotonic() >= deadline:
+            raise AppServerError(f"{method} 超时（总截止时间已到，不发送请求）")
         self._next_id += 1
         rid = self._next_id
         self._send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}})
-        deadline = time.monotonic() + (timeout or self.timeout)
         while True:
             with self._lock:
                 msg = self._pending.pop(rid, None)

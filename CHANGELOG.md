@@ -2,6 +2,13 @@
 
 本文件记录 Workframe 的所有重要变更。
 
+## [1.3.0] — 2026-11-14
+
+### 新增与改进
+
+- **后台自迭代**：框架会在后台用你已登录的 Claude Code 或 Codex，自动整理角色记忆和模块提醒，不用手动触发。它会用到你的额度，每个项目最多每七天一次；不想要，可以在 `<home>/.workframe/user-config.json` 里写 `{"version":1,"self_iteration":{"mode":"off"}}`。详见 [setup-guide](./docs/setup-guide.md) 的「后台自迭代」一节。
+- **Codex 相关功能需要 Python 3.11 及以上**，版本不够时会提示升级。
+
 ## [1.2.0] — 2026-11-09
 
 ### 新增与改进

@@ -440,6 +440,11 @@ def state_dir_of(project_dir):
     return Path(project_dir) / runtime_rel(project_dir, "state")
 
 
+def user_dir_of(home=None):
+    """Shared per-user policy/launch ledger namespace, distinct from project state."""
+    return (Path(home) if home is not None else Path.home()) / RUNTIME_DIR
+
+
 def memory_dir_of(project_dir):
     """角色记忆目录（`<role>/MEMORY.md` + `notes.md` + `shared/`）。"""
     return Path(project_dir) / runtime_rel(project_dir, "memory")

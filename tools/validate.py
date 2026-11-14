@@ -9,10 +9,12 @@ tools/validate.py — 深度语义校验框架仓库
     python tools/validate.py --changed [--base REF]
                                               相关面模式：快检查照跑，慢检查按 SLOW_CHECK_TRIGGERS 命中才跑
     python tools/validate.py --timing         （可与上面任一运行形态同用）结尾按耗时降序打印
-    python tools/validate.py --baseline       查询当前 HEAD 有无全量绿基线（有 exit 0，否则 exit 1）
+    python tools/validate.py --baseline       查询当前 HEAD 有无可用全量绿基线（含沿用；有 exit 0，否则 exit 1）
 
-`--only` / `--changed` 是开发中的快速反馈，结尾会写明跑了几项、跳过了哪些，**不能当提交闸**，也永不写绿基线；
-无参全量全部通过、且工作区干净时才把 HEAD 记为绿基线（落点与判据见 `_BASELINE_STAMP` 上方注释）。
+`--only` / `--changed` 是开发中的快速反馈，结尾会写明跑了几项、跳过了哪些，永不写绿基线。`--only` **不能当提交闸**；
+`--changed` 只在改动面没碰 `plugins/` `tools/` `.github/` 时可作提交闸（推送后核同一提交的 CI 全量），分界的唯一
+实现是 `_FULL_GATE_ROOTS` / `_full_gate_hits`，口径定义在仓根 CLAUDE.md「改动前先查」。
+无参全量全部通过、且工作区干净时才把 HEAD 记为绿基线；之后只改上述根外文件的提交沿用它（判据见 `_baseline_carried`）。
 
 检查族以文件末尾 CHECKS 注册表为准（总数从注册表现算，运行输出自报；README 的
 检查数由 check_readme_check_count_current 对账）。大类涵盖：结构完整性 / 引用边界 /
@@ -630,6 +632,7 @@ def check_core_shared_assets_complete():
         "module-architecture.md",
         # 接入已有项目时把用户原文与两份模板（CLAUDE.md / AGENTS.md）整合（与两份模板强耦合，同插件放）
         "claude-md-merge-guide.md",
+        "codex-trust-query.md",
     }
     required_tpl = {
         "agent-template.md",
@@ -7719,6 +7722,9 @@ def check_state_io_single_source():
         # 整路径串在源码里根本不存在（写过一版，当场把已声明的那条判成漏网）
         ("plugins/core/scripts/log-subagent-activity.py", "subagent-activity.log"),
         ("plugins/core/scripts/maintenance_workorder.py", "promotion-candidates.md"),
+        # Raw detached-worker stdout/stderr, not JSON events. The exact target
+        # remains checked; changing this append to events.jsonl must stay red.
+        ("plugins/core/scripts/selfiter_controller.py", "worker.log"),
     }
     io_owner_rel = "plugins/core/scripts/_state_io.py"
     wide, strict = [], set()
@@ -8908,10 +8914,13 @@ BIN_POSIX_SCRIPTS = [
     "workframe-recompute-skill-metrics",
     "workframe-doctor",
     "workframe-maintenance",
+    "workframe-selfiter",
     "workframe-module-close-check",
     "workframe-event",
     "workframe-door",
     "workframe-discipline-mark",
+    "workframe-query",
+    "workframe-codex-trust",
 ]
 
 # Windows .cmd wrapper（git index 必须 100644），与上表一一配对
@@ -9454,7 +9463,7 @@ def check_all_bin_cmd_wrappers_portable():
 
     ASCII 与 CRLF：UTF-8 中文 REM 注释 + 只有 LF 的行尾会被 cmd.exe 错切，注释碎片在 Python 命令之后被当命令执行。
     派发行：除 `workframe-python.cmd`（它本身是解释器启动器、不派发）外，每个 `.cmd` 都是同名 POSIX 入口的薄壳，
-    必须含 `python "%~dp0<同名>" %*` 并以 `exit /b %ERRORLEVEL%` 传回退出码——派发目标写错时 Windows 入口
+    必须含 `python "%~dp0<同名>" %*` 或它的 `python -B` 形态，并以 `exit /b %ERRORLEVEL%` 传回退出码——派发目标写错时 Windows 入口
     整条打到别的脚本或不存在的文件上，而 POSIX 那半照常，只看 POSIX 的检查全绿。
     """
     name = "all_bin_cmd_wrappers_portable"
@@ -9487,7 +9496,7 @@ def check_all_bin_cmd_wrappers_portable():
             errors.append(f"{wrapper}: 缺 exit /b")
         if wrapper != "workframe-python.cmd":
             stem = wrapper[:-len(".cmd")]
-            if f'python "%~dp0{stem}" %*' not in text:
+            if not any(f'python {flag}"%~dp0{stem}" %*' in text for flag in ("", "-B ")):
                 errors.append(f'{wrapper}: 缺派发行 python "%~dp0{stem}" %*——Windows 入口打不到同名脚本')
             if "exit /b %ERRORLEVEL%" not in text:
                 errors.append(f"{wrapper}: 缺 exit /b %ERRORLEVEL%——退出码传不回调用方")
@@ -13714,6 +13723,64 @@ def check_maintenance_dedup_unit_tests_pass():
     return _run_suite_with_floor(name, "tools/test_maintenance_dedup.py", 25)
 
 
+def check_workframe_query_unit_tests_pass():
+    """Run query consumers and zero-write probes; an empty suite is not success.
+
+    The five behavior groups must each execute successful tests. Unittest
+    reports every failing assertion; this guard does not prove assertions
+    have never been removed from an otherwise still populated group.
+    """
+    import os
+    name = "workframe_query_unit_tests_pass"
+    suite = FRAMEWORK_ROOT / "tools" / "test_workframe_query.py"
+    if not suite.is_file():
+        return _fail(name, "query suite is missing; read-only behavior was not exercised")
+    result = subprocess.run(
+        [sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_workframe_query.py", "-v"],
+        cwd=FRAMEWORK_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=180, env=dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8"))
+    output = result.stdout + result.stderr
+    if (result.returncode or not re.search(r"^OK(?: \(skipped=\d+\))?\s*$", output, re.M)
+            or not re.search(r"^Ran [1-9]\d* tests? in .+$", output, re.M)):
+        return _fail(name, _suite_failure_summary(output))
+    for group in ("DirectoryTests", "QueryCliTests", "SetupStatusTests", "ZeroWriteTests", "QueryGateTests"):
+        if not re.search(r"\(test_workframe_query\." + group + r"\.[^)]+\) \.\.\. ok", output):
+            return _fail(name, f"no executed successful {group}; query behavior cannot be certified")
+    return _ok(name, "(query contract, shared classification, initialization and zero-write probes passed)")
+
+
+def check_selfiter_unit_tests_pass():
+    """Exercise unattended policy, controller, evidence and transport as consumers.
+
+    These suites use unittest, so the existing [ok]-line counter has a different
+    output contract. Require each suite's executed test identities as well as a
+    successful unittest summary; a missing or empty suite is not success. This
+    does not prove every individual assertion remained present.
+    """
+    import os
+    name = "selfiter_unit_tests_pass"
+    modules = ("policy", "controller", "evidence", "runner", "capability")
+    for module in modules:
+        if not (FRAMEWORK_ROOT / "tools" / f"test_selfiter_{module}.py").is_file():
+            return _fail(name, f"missing self-iteration suite: {module}")
+    result = subprocess.run(
+        [sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_selfiter*.py", "-v"],
+        cwd=FRAMEWORK_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=300, env=dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8"))
+    output = result.stdout + result.stderr
+    if result.returncode or not re.search(r"^OK(?: \(skipped=\d+\))?\s*$", output, re.M):
+        # Preserve every failing identity when the shared tail keeps only the
+        # final traceback; otherwise multi-failure CI runs hide earlier cases.
+        failures = re.findall(r"^(?:FAIL|ERROR): (.+)$", output, re.M)
+        if failures:
+            return _fail(name, "; ".join(failures) + " | " + _suite_failure_summary(output))
+        return _fail(name, _suite_failure_summary(output))
+    for module in modules:
+        if not re.search(r"\(test_selfiter_" + module + r"\.[^)]+\) \.\.\. ok", output):
+            return _fail(name, f"no executed successful tests from {module}")
+    return _ok(name, "(unittest suites executed; no live provider calls in this gate)")
+
+
 def check_session_start_output_within_cap():
     """CC 清单 `SessionStart` 上除打包器之外的每条 hook，在 fixture 状态下各自 stdout ≤ 物理上限；
     合计超限只提示。
@@ -14139,10 +14206,17 @@ _CORE_ALL = ("plugins/core/**", ".claude-plugin/**")
 _CORE_SCRIPT_DATA = ("plugins/core/.workframe-meta/**", "plugins/core/templates/**")
 _SCAFFOLD_DATA = ("plugins/core/reference/**", "plugins/core/.claude-plugin/**")
 SLOW_CHECK_TRIGGERS = {
+    "check_workframe_query_unit_tests_pass": ("tools/**", "plugins/workframe-launcher/skills/setup/**") + _CORE_ALL,
+    "check_selfiter_unit_tests_pass": (
+        "tools/test_selfiter_policy.py", "tools/test_selfiter_controller.py",
+        "tools/test_selfiter_evidence.py", "tools/test_selfiter_runner.py", "tools/test_selfiter_capability.py", "plugins/core/scripts/**",
+        "plugins/core/skills/self-iteration/**", "plugins/core/.workframe-meta/event-schema.json",
+    ),
     "check_migrate_unit_tests_pass": ("tools/test_workframe_migrate.py",) + _CORE_ALL,
     "check_module_close_check_unit_tests_pass": ("tools/test_module_close_check.py",) + _CORE_ALL,
     "check_project_skills_path_unit_tests_pass": ("tools/test_project_skills_path.py",) + _CORE_ALL,
-    "check_codex_door_unit_tests_pass": ("tools/test_workframe_door.py", "tools/test_codex_trust.py") + _CORE_ALL,
+    "check_codex_door_unit_tests_pass": (
+        "tools/test_workframe_door.py", "tools/test_codex_trust.py", "tools/test_install_source.py") + _CORE_ALL,
     "check_codex_trust_unit_tests_pass": ("tools/test_codex_trust.py", "docs/**", "plugins/workframe-launcher/**") + _CORE_ALL,
     "check_codex_hooks_exit_outside_project": _CORE_ALL,
     "check_hook_scripts_tolerate_harness_arg": _CORE_ALL,
@@ -14168,10 +14242,14 @@ SLOW_CHECK_TRIGGERS = {
         "plugins/core/agents/**") + _CORE_SCRIPT_DATA,
     "check_scaffold_plan_unit_tests_pass": (
         "tools/test_project_scaffold_plan.py", "plugins/core/scripts/project_scaffold.py",
+        "plugins/core/scripts/_marketplace_source.py",
+        "plugins/core/scripts/_project_directory.py",
         "plugins/core/scripts/_settings_io.py", "plugins/core/scripts/_harness.py",
         "plugins/core/scripts/_state_io.py") + _CORE_SCRIPT_DATA + _SCAFFOLD_DATA,
     "check_scaffold_subscription_unit_tests_pass": (
         "tools/test_project_scaffold_subscription.py", "plugins/core/scripts/project_scaffold.py",
+        "plugins/core/scripts/_marketplace_source.py",
+        "plugins/core/scripts/_project_directory.py",
         "plugins/core/scripts/_settings_io.py", "plugins/core/scripts/_harness.py",
         "plugins/core/scripts/_state_io.py") + _CORE_SCRIPT_DATA + _SCAFFOLD_DATA,
 }
@@ -14236,6 +14314,85 @@ def _py_import_closure(start_rel):
 _IMPORT_DEPS_CACHE = {}
 
 
+def check_validate_full_gate_boundary():
+    """提交前「全量还是 `--changed`」的分界判定式（`_full_gate_hits` / `_baseline_carried`）按口径工作。
+
+    判错的代价不对称：把根内改动判成根外，`--changed` 就会被当成提交闸、绿基线被沿用，慢单测从此不在本地跑；
+    所以根内三类各打一格、前缀相似但不在根内的路径（`pluginsX/`、`docs/plugins/`）各打一格。
+    `_baseline_carried` 的三条出口（不是祖先 / 碰到根 / 只改根外）用替身 git 各走一遍，替身按参数作答、跑完复原；
+    它证明的是分支逻辑，不证明真实 git 的 `--is-ancestor` 语义（那由 git 自己保证）。"""
+    name = "validate_full_gate_boundary"
+    problems = []
+    matrix = [
+        (["README.md"], []),
+        (["CHANGELOG.md", "docs/concepts.md", ".claude-plugin/marketplace.json"], []),
+        (["docs/plugins/x.md", "pluginsX/a.md"], []),
+        (["plugins/core/skills/a/SKILL.md"], ["plugins/core/skills/a/SKILL.md"]),
+        (["tools/validate.py", "README.md"], ["tools/validate.py"]),
+        ([".github/workflows/validate.yml"], [".github/workflows/validate.yml"]),
+        (["tools\\test_x.py"], ["tools\\test_x.py"]),
+        ([], []),
+    ]
+    for paths, want in matrix:
+        got = _full_gate_hits(paths)
+        if got != sorted(want):
+            problems.append(f"_full_gate_hits({paths}) = {got}，应为 {sorted(want)}")
+
+    g = globals()
+    real = g["_git_bytes"]
+
+    def stub(diff_names, ancestor=True):
+        def fake(*args):
+            if args[0] == "merge-base":
+                if not ancestor:
+                    raise RuntimeError("not ancestor")
+                return b""
+            if args[0] == "diff":
+                return "\0".join(diff_names).encode("utf-8")
+            if args[0] == "rev-list":
+                return b"2\n"
+            raise RuntimeError(f"unexpected git {args}")
+        return fake
+
+    cases = [
+        ("只改根外", stub(["README.md", "docs/a.md"]), True),
+        ("碰到 tools/", stub(["README.md", "tools/validate.py"]), False),
+        ("碰到 plugins/", stub(["plugins/core/hooks/hooks.json"]), False),
+        ("不是祖先", stub(["README.md"], ancestor=False), False),
+    ]
+    try:
+        for label, fake, want in cases:
+            g["_git_bytes"] = fake
+            ok, why = _baseline_carried("a" * 40, "b" * 40)
+            if ok is not want:
+                problems.append(f"_baseline_carried[{label}] = {ok}（{why}），应为 {want}")
+        g["_git_bytes"] = stub(["README.md"])
+        ok, why = _baseline_carried("", "b" * 40)
+        if ok:
+            problems.append("_baseline_carried 在戳里没有 head 时仍判可沿用")
+
+        # `--base` 指向更早提交、本次把根内文件改回 base 的样子：相对 base 无差异，相对 HEAD 有差异——
+        # 改动面必须带上它，`--base` 只能扩大范围
+        def revert_stub(*args):
+            if args[0] == "rev-parse":
+                return b"x"
+            if args[0] == "ls-files":
+                return b""
+            if args[0] == "diff":
+                ref = args[-2]
+                return b"README.md" if ref == "OLD" else b"tools/test_codex_trust.py"
+            raise RuntimeError(f"unexpected git {args}")
+        g["_git_bytes"] = revert_stub
+        got = _changed_files("OLD")
+        if "tools/test_codex_trust.py" not in got or not _full_gate_hits(got):
+            problems.append(f"_changed_files('OLD') = {sorted(got)}：相对 HEAD 的根内回改没并进改动面")
+    finally:
+        g["_git_bytes"] = real
+    if problems:
+        return _fail(name, "；".join(problems))
+    return _ok(name, f"（分界 {len(matrix)} 格、沿用判定 {len(cases) + 1} 格、--base 并集 1 格按口径）")
+
+
 def check_validate_slow_trigger_table_sound():
     """`--changed` 用的慢检查触发表（`SLOW_CHECK_TRIGGERS`）自身的完整性——表错了，相关面模式会**静默少跑**。
 
@@ -14249,7 +14406,8 @@ def check_validate_slow_trigger_table_sound():
 
     **能力边界**：④ 只看静态 import 与 `xxx.py` 字面，**看不见数据文件读点**（那部分是表上方注释里按读点手登记的），
     也看不见 `getattr` / 拼接字符串这类动态加载；所以本闸绿只说明「表与 import 结构对得上」，不说明「表覆盖了
-    套件的全部输入」。相关面模式本身也只是开发中的快速反馈——提交前一律无参全量，表漏了在那里兜住。
+    套件的全部输入」。相关面模式在改动碰到 `plugins/` `tools/` `.github/` 时只是开发中的快速反馈，提交前无参全量兜住表漏；只改这些
+    根之外时它可作提交闸，表漏由推送后同一提交的 CI 全量兜住（dev 推送只跑 Linux，Windows 专属的漏不在兜底内）。
     """
     name = "validate_slow_trigger_table_sound"
     registered = {c.__name__ for c in CHECKS}
@@ -14403,6 +14561,7 @@ CHECKS = [
     check_doctor_smoke,
     check_validate_self_no_duplicates,
     check_validate_slow_trigger_table_sound,
+    check_validate_full_gate_boundary,
     check_event_reliability_enum,
     check_event_types_registered,
     check_scaffold_gitkeep_dirs_covered,
@@ -14559,6 +14718,8 @@ CHECKS = [
     # 已装项目迁移工具 / --commit 记账去重
     check_migrate_unit_tests_pass,
     check_maintenance_dedup_unit_tests_pass,
+    check_workframe_query_unit_tests_pass,
+    check_selfiter_unit_tests_pass,
 ]
 
 
@@ -14601,6 +14762,47 @@ def _baseline_stamp_path():
     return p if p.is_absolute() else FRAMEWORK_ROOT / p
 
 
+# ---- 提交前跑多大范围 ----
+#
+# 改动碰到这几个根（插件资产 / 闸与单测 / CI）→ 提交前无参全量；只改其外的文件（README / CHANGELOG / docs/ /
+# 市场元数据等）→ `--changed` 全绿即可提交，推送后同一提交的 CI 全量成功才算收口。口径的定义在仓根
+# CLAUDE.md「改动前先查」；这里是它唯一的判定实现，`--baseline` 与 `--changed` 的收尾提示都调它。
+# 按目录分界而不是按文件后缀：根外的文档照样有闸在读（README 的版本行与检查数、docs/ 触发的单测），
+# 那些闸在 `--changed` 里照跑——快检查一律跑、慢检查按触发表命中，所以根外改动跑 `--changed` 不丢它们。
+_FULL_GATE_ROOTS = ("plugins/", "tools/", ".github/")
+
+
+def _full_gate_hits(paths):
+    """改动面里落在 `_FULL_GATE_ROOTS` 内的路径（排序）；非空 ⇒ 提交前要无参全量。路径取 git 输出的正斜杠形态。"""
+    return sorted(p for p in paths if p.replace("\\", "/").startswith(_FULL_GATE_ROOTS))
+
+
+def _baseline_carried(old, head):
+    """绿戳不在 HEAD 时，能不能沿用：`old` 是 HEAD 的祖先，且 old..HEAD 的提交都没碰 `_FULL_GATE_ROOTS`。
+    返回 (能否沿用, 说明)。git 出任何问题都按不能沿用处理（保守）。
+
+    沿用的前提是那些根外提交各自过了 `--changed` 与推送后的 CI——本函数核不了这一点，只核改动面；
+    没走流程直接提交的根外改动，由 CI 全量兜底。"""
+    if not old:
+        return False, "绿基线记录里没有 head"
+    try:
+        _git_bytes("merge-base", "--is-ancestor", old, head)
+    except RuntimeError:
+        return False, f"绿基线 {old[:10]} 不是当前 HEAD 的祖先（改写过历史或换了分支）"
+    try:
+        names = _git_bytes("diff", "--name-only", "--no-renames", "-z", old, head, "--")
+        count = _git_bytes("rev-list", "--count", f"{old}..{head}").decode().strip()
+    except RuntimeError as e:
+        return False, f"取 {old[:10]}..HEAD 的改动面失败（{e}）"
+    paths = {x for x in names.decode("utf-8", "replace").split("\0") if x}
+    hits = _full_gate_hits(paths)
+    if hits:
+        return False, (f"绿基线 {old[:10]} 之后的 {count} 个提交改到了 {'、'.join(_FULL_GATE_ROOTS)} 内的 "
+                       f"{len(hits)} 个文件（如 {hits[0]}）")
+    return True, (f"绿基线在 {old[:10]}，之后 {count} 个提交只改了 {'、'.join(_FULL_GATE_ROOTS)} 之外的 "
+                  f"{len(paths)} 个文件，沿用该基线")
+
+
 def _baseline_status():
     """`--baseline`：返回 (有无可用绿基线, 说明)。"""
     try:
@@ -14615,14 +14817,17 @@ def _baseline_status():
         rec = json.loads(stamp.read_text(encoding="utf-8"))
     except Exception:
         return False, f"绿基线记录读不了（{stamp}）——开工前跑一次全量。"
+    carried = ""
     if rec.get("head") != head:
-        return False, (f"绿基线在 {str(rec.get('head'))[:10]}，当前 HEAD 是 {head[:10]}——"
-                       f"之后的提交没有被全量验过，开工前跑一次全量。")
+        ok, why = _baseline_carried(rec.get("head"), head)
+        if not ok:
+            return False, f"{why}——开工前跑一次全量。"
+        carried = f"{why}；"
     if dirty:
         return False, (f"HEAD {head[:10]} 有绿基线，但工作区有 {len(dirty)} 处改动或未跟踪文件，"
                        f"绿基线不覆盖它们——开工前跑一次全量（或先确认这些改动与本次无关）。")
-    return True, (f"HEAD {head[:10]} 已有全量绿基线（{rec.get('at', '?')}，Python {rec.get('python', '?')}），"
-                  f"工作区干净——可免开工全量。提交前仍须无参全量。")
+    return True, (f"{carried}HEAD {head[:10]} 可用全量绿基线（{rec.get('at', '?')}，Python {rec.get('python', '?')}），"
+                  f"工作区干净——可免开工全量。提交前跑多大范围见 CLAUDE.md「改动前先查」。")
 
 
 def _write_baseline(head):
@@ -14643,12 +14848,19 @@ def _drop_baseline():
 
 def _changed_files(base):
     """相对 `base` 的改动面：`base` 到工作树的 diff ＋ `base` 到索引的 diff（暂存后工作树又改回的也算）＋ 未跟踪文件。
-    改名拆成删除 ＋ 新增两条。"""
+    改名拆成删除 ＋ 新增两条。
+
+    `base` 不是 HEAD 时**另并入相对 HEAD 的工作树与索引 diff**：`--base` 只能扩大范围、不能缩小。否则「HEAD 之前
+    某提交改过根内文件、本次把它改回 base 的样子」相对 base 无差异，会从改动面里消失，慢检查被跳过而结尾仍判可作
+    提交闸。"""
     _git_bytes("rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
-    diff = _git_bytes("diff", "--name-only", "--no-renames", "-z", base, "--")
-    staged = _git_bytes("diff", "--cached", "--name-only", "--no-renames", "-z", base, "--")
-    untracked = _git_bytes("ls-files", "-o", "--exclude-standard", "-z")
-    return {x for x in b"\0".join((diff, staged, untracked)).decode("utf-8", "replace").split("\0") if x}
+    parts = [_git_bytes("diff", "--name-only", "--no-renames", "-z", base, "--"),
+             _git_bytes("diff", "--cached", "--name-only", "--no-renames", "-z", base, "--"),
+             _git_bytes("ls-files", "-o", "--exclude-standard", "-z")]
+    if base != "HEAD":
+        parts += [_git_bytes("diff", "--name-only", "--no-renames", "-z", "HEAD", "--"),
+                  _git_bytes("diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--")]
+    return {x for x in b"\0".join(parts).decode("utf-8", "replace").split("\0") if x}
 
 
 def _validate_py_fingerprints(src, names):
@@ -14743,7 +14955,9 @@ def _parse_args(argv):
     import argparse
     ap = argparse.ArgumentParser(
         prog="validate.py",
-        description="框架仓质量闸。无参 = 全量（提交闸）；--only / --changed 是开发中的子集运行，结果不能当提交闸。")
+        description="框架仓质量闸。无参 = 全量（提交闸）；--only 是开发中的子集运行，不能当提交闸；"
+                    "--changed 在改动面没碰 plugins/ tools/ .github/ 时可作提交闸（推送后核同一提交的 CI），"
+                    "其余情形同样不能当提交闸。")
     ap.add_argument("--list", action="store_true", help="列出全部检查名后退出")
     ap.add_argument("--only", metavar="片段,...", help="只跑名字含任一片段的检查；有片段零匹配即报错退出 2")
     ap.add_argument("--changed", action="store_true",
@@ -14763,6 +14977,11 @@ def _parse_args(argv):
 
 
 def main(argv=None):
+    # Validation fixtures must never spend the user's real CLI quota through a
+    # newly wired scheduling hook. This switch disables only background jobs,
+    # not injection/signoff hooks or the controller's deterministic unit paths.
+    import os
+    os.environ['WORKFRAME_SELFITER_OFF'] = '1'
     # Windows UTF-8 stdout/stderr
     try:
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -14790,6 +15009,10 @@ def main(argv=None):
         skipped = [(c.__name__, "--only 未选") for c in CHECKS if c not in selected]
     elif args.changed:
         selected, skipped, info = _select_changed(args.base or "HEAD")
+        try:
+            gate_hits = _full_gate_hits(_changed_files(args.base or "HEAD"))
+        except RuntimeError:
+            gate_hits = None   # 改动面取不到 = 影响面说不清，按要全量处理
 
     clean_head = None
     if not subset:
@@ -14838,13 +15061,22 @@ def main(argv=None):
                 print(f"  - 跳过 {n}（{why}）")
         else:
             print(f"  （跳过的 {len(skipped)} 项是 --only 未选中的其余检查；全集见 --list）")
-        print("  这不是全量结果，不能当提交闸——提交前请无参运行 `python tools/validate.py`。")
+        gate_ok = args.changed and gate_hits == []
+        if gate_ok:
+            print(f"  改动面没碰 {'、'.join(_FULL_GATE_ROOTS)}：按 CLAUDE.md「改动前先查」，本结果可作提交闸——"
+                  f"推送后核同一提交的 CI 全量成功才算收口；推 main（发版）仍须无参全量。")
+        elif args.changed and gate_hits:
+            print(f"  改动面碰到了 {'、'.join(_FULL_GATE_ROOTS)} 内的 {len(gate_hits)} 个文件（如 {gate_hits[0]}），"
+                  f"不能当提交闸——提交前请无参运行 `python tools/validate.py`。")
+        else:
+            print("  这不是全量结果，不能当提交闸——提交前请无参运行 `python tools/validate.py`。")
         if failures:
             print(f"{len(failures)} check(s) failed out of {len(selected)} run.")
             for name, msg in failures:
                 print(f"  - {name}: {msg}")
             sys.exit(1)
-        print(f"Subset: all {len(selected)} run checks passed (not a commit gate).")
+        print(f"Subset: all {len(selected)} run checks passed "
+              f"({'commit gate: no change under ' + ' '.join(_FULL_GATE_ROOTS) if gate_ok else 'not a commit gate'}).")
         sys.exit(0)
     if failures:
         _drop_baseline()

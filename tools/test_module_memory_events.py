@@ -194,6 +194,36 @@ class CapacityTests(ProjectCase):
         results = self.check_capacity()
         self.assertEqual(sum(level == "warn" for level, _ in results), 2, results)
 
+    def check_header(self):
+        paths = doctor.Paths(self.project)
+        return doctor.check_memory_header_stale({"paths": paths, "scopes": doctor._discover_scopes(paths)})
+
+    def test_stale_header_phrases_reported_as_info_per_scope(self):
+        memory = memory_dir_of(self.project)
+        write_text(memory / "dev" / "MEMORY.md",
+                   "# dev MEMORY\n\n> 先过归属分流：业务知识落 modules/ 文档、此处至多留指针\n\n## 区\n\n- 条目\n")
+        write_text(memory / "shared" / "MEMORY.md",
+                   "# 共享\n\n> 业务知识落 modules/ 文档、此处至多留一行指针\n\n## 区\n")
+        write_text(memory / "qa" / "MEMORY.md", "# qa\n\n> 总量 ≤ 100 行\n\n## 区\n")
+        write_text(memory / "pm" / "MEMORY.md", "# pm\n\n> 总量 ≤100 行；超出由 librarian 生成候选\n\n## 区\n")
+        results = self.check_header()
+        infos = [msg for level, msg in results if level == "info"]
+        self.assertEqual(len(infos), 4, results)
+        self.assertTrue(any(m.startswith("pm/") and "≤100 行" in m for m in infos), results)
+        self.assertFalse(any(level in ("warn", "error", "ok") for level, _ in results), results)
+        self.assertTrue(any(m.startswith("dev/") and "至多留指针" in m for m in infos), results)
+        self.assertTrue(any(m.startswith("shared/") and "至多留一行指针" in m and "shared-memory-template" in m
+                            for m in infos), results)
+        self.assertTrue(any(m.startswith("qa/") and "≤ 100 行" in m for m in infos), results)
+
+    def test_current_header_and_phrase_in_body_are_not_reported(self):
+        memory = memory_dir_of(self.project)
+        write_text(memory / "dev" / "MEMORY.md",
+                   "# dev MEMORY\n\n> 先过归属分流：业务知识落 modules/ 权威文档，此处只收跨模块执行经验\n\n"
+                   "## 区\n\n- 条目里提到「至多留指针」与「≤ 100 行」不算文件头\n")
+        results = self.check_header()
+        self.assertEqual([level for level, _ in results], ["ok"], results)
+
     def test_doctor_accepts_module_correction_with_empty_sidecar(self):
         event = {"ts": OLD_TS, "type": "user_correction", "scope": "module", "module": "basic/sub",
                  "target_path": "projects/modules/basic/sub/shared/fact.md", "summary": "正确事实"}

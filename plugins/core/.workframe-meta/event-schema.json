@@ -290,7 +290,10 @@
     "ts": "ISO-8601 string, required",
     "type": "literal 'proposal_verified'",
     "proposal_id": "string, required",
-    "signal_met": "boolean, required"
+    "signal_met": "boolean for pass/fail; omitted for result=inconclusive; required on legacy events without result",
+    "result": "pass | fail | inconclusive, optional for legacy events; inconclusive is not failure or success",
+    "job_id": "string, optional — controller job identity",
+    "op_id": "string, optional — stable operation identity within a controller job"
    }
   },
   "proposal_failed": {
@@ -591,10 +594,10 @@
     "scope": "shared | actual role name — the source memory scope the entry moved OUT OF, not the module destination",
     "entry_key": "string, required — original source sidecar key, preserved verbatim; its namespace must equal scope",
     "archive_path": "string, required — original entry archive location, not truncated",
-    "target_path": "string, required — full destination document or module-memory.md path, not truncated",
+    "target_path": "string, required — full path of the file that now carries the fact (document, module-memory.md, or skill file), not truncated",
     "summary": "string, required — full snapshot of the moved fact, not truncated"
    },
-   "caveats": "This is not memory_migrated: a document or module-memory.md has no destination memory scope or sidecar entry. Evidence is append-only and remains after rollback; it cannot excuse a different key, a different source scope, or a keyed event written after the move. The CLI only appends evidence; it does not change MEMORY.md, archive contents, targets or the sidecar."
+   "caveats": "This is not memory_migrated: a document, module-memory.md or skill file has no destination memory scope or sidecar entry. Evidence is append-only and remains after rollback; it cannot excuse a different key, a different source scope, or a keyed event written after the move. The CLI only appends evidence; it does not change MEMORY.md, archive contents, targets or the sidecar."
   },
   "module_memory_injected": {
    "reliability": "hook_deterministic",
@@ -708,6 +711,41 @@
     "type": "literal 'signoff_guard_error'",
     "error": "string — 异常类型与消息前 200 字"
    }
+  },
+  "selfiter_job_started": {
+   "reliability": "hook_deterministic",
+   "availability": {"cc": "partial", "codex": "partial", "note": "Controller producer is shared; actual executor isolation and hook scheduling require per-door live evidence."},
+   "producer": "selfiter_controller.Controller.run after shared frequency reservation",
+   "consumers": ["audit", "self-iteration job history"],
+   "fields": {"ts": "UTC second precision", "type": "literal selfiter_job_started", "job_id": "string, required", "door": "cc | codex"}
+  },
+  "selfiter_job_finished": {
+   "reliability": "hook_deterministic",
+   "availability": {"cc": "partial", "codex": "partial", "note": "Controller records completed result handling; this does not claim semantic effectiveness."},
+   "producer": "selfiter_controller.Controller.apply_result after durable job result",
+   "consumers": ["audit", "self-iteration job history"],
+   "fields": {"ts": "UTC second precision", "type": "literal selfiter_job_finished", "job_id": "string, required", "status": "completed"}
+  },
+  "selfiter_job_failed": {
+   "reliability": "hook_deterministic",
+   "availability": {"cc": "partial", "codex": "partial", "note": "Controller failure recording is shared; executor and scheduling capability is assessed separately."},
+   "producer": "selfiter_controller.Controller.run on transport or result-validation failure",
+   "consumers": ["audit", "self-iteration circuit diagnostics"],
+   "fields": {"ts": "UTC second precision", "type": "literal selfiter_job_failed", "job_id": "string, required", "reason": "failure description"}
+  },
+  "selfiter_op_applied": {
+   "reliability": "hook_deterministic",
+   "availability": {"cc": "partial", "codex": "partial", "note": "Module reminders and role-memory changes based on frozen evidence are recorded by the shared controller; model semantic review is fallible."},
+   "producer": "selfiter_controller.Controller._bookkeep; same-role notes promotions use memory_promoted with job_id/op_id, other evidence-based writes use this event",
+   "consumers": ["audit", "self-iteration job history"],
+   "fields": {"ts": "UTC second precision", "type": "literal selfiter_op_applied", "job_id": "string, required", "op_id": "string, required", "target_path": "project-relative target"}
+  },
+  "selfiter_op_rolled_back": {
+   "reliability": "hook_deterministic",
+   "availability": {"cc": "partial", "codex": "partial", "note": "Explicit preview-hash approval required; no automatic deletion permission."},
+   "producer": "selfiter_controller.Controller.rollback after explicit approved restoration",
+   "consumers": ["audit", "self-iteration job history"],
+   "fields": {"ts": "UTC second precision", "type": "literal selfiter_op_rolled_back", "job_id": "string, required", "op_id": "string, required", "target_path": "project-relative target"}
   },
   "discipline_spotcheck": {
    "reliability": "model_mediated",

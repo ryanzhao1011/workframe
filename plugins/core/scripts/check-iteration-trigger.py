@@ -616,9 +616,14 @@ def main():
     # Codex 门下会话不在 workframe 项目内：零写入、零输出退出（判定与门条件只在 _harness 一处）
     if _harness.hook_outside_project():
         return 0
+    from _selfiter_policy import in_job
+    if in_job():
+        return 0
     state = load_activity()
     if state.get("dormant") or state.get("wake_up_pending"):
         sys.exit(0)
+    from _selfiter_hooks import on_hook
+    on_hook(PROJECT_DIR, _harness.harness(), 'Stop')
 
     # dedup_key 不含时间维度（v0.4 M6 修正）：
     # pending_maintenance 是「当前待办信号板」而非事件流水（流水归 events.jsonl）。

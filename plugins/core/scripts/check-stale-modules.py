@@ -306,10 +306,11 @@ def parse_code_paths(yaml_path):
 # ---------- stale 标记读写 ----------
 
 
-def load_stale():
-    if not STALE_FILE.exists():
+def load_stale(stale_file=None):
+    path = Path(stale_file) if stale_file is not None else STALE_FILE
+    if not path.exists():
         return {"submodules": {}}
-    text = STALE_FILE.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
     out = {"submodules": {}}
     current_sub = None
     for raw in text.splitlines():
@@ -330,6 +331,20 @@ def load_stale():
             if m:
                 out["submodules"][current_sub]["reasons"].append(m.group(1).strip())
     return out
+
+
+def structured_stale(info):
+    """Adapt recorded reasons for readers; never compare code or change marks."""
+    reasons, files = [], []
+    for reason in info.get("reasons", []):
+        message = str(reason)
+        kind, separator, value = message.partition(":")
+        path = value.replace("\\", "/") if separator and kind in (
+            "code_changed", "git_diff_at_session_start") and value else None
+        reasons.append({"kind": kind, "path": path, "message": message})
+        if path is not None and path not in files:
+            files.append(path)
+    return {"reasons": reasons, "files": files}
 
 
 def save_stale(stale):

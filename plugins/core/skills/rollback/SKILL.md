@@ -8,6 +8,8 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 
 # /core:rollback 回滚自动变更
 
+后台自迭代作业按 job journal 恢复，不套用下文旧 L1/L2 的整文件备份恢复。先执行 `workframe-selfiter rollback --project <项目根> --job-id <id>` 给用户看改前改后与冲突，`remove_file=true` 表示会移除该作业新建的文件；用户明确确认该版后才加 `--review-hash`。禁止覆盖其后的用户编辑；涉及条目消失或旧口径恢复也须明确确认。未完成写入用 `recover` 补齐原作业进度，不新建作业重做。inconclusive 保留恢复材料，不自动按验证通过清理。
+
 ## 用途
 
 用户显式 `/core:rollback` 时执行。**Claude 不会自动调用**。

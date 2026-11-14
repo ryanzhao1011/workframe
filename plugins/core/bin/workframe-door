@@ -2,6 +2,7 @@
 """
 Two-door installer (workframe-door): install / check / upgrade the Codex door;
 check the Claude Code door read-only, and back-fill it when it is missing.
+Codex door features require Python 3.11 or later.
 
 Claude Code plugin bin/ should put this command on the Bash PATH. If it is not
 on PATH in your shell, run the script directly:
@@ -30,6 +31,12 @@ rejected unless --apply is given too.
 """
 
 import sys
+
+# This must run before importing the door, including argparse abbreviations.
+if any(arg.startswith("--e") and "--expect-source".startswith(arg.partition("=")[0])
+       for arg in sys.argv[1:]):
+    sys.dont_write_bytecode = True
+
 from pathlib import Path
 
 

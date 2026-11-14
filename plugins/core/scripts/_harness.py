@@ -27,6 +27,22 @@ HARNESSES = (CC, CODEX)
 ROOT_MARKER = ".workframe-config.json"
 
 
+def cc_config_dir(env=None):
+    """User configuration for an explicitly invoked CC CLI, from either door.
+
+    This is a target CLI configuration path, never project/harness identity.
+    An explicit environment snapshot preserves the caller's original source.
+    """
+    source = os.environ if env is None else env
+    return Path(source.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def cc_oauth_token(env=None):
+    """Read an existing CC token only; no credential refresh or persistence."""
+    source = os.environ if env is None else env
+    return source.get("CLAUDE_CODE_OAUTH_TOKEN")
+
+
 def find_root(start=None):
     """从 `start`（默认 cwd）向上找 `ROOT_MARKER`；找不到返回 None。"""
     try:

@@ -8,6 +8,8 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 
 # /core:maintenance-review 唤醒后手动维护
 
+后台作业与本手动入口分工：`workframe-selfiter status` 查看自动融合、待批提案与复测记录；用户选择查看后按 self-iteration 的后台作业段逐项确认，不能把“稍后”记成驳回。后台关闭或执行器不可用时保留本入口；`--dismiss` 不会替用户批准自动提案。旧提案仍按原验证信号人工核对，不从自由文本猜测机器验证方法。
+
 ## 用途
 
 dormant 项目被重新打开后，**自动维护链路全部暂停**。用户主动 `/core:maintenance-review` 才恢复正常维护。

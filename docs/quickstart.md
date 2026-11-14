@@ -6,7 +6,7 @@
 
 - **Claude Code** 已安装（CLI 和/或 IDE 扩展）。参见 [claude.com/claude-code](https://claude.com/claude-code)。
 - **Codex**（可选，codex-cli 0.153.4+）：想在 Codex 里也用本框架时装——一份源、两扇门，同一个项目可以同时挂两边；装法见 [setup-guide.md](./setup-guide.md) §Codex 门。
-- **Python 3** 可通过命令行调用。
+- **Python 3** 可通过命令行调用；Codex 门相关功能需要 Python 3.11+。
   - Windows：通常是 `python` 或 `py -3`
   - macOS / Linux：`python` 或 `python3`（Ubuntu 22.04+ / Fedora 等默认只有 `python3`）
   - hook 由 `plugins/core/bin/workframe-python` launcher 自动选择解释器（POSIX：`python` → `python3`；Windows：`python` → `py -3` → `python3`），无需手工改 `hooks.json`，也无需做 alias

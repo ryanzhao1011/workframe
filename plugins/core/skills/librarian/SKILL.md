@@ -1,6 +1,6 @@
 ---
 name: librarian
-description: '记忆整理员：评估 notes.md 条目并按 D/U/R/A 提升到合适落点（含同主题融合）、扫描模块记忆、管理 MEMORY.md 容量候选、维护整理日志与 memory-index sidecar。用于 SessionStart 询问式开场卡用户选「处理」后（主通道）、`workframe-maintenance` 批处理工单的 notes 积压项、会话中出现 `memory_backlog` 维护信号时、MEMORY.md 接近容量上限需要评估降级候选时。典型触发：「整理一下记忆 / notes 太多了」。边界：只看记忆变动流水 → memory-log；纠正类条目由 correction-detection 按落点分流，不经本 skill。'
+description: '记忆整理员：评估 notes.md 条目并按 D/U/R/A 提升到合适落点（含同主题融合）、扫描模块记忆、管理 MEMORY.md 容量候选、维护整理日志与 memory-index sidecar。用于 SessionStart 询问式开场卡用户选「处理」后（主通道）、`workframe-maintenance` 批处理工单的 notes 积压项、会话中出现 `memory_backlog` 维护信号时、MEMORY.md 接近容量上限需要评估降级候选时、要核对 MEMORY 条目是否已被 skill / 文档承载时。典型触发：「整理一下记忆 / notes 太多了 / 记忆和 skill 有没有重复」。边界：只看记忆变动流水 → memory-log；纠正类条目由 correction-detection 按落点分流，不经本 skill。'
 user-invocable: false
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 ---
@@ -81,9 +81,9 @@ shared 层的整理规则与 role 层一致（D/U/R/A 评估、容量管理、�
 
 > **前三个 `context/*` 落点在「订阅方项目」里不可直接写。** `context/` 在插件内，而插件装在带版本号的缓存目录——订阅方项目对它**要么没有写权限，要么写进去后一次插件升级就静默消失**，后者更糟，因为它看起来成功了。
 >
-> **可选性判据必须是运行时可判的**，不能靠「你是不是框架维护者」这种自述：**判插件根是否可写**（第 0 步跑打包器时顺带取这一位）。插件根可写 → 五个落点都可选；只读 → **`context/*` 三个不可选**，`AGENTS.md` 与项目 skill 仍可选。
+> **项目整理不能以插件根可写取得改框架的资格**：`context/*` 对所有消费项目都不是直接写入落点；判到这里时只产出需上游采纳的说明，不修改插件。`AGENTS.md` 与项目 skill 仍按各自审批入口处理。
 >
-> **判到「该进 `context/`」但插件根只读时**：librarian **不写任何文件**，改为在**本项目**的 `promotion-candidates.md` 里落一条候选并标 `upstream: core`，摘要里写清「本条需上游框架采纳才能生效，本项目内无落点」。由用户决定是否向框架仓反馈。**不要写成「走 L2 提案」就完事**——L2 提案在本项目里审批，而变更要落在另一个仓，审批通过也改不了任何东西。
+> **判到「该进 `context/`」时**：librarian 不写插件，结果摘要说明「本条需上游框架采纳才能生效，本项目内无直接落点」，由用户决定是否反馈；不为普通项目创建上游字段或候选箱。项目审批不授予修改另一个仓的权限。
 
 **先问一次（与下面三问并行，不是第四问）**：这条能不能变成**机器闸**（断言 / 校验 / hook）？能 → **优先落闸**——纪律靠模型每次记得住才生效，闸不用。**然后再走三问**决定纪律文本放哪：闸抓违例、纪律说该怎么做，两者互补不互斥，落了闸不等于不用写。
 
@@ -115,6 +115,8 @@ L2 落点的提升**不自动执行**：把候选清单写入 `.workframe/state/
 - **询问式触发（SessionStart 开场卡）/ `--maintenance` 批处理**：**不当场出卡**——只写入候选文件攒卡，在结果摘要里提示用户「有 N 条 L2 候选待拍板」。开场卡场景保持轻量（用户是来干正事的），批处理场景是 print 模式（没有交互卡可用）。
 
 ### 第 2.5 步：融合整理 SOP（写入前必须执行）
+
+后台自动作业沿用本节的读全文、同主题融合、冲突停止、边界保留与写后整章检查；执行权限见 self-iteration 的后台作业段。后台只做局部并进或新增，不自动迁移、删除或重整章节；notes 保留原文，控制器按来源内容指纹记录已处理状态，不执行本节第 9 条的人工整理归档动作。容量不够只出待批整理建议，不挤掉旧条目。
 
 > **禁止无脑 append。**往任何目标文档写入前，按顺序执行以下检查。这是本 skill 最容易被跳过、也最影响质量的一步——直接追加会让目标文档不断膨胀、同义内容重复、口径互相矛盾。
 > 写入侧已前置：correction-detection / auto-update 的写入路径（工序在 skill `signal-intake` §1 A.U.N.）复用第 3 条的操作标签做**写时**同主题检查；本步在批处理/提升场景兜底复查漏网。
@@ -230,6 +232,7 @@ logs/librarian-snapshots/{YYYY-MM-DD}/{HH-mm-ss}-{role}-memory-index-entries.jso
 | `shared/notes.md` | 从 shared 缓冲区提升 |
 | `auto-memory` / `<role>/MEMORY.md` / `shared/MEMORY.md` | 跨 scope 搬迁的来源域 |
 | `manual backfill` | 人工补录 |
+| `selfiter-evidence` | 后台控制器依据冻结证据归纳；`source_path` 保留证据来源，不算 notes 提升 |
 | `librarian-promoted` | **历史值，只读不新写**——早期由 librarian 提升的条目用它。它答的是「谁做的」而非「从哪来」，与其余值不同轴；存量条目保持原样不回改，新写入一律用上面几种 |
 
 
@@ -266,9 +269,9 @@ Key 规则：`{scope}:{YYYY-MM-DD}:{条目前 20 字规范化}`。规范化三�
 
    两种取值三账本都认（`check C` 同时收行首日期与迁移日），但**同一条目内三处必须自洽**：`entry_key` 的日期段要与 `created_at` 相同。
 
-4. **移出角色记忆到文档或模块记忆**——先逐条列原文、建议落点、目标是否已有与动作，交用户确认；新模块投递尚未验证可用时，不迁出仍在起提醒作用的条目。批准后先补齐目标，把源条目原文归档到同目录 `notes-archive.md`，再移出 MEMORY 与 sidecar，写 `memory_moved_out`：保留源 `scope` / `entry_key`，`archive_path` 指向归档位置，`target_path` 写完整目标路径，`summary` 写事实快照。不借用 `memory_migrated`，后者的 key 属目标记忆域。存量指针仍有效，不因本次分流自行处理。
+4. **移出角色记忆到文档、模块记忆或 skill**——先逐条列原文、建议落点、目标是否已有与动作，交用户确认；新模块投递尚未验证可用时，不迁出仍在起提醒作用的条目。批准后依次：前置快照 → 补齐目标 → 把源条目原文归档到同目录 `notes-archive.md`（标注承接位置）→ 写 `memory_moved_out` → 最后才移出 MEMORY 与 sidecar。事件字段：保留源 `scope` / `entry_key`，`archive_path` 指向归档位置，`target_path` 写完整目标路径（承接它的文档、`module-memory.md` 或 skill 文件），`summary` 写事实快照。源条目没有 sidecar entry 时照样写事件，`entry_key` 按 skill `signal-intake` §5 的归一规则由条目原文现算，并在汇报里写明「源无 sidecar」。不借用 `memory_migrated`，后者的 key 属目标记忆域。存量指针条目不自行删除，由下面的「反向对账」出候选。
 
-   用户批准并完成本步前置快照、目标落盘、原文归档及 MEMORY/sidecar 迁出后，用代码通道记事件；下例 `dev` 替换为源条目的实际域，原 `entry_key` 照抄，不重新归一：
+   事件在**改 MEMORY 与 sidecar 之前**写——它是可恢复证据，先于被它记录的改动落盘；同一次迁出中途失败要重试时，先查本次那条是否已经写下——同 `scope`、同 `entry_key`、同 `archive_path` 与 `target_path`，且晚于该 key 最近一次写入事件（提升 / 纠正 / 搬迁）；已有就不再追加。更早的同 key 迁出（例如条目回滚恢复后再次迁出）不算本次证据，照常追加。下例 `dev` 替换为源条目的实际域，原 `entry_key` 照抄，不重新归一：
    ```bash
    python "$(cat .workframe/state/plugin-root.txt)/bin/workframe-event" memory-moved-out \
        --scope dev --entry-key "<原 entry_key>" \
@@ -277,6 +280,18 @@ Key 规则：`{scope}:{YYYY-MM-DD}:{条目前 20 字规范化}`。规范化三�
    ```
 
 `summary` 是历史快照字段，memory-log 优先展示事件里的 summary；不要依赖当前 sidecar 仍能查到已降级条目。
+
+**反向对账（MEMORY 条目是否已被权威资产承载）**——每次运行都对第 1 步读到的全部 MEMORY 条目做一遍，不只看本轮新提升的。带去向标注的条目（「已进 X」「已固化进 X」「口径见 X」「权威见 X」等）先看，但标注只是检索线索：没标的也可能已被承载，标了的也可能不承载。逐条读去向原文核对，判成三类出候选：
+
+| 判定 | 条件 | 动作 |
+|---|---|---|
+| **退役** | 以下四条**同时**成立：① 目标完整承载规则、适用条件与例外——照它做就不会犯这条记录的错；② 这条的**全部**使用场景里目标都有加载入口（同场景 skill 自动叠加、`AGENTS.md` 或必载纪律每会话加载算；只在别的流程才读到的 skill 或 reference 不算）；③ 不是 `[纠正]` 条目，也不是有意常驻注入的红线；④ 独有的增量与出处已有去处 | 按上面第 4 条移出，`target_path` 写承接它的文件 |
+| **订正标注** | 标注声称的去向不承载或只承载一部分 | 改写标注，或把未承载的部分补进去向后再判退役 |
+| **保留** | 四条有任一不成立 | 不动；候选清单里写一句不成立的是哪一条 |
+
+退役与订正都是「改结构」那档（第 2.5 步第 3 条），逐项交用户批准。**写入侧同理**：往 MEMORY 或 notes 写「已进 X / 已固化进 X」这类去向标注前，先读 X 核对它真的承载了这条——没核过的标注会让后来的人把仍有用的条目当重复清掉。
+
+本节靠 librarian 被调起才运行，没有独立触发器：notes 积压为零的项目里它不会自动跑，要用户点名「核对记忆和 skill / 文档有没有重复」。
 
 **量化衰减**（基于 sidecar 的 provenance 来源类型 + age 判断——归类不打分）：
 

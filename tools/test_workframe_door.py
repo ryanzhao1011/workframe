@@ -3626,6 +3626,9 @@ def main():
     import unittest
     diagnostic_result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_codex_trust))
     check("实时只读信任状态矩阵", diagnostic_result.wasSuccessful(), True)
+    import test_install_source
+    source_result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_install_source))
+    check("带来源身份的装机入口", source_result.wasSuccessful(), True)
     test_preflight()
     test_eol_checkout()
     test_do_codex_order()

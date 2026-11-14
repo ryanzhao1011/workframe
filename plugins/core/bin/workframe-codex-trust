@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Narrow Codex hook trust recovery with explicit snapshot/source expectations."""
+
+import os
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+os.environ["GIT_OPTIONAL_LOCKS"] = "0"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+from workframe_codex_trust import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

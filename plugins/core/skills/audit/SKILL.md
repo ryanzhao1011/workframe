@@ -8,6 +8,8 @@ allowed-tools: [Read, Glob, Grep, Bash]
 
 # /core:audit 审计维护活动
 
+后台自迭代另读 `workframe-selfiter status --project <项目根>` 的 job/操作结果与 AUTO 待批记录，按作业编号串起来源、改动、延期/失败与复测；人类可读摘要在状态目录 `selfiter/history.md`。inconclusive 单列，不算成功或失败；模型建议不计为实际写入。发现恢复中的 journal 要说明，不以存在 result 文件推断整个变更闭环。审计不批准提案、不启动模型、不改待批状态。
+
 ## 用途
 
 用户显式 `/core:audit` 时执行。**Claude 不会自动调用**（`disable-model-invocation: true`）。

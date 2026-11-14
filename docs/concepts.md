@@ -1,5 +1,7 @@
 # 核心概念
 
+后台自迭代把“模型建议”和“实际写入”分开：模型只分析冻结证据，控制器负责权限、数量/容量、基线一致性、持久化操作记录和恢复。记忆优先融合现有同主题条目，已有覆盖不写；冲突、结构调整和受保护内容交用户确认。每项目滚动七天、全机 UTC 每日的次数限制跨两门共享，不设费用限额。待批、日志、复测与关闭方式见 [后台自迭代](./setup-guide.md#后台自迭代)。
+
 本文档解释 Workframe 依赖的几个关键 Claude Code 机制，以及本框架如何与它们协作。框架是一份源、两扇门——Codex 侧的对应物（插件缓存、hook 信任门、项目层 `.codex/config.toml`）见 [setup-guide.md](./setup-guide.md) §Codex 门；下文按 Claude Code 讲。
 
 ## Claude Code 的三级资源加载
@@ -130,11 +132,11 @@ modules/ 体系把"功能模块"作为产品研发的一等公民：`projects/mo
 | `.workframe/agent-memory/shared/` | ≥2 个角色 | 跨角色权威事实（写入条件更严） | 每个 subagent 启动时全量注入（fork 除外，开场投递的那份已在它继承的上下文里）；主会话开场全量投递 |
 | `projects/modules/<basic>/<sub>/module-memory.md`（跨子模块放基础模块级） | 在该模块动手的人 | 作业提醒与必读入口，不写产品结论 | 文件存在且该线程碰到模块时由 hook 投递；主线程每压缩周期一次，压缩后再次碰到才重投；子线程压缩后暂不恢复 |
 
-**落点判据是「未来谁要读它」，不是「这次谁做的」**——主 Claude 做 dev 域的活，跨模块执行经验该落 dev 域给未来的 @dev 读。产品或系统的定义与规格进需求 PRD，跨需求进模块 `shared/`；技术设计理由仍进 ADR。只在该模块动手时要用的提醒进 `module-memory.md`，不新增 role/shared 指针；既有指针继续有效，迁出仍需用户确认。完整判据在每会话注入的必载纪律里（§Step 2 — 经验沉淀，源文件 [`20-protocol-common.md`](../plugins/core/context/both/20-protocol-common.md)；记忆分工表在同一批注入片的「记忆分工」一节，源文件 [`50-roles-and-flow.md`](../plugins/core/context/both/50-roles-and-flow.md)）。
+**落点判据是「未来谁要读它」，不是「这次谁做的」**——主 Claude 做 dev 域的活，跨模块执行经验该落 dev 域给未来的 @dev 读。产品或系统的定义与规格进需求 PRD，跨需求进模块 `shared/`；技术设计理由仍进 ADR。只在该模块动手时要用的提醒进 `module-memory.md`，不新增 role/shared 指针；既有指针继续有效，是否已被权威资产承载由 `librarian` 的反向对账核对，迁出仍需用户确认。完整判据在每会话注入的必载纪律里（§Step 2 — 经验沉淀，源文件 [`20-protocol-common.md`](../plugins/core/context/both/20-protocol-common.md)；记忆分工表在同一批注入片的「记忆分工」一节，源文件 [`50-roles-and-flow.md`](../plugins/core/context/both/50-roles-and-flow.md)）。
 
 模块记忆按需创建，`module-init` 不建空文件，也不建需求级版本。每份 ≤1,500 字符，一行一条 `- 做 X 时 → 要做 Y / 必读 Z`，环境与工序参数可写；改模块文档时复查，`librarian` 定期扫描。投递头标出来源路径与相对路径基准，并说明「这是作业提醒，与文档冲突时信文档」；条目内相对路径以该文件所在目录为基准，`projects/...` 从项目根解析。hook 在工具调用后提醒：shell 只识别模块文档路径，文件工具与 `apply_patch` 还通过 `code_paths` 反查；放不下全文时只给路径，后续触碰会重试，不是写前拦截。投递机制与两门取证方法见 [context-injection.md](./context-injection.md#模块记忆投递)。
 
-条目跨记忆域搬家时记 `memory_migrated` 事件，与同域内 notes→MEMORY 的 `memory_promoted` **分立不混用**：后者是消费方判断「这个域多久没消化 notes 了」的依据，混用会污染这个信号。经用户确认从角色记忆移到文档或模块记忆时用 `memory_moved_out`，保留源 key、归档路径与目标路径；模块纠正用 `user_correction` 的 `scope=module`，写模块与完整 `target_path`，不写 MEMORY、sidecar 或 `entry_key`。文档纠正随版本演进，追溯靠 git、变更记录与事件，`[纠正]` 的永不清理只保护记忆条目。
+条目跨记忆域搬家时记 `memory_migrated` 事件，与同域内 notes→MEMORY 的 `memory_promoted` **分立不混用**：后者是消费方判断「这个域多久没消化 notes 了」的依据，混用会污染这个信号。经用户确认从角色记忆移到文档、模块记忆或 skill 时用 `memory_moved_out`，保留源 key、归档路径与目标路径；模块纠正用 `user_correction` 的 `scope=module`，写模块与完整 `target_path`，不写 MEMORY、sidecar 或 `entry_key`。文档纠正随版本演进，追溯靠 git、变更记录与事件，`[纠正]` 的永不清理只保护记忆条目。
 
 ### 三账本对齐
 
