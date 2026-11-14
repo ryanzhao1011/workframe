@@ -28,9 +28,12 @@ class CapabilityTests(unittest.TestCase):
     def test_new_build_requires_probe_not_exact_version_allowlist(self):
         import inspect
         self.assertIn("cache_dir", inspect.signature(runner.capability_status).parameters)
+        # subprocess.run is replaced process-wide here; on macOS platform.platform() shells out to
+        # `file`, so it is replaced too instead of receiving the version stub as its result.
         with patch.object(runner, "_resolve_executable", return_value=str(self.exe)), \
              patch.object(runner.subprocess, "run", return_value=type("Version", (), {
                  "returncode": 0, "stdout": "codex-cli 0.167.2"})()), \
+             patch.object(runner.capability.platform, "platform", return_value="test-os"), \
              patch.object(runner, "_execute") as execute:
             status = runner.capability_status("codex", cache_dir=self.cache)
         self.assertEqual(status["capability"], "requires_probe")
@@ -118,7 +121,8 @@ class CapabilityTests(unittest.TestCase):
 
     def test_fingerprint_changes_with_binary_version_platform_and_adapter(self):
         version = type("Version", (), {"returncode": 0, "stdout": "codex-cli 0.167.2"})()
-        with patch.object(cap.subprocess, "run", return_value=version):
+        with patch.object(cap.subprocess, "run", return_value=version), \
+             patch.object(cap.platform, "platform", return_value="test-os"):
             first = cap.fingerprint("codex", self.exe)
             self.exe.write_bytes(b"replacement-build")
             self.assertNotEqual(first["id"], cap.fingerprint("codex", self.exe)["id"])

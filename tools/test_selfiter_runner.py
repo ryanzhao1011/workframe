@@ -236,7 +236,11 @@ class RunnerTests(unittest.TestCase):
             [sys.executable, "-c", code], "evidence \u4e2d\u6587", self.job, env, 10)
         self.assertEqual(rc, 0, stderr)
         self.assertFalse(expired)
-        self.assertEqual(json.loads(stdout), ["evidence \u4e2d\u6587", str(self.job), "own-test"])
+        # The child reports its resolved working directory (/private/var/... on macOS), so compare
+        # by identity of the directory rather than by spelling.
+        reported = json.loads(stdout)
+        self.assertEqual([reported[0], reported[2]], ["evidence \u4e2d\u6587", "own-test"])
+        self.assertTrue(os.path.samefile(reported[1], self.job))
 
     def test_transport_timeout_retains_logs_and_failure(self):
         with patch.object(runner, "capability_status", return_value={
