@@ -129,9 +129,7 @@ hook**。绕过是可观测的（doctor 会报看板不可解析），但本 hoo
 
 ## 事件
 
-本次新出现或改过的签注通过校验时，写一行 `self_signoff`（任务、类别、验证方）。由 hook 写，
-不再要求模型手写——经 Bash 写入的那条也写（结果判得出，只是不拦）；Codex 门 `apply_patch`
-改到看板时同样写。
+签注通过校验时不写事件——只记成功的流水没有读者。只写 hook 自身出错的 `signoff_guard_error`。
 
 ## 顺带：Codex 门的 skill 入口（主会话角色记忆投递）
 
@@ -494,11 +492,11 @@ def guard(project_dir, board):
 
     problems —— 本次新出现或改过的签注的问题，非空 ⇒ 调用方决定拦还是只报
     notes    —— 存量问题与运行提示，只报
-    passed   —— 本次新出现或改过且通过的 [(task_id, mode, verifier_who)]，用于写事件
+    passed   —— 本次新出现或改过且通过的 [(task_id, mode, verifier_who)]（不写事件，供单测断言）
 
     **整板缓存**（抬头 §整板缓存）：看板字节的 SHA-256 与 `_context_key` 都与上一次完整检查
     相同 ⇒ 不解析，原样返回上一次的 problems 与存量 notes（**查过但没过的照报**，不当通过）；
-    passed 为空——「签注通过」与 `self_signoff` 事件只在那条签注新出现或改过的那一次发生。
+    passed 为空——「签注通过」只在那条签注新出现或改过的那一次发生。
     """
     problems, notes, passed = [], [], []
     try:
@@ -702,11 +700,7 @@ def main():
 
     for n in notes:
         print(n, file=sys.stderr)
-    for task_id, mode, who in passed:
-        fields = {"task_id": task_id, "mode": mode}
-        if who:
-            fields["verifier"] = str(who)[:80]
-        append_event(project_dir, "self_signoff", **fields)
+    # 通过的签注不写事件（只记成功的流水没有读者）；`passed` 仍由 guard 返回，供单测与将来的消费方
     if problems:
         if advisory:
             # **只报不拦**：经 Bash 写入时判不出这条命令动没动看板，拦它就会误伤

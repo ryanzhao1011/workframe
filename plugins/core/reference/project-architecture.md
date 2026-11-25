@@ -54,16 +54,11 @@
 │   │   ├── pending/                    ← 待审批
 │   │   ├── applied/                    ← 已执行（含 verified 标记）
 │   │   └── rejected/                   ← 驳回归档
-│   ├── evals/                          ← 项目级 eval cases 骨架
-│   │   ├── agents-md/
-│   │   ├── skills/
-│   │   └── agents/
 │   ├── changelog.md                    ← 项目变更日志（librarian + self-iteration + rollback 共写）
 │   ├── dev-log.md                      ← 开发账本（人 / 模型手写；close_check `[ledger]` 项读它）
 │   └── archive/                        ← **手动**归档区（主 Claude 在用户确认后执行）
-└── logs/                               ← Librarian 快照 + hook 输出
-    ├── librarian-snapshots/{date}/...  ← Librarian 变更快照
-    └── subagent-activity.log           ← SubagentStop hook 输出
+└── logs/                               ← Librarian 快照 + 维护提交记录
+    └── librarian-snapshots/{date}/...  ← Librarian 变更快照
 ```
 
 ## projects/ 子目录说明
@@ -150,7 +145,7 @@ scaffold 装机即落盘（模板 `dev-log-template.md`，自带一条以装机�
 
 **默认进 git**（团队协作的治理资产 + 共享记忆）：
 
-- 项目治理资产：`projects/board.yaml` / **`projects/modules/**`**（modules/ 体系下；含 overview / module.yaml / submodule.yaml / current-state / requirements / decisions / research / others 全部子树）/ `projects/specs/**` / `projects/issues/TEMPLATES.md` / `projects/issues/*.yaml` / `projects/proposals/**` / `projects/evals/**` / `projects/changelog.md` / `projects/dev-log.md`
+- 项目治理资产：`projects/board.yaml` / **`projects/modules/**`**（modules/ 体系下；含 overview / module.yaml / submodule.yaml / current-state / requirements / decisions / research / others 全部子树）/ `projects/specs/**` / `projects/issues/TEMPLATES.md` / `projects/issues/*.yaml` / `projects/proposals/**` / `projects/changelog.md` / `projects/dev-log.md`
 - 共享记忆：`.workframe/agent-memory/shared/MEMORY.md` / `.workframe/agent-memory/shared/notes.md`
 - 角色记忆：`.workframe/agent-memory/<role>/MEMORY.md` / `.workframe/agent-memory/<role>/notes.md`（默认进 git；按项目协作模式可调整）
 - 记忆 sidecar：`.workframe/state/memory-index.json`——**`.workframe/state/` 下唯一进 git 的文件**，理由见下方"默认不进 git"条目
@@ -163,11 +158,11 @@ scaffold 装机即落盘（模板 `dev-log-template.md`，自带一条以装机�
 
 **默认不进 git**（运行时本地状态 + 敏感文件）：
 
-- `.workframe/state/**`：所有 hook / 脚本维护的运行时状态（events.jsonl / activity-state.json / skill-metrics.yaml / session-digest-latest.md / rollback-index.json）——属于**本地派生状态**，每端在自己的会话中独立产生与积累；不进 git。跨端协作依赖 git 中的治理资产（`projects/**`）+ 共享记忆（`agent-memory/**/MEMORY.md` / `notes.md`）+ rules / proposals / changelog，**不**依赖共享 `.workframe/state/`
+- `.workframe/state/**`：所有 hook / 脚本维护的运行时状态（events.jsonl / activity-state.json / skill-metrics.yaml / rollback-index.json）——属于**本地派生状态**，每端在自己的会话中独立产生与积累；不进 git。跨端协作依赖 git 中的治理资产（`projects/**`）+ 共享记忆（`agent-memory/**/MEMORY.md` / `notes.md`）+ rules / proposals / changelog，**不**依赖共享 `.workframe/state/`
   - **例外：`memory-index.json` 进 git**。它虽然住在这个目录下，却不是派生状态——`provenance`（user-decree / 模型沉淀）、`protected`、`created_at` 无法从记忆正文重算，丢了就永久丢了，`[纠正]` 条目会因此失去保护标记。记忆本身进 git 而它的保护元数据不进，等于跨端只同步了一半。
   - 写法是硬契约：`.workframe/state/*` + `!.workframe/state/memory-index.json`。**不能简写成 `.workframe/state/`**——git 不会重新纳入被排除父目录下的文件，父目录整个被忽略时 `!` 例外被静默无视（已跟踪的项目看不出异样，新项目的 sidecar 直接失踪且零报错）。`gitignore-template` 与 `validate.py` 的 gitignore 闸共同锁住这个形态。
   - 多人协作时 sidecar 若产生合并冲突：**删本地重建/重算，不手工 merge JSON**。
-- `logs/**`：所有日志（librarian-snapshots / subagent-activity.log）
+- `logs/**`：所有日志（librarian-snapshots 等）
 - `.claude/settings.local.json`：个人本地覆盖
 - `.claude/skills`——**仅链接形态**（它是指向 `.agents/skills/` 的 junction / symlink，真实源 `.agents/skills/**` 照常进 git）：忽略行写 `.claude/skills`，**不带尾斜杠**——带尾斜杠的写法只匹配目录，macOS / Linux 上盖不住符号链接，链接对象会被 `git add -A` 带进提交；Windows 上不忽略则 git 把 junction 当目录、把同一份文件再登记一次。真目录形态（已装项目）不忽略、照常进 git。`gitignore-template` 与 `validate.py` 的 gitignore 闸按整行锁住这个写法。
 - 含 PII / API key 的业务文件
@@ -202,9 +197,9 @@ scaffold 装机即落盘（模板 `dev-log-template.md`，自带一条以装机�
 | 字段 | 来源 | 说明 |
 |---|---|---|
 | `project_name` | 对话采集 | 展示名，用于 SessionStart 横幅、heartbeat-check；可与目录名不同 |
-| `framework_version` | 自动写入 | 从 core 的 `plugin.json` 动态读取 |
+| `framework_version` | 首次写入 | **创建史**：首次记录时从 core 的 `plugin.json` 动态读取，之后重跑 scaffold 不刷新；不代表当前版本（当前版本看各门实际加载的插件根下 `.claude-plugin/plugin.json`）。存量值只说明「首次记录时的版本」，不当作可证的创建版本 |
 | `framework_path` | 仅 clone 框架仓的入口会写 | marketplace 订阅场景没有仓根，**不写该字段**；读取方必须有缺省兜底 |
-| `project_type` | scaffold 默认 | 固定 `product-work`（历史兼容字段，取值单一；保留仅为兼容既有消费方如 module-init，读取方不据此分支）|
+| `project_type` | **可缺**，显式给了才写 | 历史兼容字段，取值单一 `product-work`；新装不写，旧项目里的值照读，读取方不据此分支；非法值 doctor 报 warn |
 | `dormant_profile` | scaffold 默认 | 4 档（见 §Dormant profiles），默认 `normal` |
 | `role_profile` | 对话推断 | 3 档（见 §Role profile），默认 `software-team`；脚本读取必须默认兜底 |
 | `close_check` | scaffold 默认 | `module_close_check.py` 账本检查的项目级声明，装机即写入；关闭方式是改成空壳 `{}`（见下）|
@@ -225,7 +220,7 @@ scaffold 装机即落盘（模板 `dev-log-template.md`，自带一条以装机�
 - `ledger`：项目根相对路径，指向本项目的工作账本（条目头须为 `## YYYY-MM-DD · 标题` 形态）
 - `required_fields`：账本最新条目必须含有的字段头列表（匹配 `- **字段**：` 形态，只验字段头存在，不验内容）
 - **scaffold 装机时写入上面这组默认值**，同时按 `ledger` 落盘账本文件（模板 `dev-log-template.md`，自带一条以装机日为期的真实首条）——键与文件是同一个默认的两半，缺哪一半新项目第一次跑收口闸都是红的
-- 改路径 / 增删字段直接改这个键；**要关掉账本检查就把值改成空壳 `"close_check": {}`，不要删键**——`write_workframe_config` 走的是整键级 `setdefault`（本地缺失才写），删掉的键下次重跑 scaffold 会被原样写回；空壳则既不被覆盖，`check_ledger` 也读不到 `ledger` 而整项跳过，不影响其余八项（**空壳只关账本这一项**；`[yaml-parse]` 要单独写 `"close_check": {"yaml_parse": false}` 才关）
+- 改路径 / 增删字段直接改这个键；**要关掉账本检查就把值改成空壳 `"close_check": {}`，不要删键**——`write_workframe_config` 走的是整键级 `setdefault`（本地缺失才写），删掉的键下次重跑 scaffold 会被原样写回；空壳则既不被覆盖，`check_ledger` 也读不到 `ledger` 而整项跳过，不影响其余九项（**空壳只关账本这一项**；`[yaml-parse]` 要单独写 `"close_check": {"yaml_parse": false}` 才关）
 - 存量项目升级：同一个 `setdefault` 保证已手工配过 `close_check` 的项目不被覆盖，配置保持原样
 
 ## Role profile（角色路由偏好）
@@ -244,7 +239,7 @@ scaffold 装机即落盘（模板 `dev-log-template.md`，自带一条以装机�
 
 ## Dormant profiles（活跃度档位）
 
-写入 `.workframe-config.json` 与 `.workframe/state/activity-state.json` 的 `dormant_profile` 字段，默认 `normal`；观测驱动调档，创建时不设问。
+写入 `.workframe-config.json` 的 `dormant_profile` 字段（唯一来源；运行态不再存这一份），默认 `normal`；观测驱动调档，创建时不设问。改档位就改这个字段。
 
 | Profile | 阈值 | 适用场景 |
 |---|---|---|
@@ -253,11 +248,12 @@ scaffold 装机即落盘（模板 `dev-log-template.md`，自带一条以装机�
 | `low-frequency` | 90 天 | 慢节奏项目 |
 | `archive` | 立即冻结 | 已结项保留只读 |
 
-**dormant 行为**（由 heartbeat-check.py + session-start-prep.py 共同驱动）：
+**dormant 行为**（由 session-start-prep.py 判定并驱动）：
 - 暂停所有 decay / promotion / self-iteration 触发
 - 不阻止 Read 操作和新事件 append
 - 重新打开时走 wake-up review：**这一个会话**只展示保留状态摘要、不自动跑维护（`wake_up_pending=true`）；可执行 `/core:maintenance-review` 当场处理积压，不做的话下一个会话自动恢复常规维护链路
 
-修改 profile：`.workframe-config.json` 直接改；`activity-state.json` 的同步字段走代码通道
-`maintenance_workorder.py --set-activity`（或 `--wake-done`）——那份文件由 5 个写入方共写，
-手工整份重写会盖掉并发 hook 刚写进去的 `session_counter` / `pending_maintenance`。下次 SessionStart 生效。
+修改 profile：`.workframe-config.json` 直接改，下次 SessionStart 生效——它是唯一来源，运行态不存副本。
+旧项目 `activity-state.json` 里残留的 `dormant_profile` 不再被读取，与配置不一致时 doctor `config` 项点名两值。
+运行态里的 dormant / wake_up_pending 标记要改时走代码通道 `maintenance_workorder.py --wake-done`——那份文件由 5 个写入方共写，
+手工整份重写会盖掉并发 hook 刚写进去的 `session_counter` / `pending_maintenance`。

@@ -23,10 +23,10 @@ class PolicyTests(unittest.TestCase):
 
     def test_default_no_money_limit(self):
         c = policy.merge_config(None, {})
-        self.assertEqual(c['mode'], 'apply')
+        self.assertEqual(c['mode'], 'propose')
         self.assertEqual(c['limits'], {
             'per_project_days': 7, 'global_per_day': 1,
-            'timeout_seconds': 900, 'max_evidence_chars': 40000,
+            'timeout_seconds': 900, 'max_evidence_chars': 80000,
         })
 
     def test_project_can_only_tighten(self):
@@ -39,6 +39,16 @@ class PolicyTests(unittest.TestCase):
             'limits': {'per_project_days': 1, 'timeout_seconds': 1800}}})
         self.assertEqual(c['limits']['per_project_days'], 7)
         self.assertEqual(c['limits']['timeout_seconds'], 900)
+
+    def test_writing_needs_the_project_itself_and_the_user_ceiling(self):
+        for user in (None, 'apply', 'propose', 'off'):
+            for project in (None, 'apply', 'propose', 'off'):
+                u = {'version': 1, 'self_iteration': {'mode': user}} if user else None
+                p = {'self_iteration': {'mode': project}} if project else {}
+                want = ('off' if 'off' in (user, project) else
+                        'apply' if project == 'apply' and user in (None, 'apply') else 'propose')
+                with self.subTest(user=user, project=project):
+                    self.assertEqual(policy.merge_config(u, p)['mode'], want)
 
     def test_bad_user_configuration_is_not_default_apply(self):
         for c in [{}, {'version': 2}, {'version': True},

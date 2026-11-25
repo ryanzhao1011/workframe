@@ -22,9 +22,9 @@
 
 **改不了的那几块（能力边界）**：通用角色表与路由规则、任务状态流转与签发权限、记忆分工由会话启动时的注入片投递，项目侧没有副本可改——override 一个角色文件改得了该角色自己的契约，改不了这几块。项目需要差异时只能在 `AGENTS.md` 里**补充**（新增项目级角色、写路由偏好或项目自有判据），不能覆盖注入片；两处说法冲突时模型按哪份做不可判，所以别在 `AGENTS.md` 里重写一份流转表或角色表。
 
-**系统 skills 不绑 agent**：`librarian` / `self-iteration` / `session-digest` 为内部调用，由 hook 链路或 `/core:maintenance-review` 等命令触发；`audit` / `rollback` / `memory-log` / `maintenance-review` / `onboard` 为用户直接 `/core:<name>` 调用。它们**不绑任何角色**。
+**系统 skills 不绑 agent**：`librarian` / `self-iteration` 为内部调用（`librarian` 由维护提醒、批处理工单或 `/core:maintenance-review` 引出，`self-iteration` 的后台作业由 hook 排队）；`audit` / `rollback` / `memory-log` / `maintenance-review` 为用户直接 `/core:<name>` 调用。它们**不绑任何角色**。
 
-**HEARTBEAT / Librarian / self-iteration 的执行主体说明**：周期性维护由 hook 链路（`heartbeat-check.py` / `session-end-flush.py` 等）自动驱动，不由任何 agent 主动派发。HEARTBEAT 提醒以 stdout 注入主 Claude 上下文（不落报告全文文件），由主 Claude 直接处理；`.workframe/state/heartbeat-state.json` 只保存周期标记防重复，不存报告内容。
+**HEARTBEAT / Librarian / self-iteration 的执行主体说明**：周期性维护由 hook 链路（`heartbeat-check.py` / `session-end-flush.py` 等）自动驱动，不由任何 agent 主动派发。HEARTBEAT 只打印启动横幅；逾期任务由 `session-start-prep.py` 在正常激活的会话里提醒，每个逾期任务只列一次，以 stdout 注入主 Claude 上下文（不落报告全文文件），由主 Claude 直接处理；`.workframe/state/heartbeat-state.json` 只保存列过的逾期任务，不存报告内容。
 
 ## 项目级扩展（override 或新增）
 
@@ -173,7 +173,7 @@ Core agent **不硬编码项目特定路径**（具体子目录结构、文件�
 |---|---|---|
 | Prompt 文件本体 | `projects/prompts/<场景>/<name>.md` | 一文件一 Prompt（生产资产，不是需求文档） |
 | 策略变更说明 | 需求形态 → `modules/<basic>/<sub>/requirements/<req_slug>/<sub_req_slug>/prd.md`；决策记录形态 → `modules/<basic>/<sub>/decisions/` | 与其他需求同走 modules/ 体系 |
-| 评估实验数据 | `projects/evals/prompts/eval-{date}.md` | 含基线对照 |
+| 评估实验数据 | 被评估 Prompt 所属需求下：可复用的评估用例进 `modules/<basic>/<sub>/requirements/<req_slug>/<sub_req_slug>/test-cases/`，评估分析随该需求资产走 | 含基线对照；框架不预建专门的评估目录 |
 
 ### 测试目录
 
@@ -267,7 +267,7 @@ skills: [core:technical-design, core:systematic-debugging]
 
 - 新增角色后，在 `.workframe/agent-memory/<new-role>/` 下创建 `MEMORY.md` 和 `notes.md` 空骨架（否则 Librarian 第 1 步动态遍历时会找不到）
 - Agent 正文里的所有路径都是**项目内部相对路径**（`.workframe/agent-memory/...`、`projects/...` 等），不要硬编码绝对路径
-- 若项目要 override core 角色，建议在 override 正文顶部注明"基于 core plugin dev.md @ {framework_version} 扩展"（version 取 `.workframe-config.json.framework_version`）以便追溯
+- 若项目要 override core 角色，建议在 override 正文顶部注明"基于 core plugin dev.md @ {插件版本} 扩展"（插件版本取当前加载的插件版本：会话开场注入里「本会话插件根」下 `.claude-plugin/plugin.json` 的 `version`；`.workframe-config.json` 的 `framework_version` 只是创建史，不要拿它标基准）以便追溯
 
 ## 协议契约（手工新增 / 接入旧 agent 必读）
 

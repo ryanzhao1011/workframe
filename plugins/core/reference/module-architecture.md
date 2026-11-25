@@ -150,6 +150,16 @@ AI 解析代码 → current-state/ → PM 消费 → PRD + 测试用例 → 开�
 子模块**有意不设 code-map** 时（纯文档档等裁量），在 `submodule.yaml` 标
 `code_map_coverage: exempt`，检查 6 跳过它并报一条 info；理由写在该子模块 overview。
 
+#### 「未编写」状态
+
+骨架复制出来的现状四件与 `prd.md` 在没人写正文之前**不是内容**。frontmatter 的 `unwritten` 字段存建骨架时的
+正文摘要，当前正文与它一致才算未编写（三态 `written` / `unwritten` / `unstamped`，判定唯一在
+`scripts/_doc_state.py`，命令行入口 `module_init.py --doc-state`）。查询层给每篇文档与每个子需求一个
+`unwritten` 布尔，归档检查只跳过 `unwritten` 的 PRD，prd-writer 只读已编写的现状。
+取舍是偏向展示：给骨架改一个错字就算已编写；值不是合法摘要、或行内写法与 YAML 解析出的值对不上
+（如摘要后紧贴 `#`、带引号的同名键，均为 `unstamped`）时同样按已编写处理，
+不拿一个证明不了「仍是骨架」的标志把可能真实的正文藏起来。
+
 ### 4.2 文档 → 代码（requirements/）
 
 - 由 `prd-writer` 输出 PRD（流程图内嵌其「业务流程与逻辑」章）到 `<sub>/requirements/<req_slug>/<sub_req_slug>/`；prototypes/ 由 `html-demo` 归档（demo 先行）或 `prd-writer` S5 产出（展示型）
@@ -299,6 +309,21 @@ related_issues: []                      # issues 文件名（不含 .yaml）
 | `C:\Users\<username>\...\pages\edit\**` | `miniprogram/pages/profile/edit/**` |
 | `apps/web/profile/...`（在 monorepo 但缺 workspace 前缀） | `apps/web/app/profile/edit/**` |
 
+**一条 `code_paths` 覆盖哪些文件，只有一个判定**：反向索引用的 glob 规则，拿声明原串去匹配 git 给出的规范文件名（分隔符 `/`、大小写敏感）；literal 即精确匹配一个条目。`module-close-check` 的检查 2（指向健康）、4（命中已刷新）、6（覆盖率）、9（适用前提）都按这同一判定，所以：
+
+- 反向索引命不中的写法由检查 2 报红，而不是别处各自变通：字符类之外的反斜杠、静态前缀里的 `//` / `./` 段、尾斜杠、大小写与真实文件名不符、literal 指向目录（要整片目录写 `dir/**`）
+- 通配段之后的 `//` 不一定非法——非整段的 `**` 可以吃掉一边，能命中就合法；字符类里的 `\`（转义）、`/`、`.` 按类成员处理
+
+已知限制（判定会与编辑 hook 的实际行为不同，均不在现有闸内）：
+
+- **未跟踪且被 `.gitignore` 忽略的文件**：编辑 hook 仍能命中并标 stale，但检查 2 判它不在 git 视野内（红），检查 4 / 9 看不到它的改动
+- **已跟踪、但工作树里已删的文件**：git 视野（含 `--cached`）里仍有这个条目，检查 2 判通过，不说明磁盘上还在；删除本身由检查 4 作为未提交改动报出
+- **git 子模块（gitlink）指针本身**：子模块被发现为嵌套仓时，检查 2 去子仓里找父仓的那个条目，按目录报红；未被发现时按父仓条目判通过。声明指针本身暂不支持
+- **跨嵌套仓的通配**（如 `*/src/x.py`）：反向索引能命中各仓里的文件，检查 2 / 4 / 6 / 9 只在静态前缀所属的那个仓里展开
+- **字符类里含 `..` 的写法**（如 `[m/../x]`）：反向索引照常匹配，检查 2 仍按 `..` 段判非法
+- **取不到 git 视野的仓**（项目根不是 git 仓等）：literal 退回磁盘判「存在且不是目录」，glob 不参与展开判定
+- **文件名含回车或以换行开头**：git 输出的解析不保真
+
 ### 6.2 跨形态适配
 
 业务层目录跟着平台/框架社区约定走：
@@ -356,6 +381,8 @@ PostToolUse 每次写代码避免做全量 glob 扫描（200 子模块×3 paths 
 ```json
 {
   "__schema__": "workframe.code-paths-index.v1",
+  "built_at": "2026-11-21T08:00:00+00:00",
+  "source_stamp": "v1:<声明 stat 摘要>",
   "buckets": {
     "miniprogram": {
       "miniprogram/pages/profile/edit/**": ["profile/edit"],
@@ -387,13 +414,20 @@ changed file: 'miniprogram/pages/profile/edit/index.js'
 - 优化：按 glob 首段静态前缀分桶（如 `miniprogram`、`cloudfunctions`、`apps`），命中桶后只在桶内做 fnmatch
 - 目标：单次 lookup ≤100ms（200 子模块×3 paths 规模）
 
-### 7.2 写入责任三个点
+### 7.2 写入责任与只读读者
+
+索引是派生物，**任何一次写入都是按全部声明全量重建**，不做段更新。过期判据：缺 `built_at`、形态不合法、或 `source_stamp`（全部 `submodule.yaml` 的相对路径＋字节数＋mtime 的摘要）与当前声明不符——经 shell、脚本、同步盘改的声明同样会被看见。
 
 | 触发源 | 写入动作 | 实现方式 |
 |---|---|---|
-| `module-init` skill | 创建子模块时初始化该子模块的索引段 | skill 内显式调用 |
-| 修改 `**/submodule.yaml` | 重建该子模块的索引段 | PostToolUse 自动触发 |
-| 索引文件损坏 | fallback 全量重建 | hook 检测到 JSON 损坏 → glob 全量扫描重建 + 提示用户 |
+| `module-init` skill | 创建子模块后全量重建 | skill 内显式调用 |
+| 修改 `**/submodule.yaml` | 全量重建 | PostToolUse 自动触发 |
+| 索引文件损坏或过期 | 全量重建 | 编辑 hook 的 lookup、SessionStart 补扫、模块记忆投递经同一个入口判过期（锁内复判，并发只重建一次） |
+| 手动 `rebuild-index` | 全量重建 | CLI |
+| `module-close-check` 检查 1 | **不写**：按声明在内存里重算，与缓存比对；缺 / 多 / 错桶 / 缓存缺失或损坏 → error | 只读对账 |
+| 迁移计划 | **不写**：按声明现算 | 只读 |
+
+任一份 `submodule.yaml` 读不了（如非 UTF-8）时**不覆盖**旧缓存：hook 留痕，`rebuild-index` exit 1，收口闸报 error。stat 判据漏得掉「同字节同 mtime」的改动，由收口闸的内容对账兜底；重建只修将来，漂移期间已错过的 stale 标记补不回。
 
 ### 7.3 并发与原子写入
 
@@ -403,11 +437,11 @@ PostToolUse 可能并发触发（多文件批量 Edit / 并发 subagent），需
 |---|---|
 | 单进程并发写 | 内存中合并改动 → 原子 rename（写 `.tmp` → `os.rename` → 原文件） |
 | 多进程并发写 | 文件锁（POSIX `fcntl` / Windows `msvcrt`）排队；锁超时 5s → 跳过本次更新 + 标记 stale |
-| 损坏检测 | 每次读取做 JSON validate；损坏时触发 fallback 全量重建 + 写 stale-modules.yaml 提示 |
+| 损坏检测 | 每次读取做 JSON 与形态校验；损坏或过期时全量重建 |
 | 跨平台 | 通过现有 `workframe-python` launcher 屏蔽差异 |
 
 - 索引文件不进 git（运行时派生状态，损坏可全量重建；`.gitignore` 的 `.workframe/state/*` 已覆盖。该目录下唯一进 git 的是 `memory-index.json`——它是记忆的保护元数据，无法重建，详见 `project-architecture.md` §Git 策略）
-- 损坏时 fallback 自动恢复，零用户介入
+- 损坏或过期时由读者自动恢复，零用户介入
 - 手动编辑反模式（详见 skill: `document-norms` §10.4）
 
 ## 8. 关联检测三层机制
@@ -432,14 +466,14 @@ PostToolUse hook 段（完整挂载见 hooks 清单）触发条件：
 `MultiEdit` 是历史工具残留，保留只为向后兼容，不代表 matcher 应当补它。
 
 - 代码改动 → 写 stale-modules.yaml（标记对应子模块 current-state/ 待刷新）
-- submodule.yaml 改动 → 重建该子模块的 code-paths-index 段（保证索引与 yaml 一致）
+- submodule.yaml 改动 → 全量重建 code-paths-index（不经编辑工具改的声明，由下一次 lookup 按 stat 摘要发现并重建）
 - 外部工具改代码：SessionStart 扫 git 改动兜底——根仓 + code_paths 指到的嵌套 git 仓（被根仓 ignore 的独立仓也覆盖），每仓取未提交 tracked / staged / 未跟踪三类并集；已 commit 的历史改动不在扫描范围
-- 手动命令兜底（插件根从 `plugin-root.txt` 取，SessionStart hook 每会话刷新——`${CLAUDE_PLUGIN_ROOT}` 在 agent 的 Bash 上下文不可用，写它会静默展开成空、命令以「找不到 /scripts/xxx」的姿态翻车）：
+- 手动命令兜底（插件根取 `$WF_PLUGIN_ROOT`：会话开场与子 agent 启动时注入「本会话插件根」一行，给的是正在执行的这扇门的那一份，执行前换成那个路径（它不是环境变量，原样执行会展开为空、报找不到文件）。`.workframe/state/plugin-root.txt` 记的是最后起会话的那扇门，两扇门版本不同时会指错，只作旧接口——`${CLAUDE_PLUGIN_ROOT}` 在 agent 的 Bash 上下文不可用，写它会静默展开成空、命令以「找不到 /scripts/xxx」的姿态翻车）：
 
   ```bash
-  python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" scan-git-diff      # 扫 git diff 写 stale
-  python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" rebuild-index      # 全量重建反向索引
-  python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" init-submodule <basic>/<sub>
+  python "$WF_PLUGIN_ROOT/scripts/check-stale-modules.py" scan-git-diff      # 扫 git diff 写 stale
+  python "$WF_PLUGIN_ROOT/scripts/check-stale-modules.py" rebuild-index      # 全量重建反向索引
+  python "$WF_PLUGIN_ROOT/scripts/check-stale-modules.py" init-submodule <basic>/<sub>
   ```
 
 实现：插件的 `scripts/check-stale-modules.py`。

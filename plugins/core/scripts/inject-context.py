@@ -345,10 +345,29 @@ def session_line(harness, sid):
 def all_text(scope, shards, harness=None, sid=None):
     """全片拼接的投递文本；`main` 带会话行。只此一个生成点，inject-log 的 `chars` / `sha256`
     与投出去的字符串出自同一个值。"""
-    body = "\n\n".join(s["text"] for s in shards)
+    body = "\n\n".join(shard_text(scope, s, shards) for s in shards)
     if scope == "main":
         return session_line(harness, sid) + "\n\n" + body
     return body
+
+
+def root_shard_index(shards):
+    """「本会话插件根」那一行放进哪一片：最空的那一片（并列取靠前的）。子 agent 收不到主会话的开场横幅，
+    这一行只能随子 agent 片走；不放进记忆注入——那条的正文由项目记忆决定、可能本来就贴着单条上限。"""
+    return min(shards, key=lambda s: (s["chars"], s["index"]))["index"]
+
+
+def shard_text(scope, shard, shards):
+    """一片真正投出去的字符串（分片、全片、补投都取这里，inject-log 的 `chars` / `sha256` 也按它算）。
+    `sub` 的最空一片末尾多一行「本会话插件根」；装箱账（`pack` / `--dry-run`）只算源，不含这一行。"""
+    if scope == "sub" and shard["index"] == root_shard_index(shards):
+        return shard["text"] + "\n\n" + _harness.plugin_root_line()
+    return shard["text"]
+
+
+def with_root_line(text):
+    """Codex 主线程周期补投前面加「本会话插件根」一行：compact 之后开场横幅可能已不在上下文里。"""
+    return _harness.plugin_root_line() + "\n\n" + text
 
 
 def _emit(event, text):
@@ -436,7 +455,7 @@ def prompt_mode(harness, payload):
                            and r.get("turn_id") == turn_id for r in rows):
             return 0                      # 同轮已由 SubagentStart 注过
         shards, sources = pack("sub")
-        text = all_text("sub", shards)
+        text = all_text("sub", shards)       # 本会话插件根那一行已在 sub 的最空一片里（`shard_text`）
         _log(project_dir, _row(harness, "sub", payload, event, shard=SHARD_ALL,
                                sha256=_sha(text), scope_sha256=_scope_sha(sources),
                                chars=u16len(text), thread_id=thread_id))
@@ -456,7 +475,8 @@ def prompt_mode(harness, payload):
     if since < reinject_every_turns(project_dir):
         return 0
     shards, sources = pack("main")
-    text = all_text("main", shards, harness, sid)
+    # compact 之后开场横幅可能已不在上下文里：本会话插件根那一行随主会话全片一起重发
+    text = with_root_line(all_text("main", shards, harness, sid))
     _log(project_dir, _row(harness, "main", payload, event, shard=SHARD_ALL,
                            sha256=_sha(text), scope_sha256=_scope_sha(sources),
                            chars=u16len(text), kind="reinject"))
@@ -533,11 +553,12 @@ def main():
         return 0
 
     shard = shards[idx - 1]
+    text = shard_text(scope, shard, shards)
     _log(project_dir, _row(harness, scope, payload, event,
                            shard=f"{shard['index']}/{shard['total']}",
-                           sha256=_sha(shard["text"]), scope_sha256=_scope_sha(sources),
-                           chars=shard["chars"]))
-    _emit(event, shard["text"])
+                           sha256=_sha(text), scope_sha256=_scope_sha(sources),
+                           chars=u16len(text)))
+    _emit(event, text)
     return 0
 
 

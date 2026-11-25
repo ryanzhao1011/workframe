@@ -560,13 +560,11 @@ REQUIRED_SKILLS = {
     "test-case-design", "code-review",
     "prompt-design", "prompt-evaluation",
     # v8.2 Phase 5 system skills
-    "session-digest", "audit", "rollback", "memory-log", "maintenance-review",
+    "audit", "rollback", "memory-log", "maintenance-review",
     # v0.3 docs/publishing skills (PRD writer + screenshot + obsidian-* CLI integration)
     "prd-writer", "screenshot",
     "obsidian-doc-structure", "obsidian-link-audit",
     "obsidian-safe-write", "obsidian-history-check",
-    # v0.2.1 onboarding skill (Agent Teams default-skip + onboarded.json marker)
-    "onboard",
     # v0.3.x M3 modules/ 体系：1 docs/publishing + 4 modules-system
     "document-norms",
     "module-init", "code-to-doc", "module-index-refresh", "migrate-to-modules",
@@ -584,17 +582,13 @@ REQUIRED_SKILLS = {
 
 SYSTEM_SKILLS = {
     "librarian", "self-iteration",
-    "session-digest", "audit", "rollback", "memory-log", "maintenance-review",
-    # v0.2.1: onboard 是系统级"安装/配置"流程，非业务 skill，不预加载到任何 agent context
-    "onboard",
+    "audit", "rollback", "memory-log", "maintenance-review",
     "signal-intake",
 }
 
-# v0.2.1：含 onboard。集合名保持向后兼容（"maintenance"），语义扩展为"用户主动调用且
-# 必须 disable-model-invocation 的 system skill"——含原 4 个维护命令 + onboard 配置流程
+# 集合名保持向后兼容（"maintenance"），语义是"用户主动调用且必须 disable-model-invocation 的 system skill"
 USER_INVOCABLE_MAINTENANCE_SKILLS = {
     "audit", "rollback", "memory-log", "maintenance-review",
-    "onboard",
 }
 
 
@@ -633,6 +627,8 @@ def check_core_shared_assets_complete():
         # 接入已有项目时把用户原文与两份模板（CLAUDE.md / AGENTS.md）整合（与两份模板强耦合，同插件放）
         "claude-md-merge-guide.md",
         "codex-trust-query.md",
+        # settings 的豁免写入入口（装机链路）的前提、授权形态与写入面；必载片 both/40 指到这里
+        "settings-write-boundary.md",
     }
     required_tpl = {
         "agent-template.md",
@@ -1162,11 +1158,16 @@ def check_hooks_complete_pipeline():
     path = FRAMEWORK_ROOT / "plugins" / "core" / "hooks" / "hooks.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     hooks = data.get("hooks", {})
-    required = {"SessionStart", "Setup", "UserPromptSubmit", "UserPromptExpansion", "PreToolUse", "PostToolUse", "Stop", "SubagentStart", "SubagentStop", "StopFailure", "ConfigChange", "SessionEnd"}
+    required = {"SessionStart", "Setup", "UserPromptSubmit", "UserPromptExpansion", "PreToolUse", "PostToolUse", "Stop", "SubagentStart", "StopFailure", "ConfigChange", "SessionEnd"}
     required.add("PostCompact")
     missing = required - set(hooks.keys())
     if missing:
         return _fail("hooks_complete_pipeline", f"missing events: {missing}")
+    # SubagentStop 有意不挂：唯一的写入项（子 agent 活动日志）没有读者，已撤；重新出现也报，
+    # 免得把一条没有消费方的写入悄悄挂回去
+    if "SubagentStop" in hooks:
+        return _fail("hooks_complete_pipeline", "hooks.json 又挂了 SubagentStop——这一段的唯一写入项"
+                                                "（子 agent 活动日志）没有读者，挂回去前先给它找到消费方")
 
     guard = "dispatch-name-guard.py"
     if not any(st.get("matcher", "") == "Agent"
@@ -1314,18 +1315,26 @@ def check_workframe_state_templates_exist():
     return _ok("workframe_state_templates_exist", f"({len(required)} templates)")
 
 
-def check_activity_state_has_dormant_profile():
-    """activity-state-template.json 必须含 dormant_profile 字段"""
+def check_activity_state_no_dormant_profile():
+    """活动档位只在 `.workframe-config.json`：运行态模板与 `_state_io` 出厂默认值都不得再带 `dormant_profile`。
+
+    带着它，新装项目的运行态就有一份「normal」；用户改配置后 doctor 会把这份凭空来的默认值当成
+    旧项目残留去报两值冲突，运行时读者也可能又拿它当第二来源。正向对照：模板本身要能读出
+    `session_counter`——读错文件时「没有该键」是空真的。"""
+    name = "activity_state_no_dormant_profile"
     path = FRAMEWORK_ROOT / "plugins" / "core" / "templates" / "activity-state-template.json"
-    if not path.exists():
-        return _fail("activity_state_has_dormant_profile", "template not found")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:
-        return _fail("activity_state_has_dormant_profile", f"invalid JSON: {e}")
-    if "dormant_profile" not in data:
-        return _fail("activity_state_has_dormant_profile", "dormant_profile field missing")
-    return _ok("activity_state_has_dormant_profile", f"(default={data.get('dormant_profile')!r})")
+        return _fail(name, f"activity-state 模板读不了：{type(e).__name__}: {e}")
+    if "session_counter" not in data:
+        return _fail(name, "模板里没有 session_counter——读到的不是 activity-state 模板，「不含该键」无对象")
+    defaults = _state_io_module().ACTIVITY_DEFAULTS
+    hits = [where for where, d in (("模板", data), ("_state_io.ACTIVITY_DEFAULTS", defaults))
+            if "dormant_profile" in d]
+    if hits:
+        return _fail(name, f"{'、'.join(hits)} 又带上了 dormant_profile——档位会重新有两个来源")
+    return _ok(name, "（模板与出厂默认值都不含 dormant_profile，档位只认配置）")
 
 
 def check_self_iteration_confidence_formula():
@@ -1571,7 +1580,7 @@ def check_version_consistency():
 
 
 def check_event_registry_consistency():
-    """event-schema.json 存在；removed_v* event 不应在 active producer 脚本里"""
+    """event-schema.json 存在、可解析、事件表非空"""
     schema_path = FRAMEWORK_ROOT / "plugins" / "core" / ".workframe-meta" / "event-schema.json"
     if not schema_path.exists():
         return _fail("event_registry_consistency", "event-schema.json missing")
@@ -1584,18 +1593,9 @@ def check_event_registry_consistency():
     if not events:
         return _fail("event_registry_consistency", "no events defined")
 
-    # 具体事件在不在 registry 归 `check_event_types_registered`（从 producer 现扫）；本项只管已移除事件不得回流
+    # 具体事件在不在 registry 归 `check_event_types_registered`（从 producer 现扫）；本项只管注册表本身可读、非空
 
     removed = [name for name, spec in events.items() if spec.get("reliability") == "removed_v0_2_1"]
-    # 检查 removed event 不应在 check-iteration-trigger.py 里作为权重或触发条件出现
-    trigger_script = FRAMEWORK_ROOT / "plugins" / "core" / "scripts" / "check-iteration-trigger.py"
-    if trigger_script.exists():
-        text = trigger_script.read_text(encoding="utf-8")
-        for name in removed:
-            # 允许注释或 docstring 里提及（作为降级说明），但不应在代码层作为 key
-            if re.search(rf'["\']({re.escape(name)})["\']\s*:\s*\d', text):
-                return _fail("event_registry_consistency", f"removed event `{name}` still used as dict key in check-iteration-trigger.py")
-
     return _ok("event_registry_consistency", f"({len(events)} events, {len(removed)} removed)")
 
 
@@ -1667,101 +1667,27 @@ def check_pending_maintenance_schema_documented():
     return _ok(name, f"({len(declared)} 字段，模板契约 == upsert_pending 实写)")
 
 
-def check_pm_retention_matches_events_window():
-    """pending 条目的 GC 保留期同时锚住两个触发常量，且两侧都真的在用那个常量。
+def check_pm_retention_used_by_gc():
+    """pending 条目的 GC 保留期是常量，且 GC 真的用它。
 
-    为什么必须锚住：任何 kind 被驳回后不再重开，靠的都是「同 dedup_key 的 closed 条目
-    的 closed_at」当计分基线（`check-iteration-trigger.dismissal_baseline()`）。而那条
-    closed 条目在 `closed_at + PM_CLOSED_RETENTION_DAYS` 天后被 SessionStart GC 删除
-    ——**保留期就是抑制能维持多久**。两条约束由此而来：
+    任何 kind 被驳回后不再重开，靠的都是「同 dedup_key 的 closed 条目的 closed_at」
+    （`check-iteration-trigger.dismissal_baseline()`）。那条 closed 条目在
+    `closed_at + PM_CLOSED_RETENTION_DAYS` 天后被 SessionStart GC 删除——**保留期就是抑制能维持多久**。
+    GC 侧写成字面量时，这个常量就成了没人用的摆设。
 
-      == EVENTS_WINDOW_DAYS （事件流类 problem / activity）
-         相等时，条目被删的同一时刻 closed_at 之前的事件也恰好全部滑出窗口——抑制
-         记忆与它要抑制的对象同时消失，交接无缝。撕开缝的后果不对称：
-           窗口 > 保留期 → 基线先没、旧事件还在窗口里 → 已驳回的账重新计分，次日复活
-           窗口 < 保留期 → 基线多留几天，那时窗口内已无旧事件 → 只是冗余，无害
-      >= CADENCE_DAYS （日期基线类 cadence_timeout）
-         cadence 驳回后的静默期同样只有保留期那么长，而它一到期就按老的 proposals
-         日期重算。保留期 < 周期时，条目被删的那天天数早已超标，提醒当场复活——
-         缺陷只是被推迟，没被修掉。反向（保留期更长）只是多静默几天，无害，故用
-         `>=` 不用 `==`：漏判它不构成真实功能缺陷。
-
-    四层断言，缺任一层都留一条完整的漏网通道：
-      ① 三个常量都抽得到——抽不到就报红，不静默跳过。提取器扫 0 时闸会「看起来很绿」，
-         而那正是它彻底失明的样子
-      ② 窗口 == 保留期（`==` 而非任何包含关系：这是两个标量，漏判就是上面那个后果）
-      ③ 两个**消费点**确实引用常量而非字面量——少了这层，把 `days=EVENTS_WINDOW_DAYS`
-         改回 `days=14` 时前两层照样全绿，闸对账的成了一个没人用的数字
-      ④ 保留期 >= cadence 周期
-
-    **明写一处不做的**：③ 没有 cadence 侧的对应层（不查 `>= CADENCE_DAYS` 的比较点是否
-    写成了字面量）。窗口侧能做是因为它有唯一且形态固定的消费入口
-    `read_recent_events(days=…)`；cadence 是裸比较 `x >= CADENCE_DAYS`，写成 `x >= 7`
-    与文件里其他任何数字比较无法区分——那层判定要么假红要么恒绿，装上去只会让人以为
-    这一侧被咬住了。这条缺口靠常量旁注释与 code review 兜底，不靠本闸。
+    能力边界：只看 cutoff 是否引用常量，不判 GC 清哪些状态（那由 tools/test_opening_reminders.py 真跑）。
     """
-    name = "pm_retention_matches_events_window"
-    scripts = FRAMEWORK_ROOT / "plugins" / "core" / "scripts"
-    trig = scripts / "check-iteration-trigger.py"
-    prep = scripts / "session-start-prep.py"
-    for p in (trig, prep):
-        if not p.exists():
-            return _fail(name, f"脚本缺失: {p}")
-    trig_src = trig.read_text(encoding="utf-8")
+    name = "pm_retention_used_by_gc"
+    prep = FRAMEWORK_ROOT / "plugins" / "core" / "scripts" / "session-start-prep.py"
+    if not prep.exists():
+        return _fail(name, f"脚本缺失: {prep}")
     prep_src = prep.read_text(encoding="utf-8")
-
-    # ① 常量抽取（抽不到 = 闸失明，必须红）
-    m_win = re.search(r"^EVENTS_WINDOW_DAYS\s*=\s*(\d+)", trig_src, re.M)
     m_ret = re.search(r"^PM_CLOSED_RETENTION_DAYS\s*=\s*(\d+)", prep_src, re.M)
-    m_cad = re.search(r"^CADENCE_DAYS\s*=\s*(\d+)", trig_src, re.M)
-    if not m_win:
-        return _fail(name, "check-iteration-trigger.py 抽不到 EVENTS_WINDOW_DAYS 赋值——"
-                           "常量被改名/改形态则本闸静默失明，先修提取或恢复常量")
     if not m_ret:
         return _fail(name, "session-start-prep.py 抽不到 PM_CLOSED_RETENTION_DAYS 赋值——"
                            "常量被改名/改形态则本闸静默失明，先修提取或恢复常量")
-    if not m_cad:
-        return _fail(name, "check-iteration-trigger.py 抽不到 CADENCE_DAYS 赋值——"
-                           "常量被改名/改形态则本闸的 cadence 一侧静默失明，"
-                           "先修提取或恢复常量")
-    win, ret, cad = int(m_win.group(1)), int(m_ret.group(1)), int(m_cad.group(1))
-
-    # ② 两值相等
-    if win != ret:
-        worse = ("窗口 > 保留期：驳回基线会先被 GC 删掉，而旧事件还在窗口里，"
-                 "已驳回的 problem_threshold / activity_threshold 次日原样复活"
-                 "（两者同走 read_recent_events + event_after 这条事件流路径）"
-                 if win > ret else
-                 "窗口 < 保留期：驳回基线多留几天，窗口内已无旧事件，仅冗余无害")
-        return _fail(name, f"EVENTS_WINDOW_DAYS={win} != PM_CLOSED_RETENTION_DAYS={ret}；{worse}")
-
-    # ③ 消费点确实用常量（否则常量成摆设，本闸对账一个没人用的数字）
-    #
-    # 判的是**每一个调用点**而非「存在一个」：漏掉任一处就等于那条路径的窗口脱离对账，
-    # 而这正是本闸要防的形态。定义行必须排除——`def read_recent_events(days=EVENTS_WINDOW_DAYS)`
-    # 的默认值会满足任何「文件里出现过该写法」式的探测，于是把调用点改成
-    # `read_recent_events(days=14)` 时闸照样绿（实测过这个假绿，故改成逐调用点判定）。
-    # 走共用件 `_symbol_use_sites`，本函数不再自留第二份实现（此前这里是全仓第二份
-    # 同契约实现：它知道「排除 def 行」而共用件当时不知道，共用件知道「函数级 scope」
-    # 而它不知道——两份是交叉关系，已取并集合并到共用件里）。
-    # mode="all"：这里每一处调用都必须走常量，漏一处就等于那条路径的窗口脱离对账；
-    # 与「同一取值函数被 4 个字段各调一次」那类 ⊆ 场景不同。
-    # 分布实核：全文 3 处出现，def 头部 1 处 + 注释里 1 处 + 真实调用 1 处 ⇒ 1 处承重。
-    calls, bad, err = _symbol_use_sites(trig_src, "read_recent_events",
-                                        paired_with="days=EVENTS_WINDOW_DAYS", mode="all")
-    if err:
-        return _fail(name, f"check-iteration-trigger.py: {err}")
-    if not calls:
-        return _fail(name, "check-iteration-trigger.py 找不到 read_recent_events 的调用点——"
-                           "提取器扫 0 时本闸会静默变绿，先确认调用形态")
-    if bad:
-        return _fail(name, f"read_recent_events 有 {len(bad)}/{len(calls)} 处调用没走 "
-                           f"EVENTS_WINDOW_DAYS（窗口写成字面量时本闸对账的是个摆设常量）: "
-                           f"{bad[0][:80]}")
-
-    # GC 侧同理走共用件，函数级 scope 由它承担（session-start-prep 里 timedelta(days=…)
-    # 不止一处，drift 历史等）。分布实核：该常量在 gc_pending_maintenance 内 2 处出现，
-    # 其中 1 处在 docstring ⇒ 1 处承重。mode="all" 理由同上。
+    # 函数级 scope 由共用件承担（session-start-prep 里 timedelta(days=…) 不止一处，drift 历史等）。
+    # 分布实核：该常量在 gc_pending_maintenance 内 2 处出现，其中 1 处在 docstring ⇒ 1 处承重。
     gc_sites, gc_bad, gc_err = _symbol_use_sites(
         prep_src, "PM_CLOSED_RETENTION_DAYS", func="gc_pending_maintenance",
         paired_with="timedelta(days=", mode="all")
@@ -1775,16 +1701,7 @@ def check_pm_retention_matches_events_window():
         return _fail(name, f"gc_pending_maintenance 的 cutoff 没走 timedelta(days="
                            f"PM_CLOSED_RETENTION_DAYS)（{gc_bad[0][:80]}）——保留期写成"
                            f"字面量时本闸对账的是个摆设常量")
-
-    # ④ 保留期 >= cadence 周期（驳回 cadence 后的静默期不能短于提醒周期本身）
-    if ret < cad:
-        return _fail(name, f"PM_CLOSED_RETENTION_DAYS={ret} < CADENCE_DAYS={cad}；"
-                           f"驳回 cadence_timeout 后第 {ret + 1} 天条目就被 GC 删掉，"
-                           f"而那时距上次提案还不足 {cad} 天的条件早已满足——提醒当场"
-                           f"复活，dismissal_baseline() 的抑制等于没做（缺陷只被推迟，"
-                           f"没被修掉）。要么调大保留期，要么调小 cadence 周期")
-    return _ok(name, f"(窗口 == 保留期 == {win} 天 >= cadence {cad} 天；"
-                     f"{len(calls)} 处窗口调用与 GC cutoff 均引用常量)")
+    return _ok(name, f"(保留期 {m_ret.group(1)} 天，GC cutoff 引用常量)")
 
 
 def check_activity_state_wake_up_pending():
@@ -2740,8 +2657,8 @@ def check_no_stale_skill_count():
         r"15\s*domain\s*skills",
         # v0.2.x stable 旧口径（21 时代）
         r"\b21\s+通用",
-        # v0.3 旧口径（27 时代）
-        r"\b7\s+system/maintenance\b",
+        # 36 时代旧口径（onboard 退役前 8 个 system；v0.3 的「7 system」与现状重合，不再算过期）
+        r"\b8\s+system/maintenance\b",
         # v0.2.1 旧口径（28 时代，v0.3.x M3 起改为 33）
         r"\b28\s+通用",
         r"13\+8\+1\+6",      # 旧合计公式
@@ -3616,7 +3533,8 @@ def check_no_plugin_root_env_in_skills():
     子进程不在承诺内；skill 内容的字符串替换只在 CC 的 skill 加载通道发生。本框架大量走
     Read 通道（subagent 直读 SKILL.md 原文照抄命令），替换不发生 → shell 对未设置变量
     静默展开为空，命令以「找不到 /scripts/xxx」的迷惑姿态翻车（audit:50 实测教义）。
-    统一配方：`$(cat .workframe/state/plugin-root.txt)`。
+    统一配方：`$WF_PLUGIN_ROOT`（会话开场与子 agent 启动时注入「本会话插件根」，见
+    `check_skill_recipes_use_session_root`）。
 
     豁免仅限「把该写法当反例/说明对象」的教义行（按 文件名+行内特征串 精确豁免）。
 
@@ -3658,10 +3576,161 @@ def check_no_plugin_root_env_in_skills():
     if offenders:
         return _fail(
             name,
-            "skills 内 ${CLAUDE_PLUGIN_ROOT} 已知失效写法（改 plugin-root.txt 配方）: "
+            "skills 内 ${CLAUDE_PLUGIN_ROOT} 已知失效写法（改 $WF_PLUGIN_ROOT 配方）: "
             + "; ".join(offenders[:5]),
         )
     return _ok(name, "(skills + templates + reference + launcher skills 零 ${CLAUDE_PLUGIN_ROOT} 依赖)")
+
+
+def check_skill_recipes_use_session_root():
+    """分发给模型照抄的文档（core 的 skills / templates / reference、launcher skills）不得再写
+    `plugin-root.txt` 配方，插件根一律写 `$WF_PLUGIN_ROOT`；并且那个变量确实有人给（行为判）。
+
+    **为什么不能再用 `plugin-root.txt`**：它记的是「最后一个起会话的那扇门」的根。同一项目挂两扇门、一边升级一边
+    没升时，另一扇门里的模型照抄配方会静默执行**另一份安装里的旧脚本**——不报错、结果看着正常。`$WF_PLUGIN_ROOT`
+    的值来自正在执行的这一份（`_harness.plugin_root_line`，按 `__file__` 现算），没替换时展开为空、命令当场报
+    「找不到 /scripts/…」，失败是响亮的。
+
+    两半：
+      1. 字面：扫描面里出现 `plugin-root.txt` 的行，除非同一行写明它是「旧接口」/「兼容位」（说明对象，不是配方）。
+         `plugin-root.<门>.txt`（会话外人工命令用的分门指针）不含这个字面，不受影响。
+      2. 来源：给出「本会话插件根」的每条投递路径都用本仓脚本**代跑**、看真正的输出，参数取自两份 hook 清单——两门
+         开场横幅、CC 子 agent 各片、Codex 子 agent 全片、Codex 子线程补投与主线程周期补投；每条命令退出码为 0、输出
+         形态合规，每条路径合计恰一行且根逐字相等。只扫字面时把投递点删掉照样绿；只查「包含正确路径」时同前缀的错值
+         照样绿；输出形态不对时退回去扫原始 stdout，等于把没送达的算成送达。
+
+    **能力边界**：字面半只认「同一行里出现那个文件名」，别的读法（变量拼出来、跨行）看不见，所以绿不等于「零旧配方」；
+    只看分发面，项目自有 skill 里存量的配方不在内（它们仍能跑，只是两门版本不同时可能指错）。模型有没有照着替换，
+    本闸判不了——那要看真实会话。清单里的启动器（`workframe-python`）与 `commandWindows` 的实际运行也不在内：这里只核
+    它们写的脚本路径与参数，不起那条命令本身。
+    """
+    name = "skill_recipes_use_session_root"
+    roots = [
+        FRAMEWORK_ROOT / "plugins" / "core" / "skills",
+        FRAMEWORK_ROOT / "plugins" / "core" / "templates",
+        FRAMEWORK_ROOT / "plugins" / "core" / "reference",
+        FRAMEWORK_ROOT / "plugins" / "workframe-launcher" / "skills",
+        FRAMEWORK_ROOT / "docs",
+    ]
+    singles = [FRAMEWORK_ROOT / "README.md", FRAMEWORK_ROOT / "CLAUDE.md"]
+    missing = [str(r.relative_to(FRAMEWORK_ROOT)) for r in roots + singles if not r.exists()]
+    if missing:
+        return _fail(name, f"scan roots missing: {missing}")
+    offenders, scanned = [], 0
+    for md in [m for root in roots for m in sorted(root.rglob("*.md"))] + singles:
+        scanned += 1
+        for lineno, line in enumerate(md.read_text(encoding="utf-8").splitlines(), 1):
+            # 说明对象（「旧接口」「兼容位」）不是配方；读文件的写法（`$(cat …)` / `Get-Content …`）一律不放行
+            if "plugin-root.txt" in line and (any(k in line for k in ("$(cat", "Get-Content", "gc "))
+                                              or not any(k in line for k in ("旧接口", "兼容位"))):
+                offenders.append(f"{md.relative_to(FRAMEWORK_ROOT).as_posix()}:{lineno}")
+    if offenders:
+        return _fail(name, f"{len(offenders)} 处仍写 plugin-root.txt 配方（改写成 \"$WF_PLUGIN_ROOT/...\"——"
+                           f"那份文件记的是最后起会话的那扇门，两门版本不同时会跑到另一份安装的脚本）: "
+                           + "; ".join(offenders[:5]))
+    core = FRAMEWORK_ROOT / "plugins" / "core"
+    scripts = core / "scripts"
+    import os
+    import shlex
+    import subprocess
+    import tempfile
+    want_root = core.resolve().as_posix()
+    ic = _inject_context()
+    sid = "0b0b0b0b-0000-4000-8000-00000000c0de"
+
+    def commands(door, event, script):
+        """从那扇门的 hook 清单里取某事件下跑某脚本的全部命令，返回 (各条参数列表, 清单问题)——参数不在闸里另写一份。
+        脚本那一项必须**整串等于** `${CLAUDE_PLUGIN_ROOT}/scripts/<脚本>`（下面是由闸用本仓脚本代跑的，路径写错了
+        代跑照样成功）；Codex 的 `commandWindows` 必须带同一脚本路径与同一组参数。启动器那半由别的闸管。"""
+        data = json.loads((core / "hooks" / ("hooks.json" if door == "cc" else "hooks.codex.json"))
+                          .read_text(encoding="utf-8"))
+        want, out, bad = "${CLAUDE_PLUGIN_ROOT}/scripts/" + script, [], []
+        for group in data["hooks"].get(event, []):
+            for h in group.get("hooks", []):
+                forms = {}
+                for field in ("command", "commandWindows"):
+                    argv = shlex.split(h.get(field) or "")
+                    at = [i for i, a in enumerate(argv) if a.rsplit("/", 1)[-1] == script]
+                    if at:
+                        forms[field] = (argv[at[0]], argv[at[0] + 1:])
+                if not forms:
+                    continue
+                need = ("command",) if door == "cc" else ("command", "commandWindows")
+                for field in need:
+                    if field not in forms:
+                        bad.append(f"{event} 的 `{field}` 没有跑 {script}")
+                    elif forms[field][0] != want:
+                        bad.append(f"{event} 的 `{field}` 脚本路径是 {forms[field][0]}，应为 {want}")
+                if len({tuple(a) for _p, a in forms.values()}) > 1:
+                    bad.append(f"{event} 的 `command` 与 `commandWindows` 参数不同")
+                if "command" in forms:
+                    out.append(forms["command"][1])
+        return out, bad
+
+    def deliver(td, door, event, script, args, payload):
+        """(退出码, 投出去的文本；形态不对为 None)。只有 CC 开场横幅是纯文本 stdout；其余一律要求整段 stdout 是 JSON、
+        事件名相符、文本在 `additionalContext`——**不退回去扫原始 stdout**：那样「不是 JSON」「放错字段」都会被算成送达。"""
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "CODEX"))}
+        env.update(CLAUDE_PROJECT_DIR=td, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+        r = subprocess.run([sys.executable, str(scripts / script), *args], cwd=td, env=env,
+                           input=json.dumps(dict(payload, cwd=td, session_id=sid)), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=60)
+        if door == "cc" and script == "heartbeat-check.py":
+            return r.returncode, r.stdout or None
+        try:
+            spec = json.loads(r.stdout)["hookSpecificOutput"]
+            text = spec["additionalContext"] if spec["hookEventName"] == event else None
+        except Exception:
+            text = None
+        return r.returncode, text if isinstance(text, str) and text.strip() else None
+
+    # 整行开头逐字比，不按「——」切根值：切分时 `<根>——old` 会被切成正确的根，路径里本来就带「——」的健康安装反而报错
+    label_mark = "本会话插件根："
+    want_head = f"{label_mark}{want_root}——skill 命令里的 `$WF_PLUGIN_ROOT` "
+
+    def root_lines(text):
+        return [ln for ln in text.splitlines() if label_mark in ln]
+
+    # (说法, 门, 事件, 脚本, 载荷)：同一条路径下的各条命令合计恰给出一次
+    routes = [
+        ("CC 开场横幅", "cc", "SessionStart", "heartbeat-check.py", {}),
+        ("Codex 开场横幅", "codex", "SessionStart", "heartbeat-check.py", {}),
+        ("CC 子 agent 各片", "cc", "SubagentStart", "inject-context.py", {"agent_type": "core:dev"}),
+        ("Codex 子 agent 全片", "codex", "SubagentStart", "inject-context.py", {"agent_type": "dev"}),
+        ("Codex 子线程补投", "codex", "UserPromptSubmit", "inject-context.py", {"turn_id": "t1"}),
+        ("Codex 主线程周期补投", "codex", "UserPromptSubmit", "inject-context.py",
+         {"turn_id": "t2", "transcript_path": f"/x/rollout-x-{sid}.jsonl"}),
+    ]
+    problems, n_cmd = [], 0
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / ".workframe-config.json").write_text(
+            '{"project_name": "probe", "codex": {"reinject_every_turns": 1}}', encoding="utf-8", newline="")
+        for label, door, event, script, payload in routes:
+            cmds, bad = commands(door, event, script)
+            problems += [f"{label}：{b}" for b in bad]
+            if not cmds:
+                problems.append(f"{label}：hook 清单的 {event} 下没有跑 {script} 的命令")
+                continue
+            got = []
+            for args in cmds:
+                n_cmd += 1
+                shown = f"`{script} {' '.join(args)}`"
+                rc, text = deliver(td, door, event, script, args, payload)
+                if rc != 0:
+                    problems.append(f"{label}：{shown} 退出码 {rc}")
+                if text is None:
+                    # 逐条要求有合形态的输出：根行只在其中一片，别的片整片丢了也不许靠它蒙混
+                    problems.append(f"{label}：{shown} 没有合形态的输出")
+                    continue
+                got += root_lines(text)
+                if door == "cc" and ic.u16len(text) > ic.PHYSICAL_CAP:
+                    problems.append(f"{label}：{shown} 输出 {ic.u16len(text)} > 单条上限 {ic.PHYSICAL_CAP}")
+            if len(got) != 1 or not got[0].startswith(want_head) or got[0].count(label_mark) != 1:
+                problems.append(f"{label}：给出的根行是 {[g[:160] for g in got]}，应恰一行且根等于 {want_root}")
+    if problems:
+        return _fail(name, "；".join(problems) + "——那条路径上的 $WF_PLUGIN_ROOT 无值可换、重复或指错地方")
+    return _ok(name, f"（{scanned} 份分发文档里没有可识别的旧配方；{len(routes)} 条投递路径、{n_cmd} 次脚本代跑（参数取自 hook "
+                     f"清单）退出码 0、输出合形态、每条路径恰给出一行正确的根）")
 
 
 def check_postool_use_hook_exists():
@@ -3740,7 +3809,7 @@ def check_check_stale_modules_unit_tests_pass():
 def check_module_close_check_unit_tests_pass():
     """收口闸单测：跑 tools/test_module_close_check.py。
 
-    覆盖 module_close_check.py 九项检查与计数 / 标记命令的正反例（每个判定分支用它自己的失败方式
+    覆盖 module_close_check.py 十项检查与计数 / 标记命令的正反例（每个判定分支用它自己的失败方式
     打过一遍）+ _load_csm 双重包流回归（首跑实测炸过）+ run_all 结构与非 modules
     项目退化。具体组数与断言以测试文件自身为准，此处不复述计数。
     """
@@ -3941,6 +4010,37 @@ def check_role_memory_unit_tests_pass():
     if result.returncode != 0:
         return _fail(name, f"test exit={result.returncode}: {_suite_failure_summary(result.stdout)}")
     return _ok(name, "(test suite passed)")
+
+
+def check_opening_reminders_unit_tests_pass():
+    """开场提醒收敛与技能身份归一的行为单测：跑 tools/test_opening_reminders.py（unittest，子进程真跑 hook）。
+
+    被测的是每会话都跑的 `heartbeat-check.py`（只剩横幅）、`session-start-prep.py` 与它调的 `_overdue`（逾期任务
+    只把列出来的记为已提醒、看板没查成不动记录、休眠 / 唤醒会话不提；不再打印摘要与 onboard 提示、档位只认配置）、
+    `user-prompt-inject.py`（维护项按「工单 ID ＋ 内容版本」只提醒一次、只认领真正显示过的、首问按会话逐个记），以及技能统计的身份归一（`_skill_identity`、`recompute_skill_metrics`、写入端去重）
+    与 doctor 的档位冲突报告。失效方向：同一提醒每会话重播（噪音），或更糟——没显示过的被记成已提醒、
+    从此静默。用例数与分组以测试文件为准，此处不复述。
+
+    **它不覆盖的**：两个会话真并发时锁内认领是否只播一次（用例是串行的）；harness 是否把输出真的送进模型。
+    零用例执行也判红（`unittest` 发现不到用例时退出码为 0 而 stderr 写 `Ran 0 tests`）。
+    """
+    name = "opening_reminders_unit_tests_pass"
+    test_path = FRAMEWORK_ROOT / "tools" / "test_opening_reminders.py"
+    if not test_path.exists():
+        return _fail(name, "tools/test_opening_reminders.py missing")
+    try:
+        result = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tools",
+                                 "-p", "test_opening_reminders.py"], cwd=FRAMEWORK_ROOT, capture_output=True,
+                                text=True, encoding="utf-8", errors="replace", timeout=300)
+    except Exception as e:
+        return _fail(name, f"run error: {e}")
+    ran = re.search(r"^Ran (\d+) tests?", result.stderr, re.M)
+    if result.returncode != 0:
+        tail = " | ".join(l for l in result.stderr.splitlines() if l.startswith(("FAIL:", "ERROR:")))[:400]
+        return _fail(name, f"test exit={result.returncode}: {tail or result.stderr[-300:]}")
+    if not ran or int(ran.group(1)) == 0:
+        return _fail(name, "一个用例都没跑（unittest 发现不到用例也退出 0）——本闸无对象，不能报绿")
+    return _ok(name, f"({ran.group(1)} tests passed)")
 
 
 def check_module_memory_unit_tests_pass():
@@ -4246,6 +4346,15 @@ def check_modules_template_placeholders_quoted():
     return _ok(name, "(all placeholders quoted with double-quotes)")
 
 
+def _module_nav():
+    """import plugins/core/scripts/_module_nav.py（导航段渲染的唯一实现）。"""
+    scripts = str(FRAMEWORK_ROOT / "plugins" / "core" / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import _module_nav as nav
+    return nav
+
+
 def _close_check():
     """惰性 import `plugins/core/scripts/module_close_check`——基准落点字段的消费方。
 
@@ -4359,20 +4468,17 @@ def check_index_refresh_emits_overview_ref():
     产出它（或括注措辞漂了）时两件事同时发生、且都不报错：三方对账静默降为两方，段内
     已写的括注被下次刷新抹掉。
 
-    四层断言（形态由实测的假绿反推，不是照同族抄的）：
-      ①**定位取数表那一行**再取形态，不在整份 SKILL.md 里裸搜——文件级探测挡不住
-        「改成『不再产出该括注（历史形态为…已废弃）』」与「靠前塞诱饵 span」两种写法
-      ②行内形态 **≥1 条且每条都要能过**——`⊆`（有一条能过即算过）会放行「行内并存
-        一条坏形态」；`==1` 又会在「同时示出新写形态与就地替换后形态」上假红
-      ③用**消费方自己的正则**求证提得出 ref（正则从 module_close_check import，不在此
-        处另写一份），并断言替换后不残留闸不认识的占位（占位改名时本闸会静默失明）
+    断言分两半：
+      ①～③ 对**渲染器（`_module_nav.render`）的真实产出**判：首次插入与就地替换两条路径、ref
+        有值与为空各一格，都要被**消费方自己的正则**（从 module_close_check import，不另写一份）
+        认对——有值提得出同一个 ref、为空提不出任何 ref——且行内人写文字原样保留
       ④出厂模板**肯定 + 否定两半**：段内 `- **最近同步**：` 恰 1 行（整行被删时新建
         子模块既看不到目标形态、也没有可被就地替换的锚行），且该行不得被同一正则提出
         ref（假基准在未同步期间静默存在）
 
-    **本闸不保证什么**（写进这里而不是只写在账本里）：它验的是**规程文本**，不是渲染
-    行为，也不是落点的存在性——括注在运行期被抹掉时，检查 3 在 `filled==2` 下照常比对
-    并报 ✓，没有任何东西会说话。
+    **本闸不保证什么**（写进这里而不是只写在账本里）：它验的是渲染器对构造样本的产出，
+    不是各项目里落点的存在性——括注在运行期被别的写入方抹掉时，检查 3 在 `filled==2` 下照常
+    比对并报 ✓，没有任何东西会说话。
     """
     name = "index_refresh_emits_overview_ref"
     sample_ref = "a1b2c3d4"
@@ -4424,61 +4530,37 @@ def check_index_refresh_emits_overview_ref():
             f"单测双双全绿；再把内联口径漂开，第三个基准落点从每个项目里静默消失，仍全绿）",
         )
 
-    # ①定位取数表那一行——**不在整份 SKILL.md 里裸搜**。整份文件级的 code span 存在性
-    #   探测有两个洞（都实测过）：把取数表那句改成「不再产出该括注（历史形态为 …，已
-    #   废弃）」照样绿；在文件靠前处塞一个合法诱饵 span 也照样绿。收窄到那一行即两洞同消。
-    #   锚点用**宽形态**（以 `|` 开头 + 含段名）而不是整串表格首列字面量：首列改成带
-    #   链接的写法是合法排版改动，窄锚点会在它上面假红（实测）。
-    skill_lines = skill.read_text(encoding="utf-8").splitlines()
-    rows = [l for l in skill_lines
-            if l.startswith("|") and "current-state-summary" in l]
-    if len(rows) != 1:
-        return _fail(
-            name,
-            f"module-index-refresh/SKILL.md 的 current-state-summary 取数表行定位到 "
-            f"{len(rows)} 行（应恰 1 行）——整条被删、被拆成多行、或段名改了。定位不到就"
-            f"没有可照抄的行形态，渲染方不会产出这个括注",
-        )
-    row = rows[0]
-
-    # ②该行内的形态字面量：**≥1 条且每一条都要能过**（不是「有一条能过即算过」）。
-    #   `⊆` 语义下，行内并存一条坏形态时渲染方可能照抄那条坏的；`==1` 又会在「同时示出
-    #   新写形态与就地替换后形态」这类合法写法上假红（两种都实测过），故取「≥1 且全解析」。
-    forms = [s for s in re.findall(r"`([^`\n]*基准 commit[^`\n]*)`", row)
-             if "最近同步" in s]
-    if not forms:
-        return _fail(
-            name,
-            f"取数表 current-state-summary 行内取不到「最近同步 + 基准 commit」的行形态"
-            f"字面量——要么形态子句被删、要么括注措辞漂到认不出。不产出这个括注时：基准"
-            f"三方对账静默降为两方，且 overview 段内已写的括注会被下次刷新抹掉，两种失效"
-            f"都不报错。当前行内容: {row[:160]}",
-        )
-
-    # ③每条形态都必须被消费方正则认出，且替换后不得残留闸不认识的占位。
-    for form in forms:
-        if "<ref>" not in form:
-            return _fail(
-                name,
-                f"行形态 {form!r} 里没有 `<ref>` 占位——占位名改了而本闸没跟上。本闸只会"
-                f"填 `<ref>` 与 `<日期>` 两个占位，改名后它填不进真值，等于对这条形态失明",
-            )
-        probe = form.replace("<ref>", sample_ref).replace("<日期>", "2026-01-01")
-        m = ref_re.search(probe)
-        if not (m and m.group(1) == sample_ref):
-            return _fail(
-                name,
-                f"行形态 {form!r} 提取不出基准 ref（消费方正则 {ref_re.pattern!r}）"
-                f"——照它渲染出来的括注 close-check 认不出，第三个落点等于没有",
-            )
-        leftover = re.search(r"<[^>]+>", probe)
-        if leftover:
-            return _fail(
-                name,
-                f"行形态 {form!r} 在替换后仍残留占位 {leftover.group(0)!r}——本闸只认识 "
-                f"`<ref>` 与 `<日期>`，出现第三个占位说明形态改了而闸没跟上：那部分不会被"
-                f"填成真值，本闸对它是失明的",
-            )
+    # ①～③ 对**渲染器的真实产出**断言（渲染只在 _module_nav 一处，规程文本不再是产出方）：
+    #   首次插入（旧行没有括注）与就地替换（旧行已有括注、带人写文字）两种路径都要被消费方
+    #   正则认出同一个 ref；ref 为空时不得提出任何 ref（假基准）。
+    try:
+        nav = _module_nav()
+    except Exception as e:
+        return _fail(name, f"import _module_nav 失败（导航段渲染在它那里）: {e}")
+    docs = {label: nav.UNWRITTEN_TOKEN for label, _ in nav.CS_ROWS}
+    olds = {
+        "首次插入": "- **最近同步**：2025-12-01：人写说明\n",
+        "就地替换": "- **最近同步**：2025-12-01（基准 commit 0000000f——人写附注）：人写说明\n",
+    }
+    forms = 0
+    for label, old in olds.items():
+        for ref in (sample_ref, ""):
+            body = nav.render("current-state-summary", {"old_body": old, "docs": docs,
+                                                        "sync_date": "2026-01-01", "sync_ref": ref})
+            lines = [l for l in body.splitlines() if l.startswith(_SYNC_LINE_PREFIX)]
+            if len(lines) != 1:
+                return _fail(name, f"{label}：渲染产出的「最近同步」行有 {len(lines)} 条（应恰 1 条）：{body[:200]!r}")
+            m = ref_re.search(lines[0])
+            got = m.group(1) if m else None
+            if got != (ref or None):
+                return _fail(
+                    name,
+                    f"{label}、ref={ref!r}：渲染产出 {lines[0]!r} 被消费方正则 {ref_re.pattern!r} 提出 {got!r}"
+                    f"——照它渲染的括注 close-check 认不出（第三个落点等于没有），或在 ref 为空时留下假基准",
+                )
+            if "人写说明" not in lines[0]:
+                return _fail(name, f"{label}：渲染把「最近同步」行里的人写文字抹掉了：{lines[0]!r}")
+            forms += 1
 
     # ④出厂模板：**肯定 + 否定两半**。只有否定断言时，把占位行整行删掉照样绿（实测）
     #   ——而那正是新建子模块看不到目标形态、也没有可被就地替换的锚行的状态。
@@ -4508,7 +4590,7 @@ def check_index_refresh_emits_overview_ref():
             f"被检查 3 的 filled 过滤后只剩这一个落点、不足两处而整条跳过。危害是这个假值"
             f"在未同步期间**静默存在**，等 code-to-doc 跑完补上另两个落点才炸",
         )
-    return _ok(name, f"(spec row emits {len(forms)} parseable form(s); "
+    return _ok(name, f"(renderer emits {forms} parseable sync line(s) incl. empty-ref; "
                      f"template ships exactly 1 placeholder line, no ref)")
 
 
@@ -4921,30 +5003,6 @@ def check_self_iteration_proposal_schema_complete():
     return _ok("self_iteration_proposal_schema_complete")
 
 
-def check_eval_case_03_no_stale_problem_score():
-    """eval case 03 不得声称 proposal_failed 会增加 check-iteration-trigger.py 的 problem 加权分。"""
-    path = FRAMEWORK_ROOT / "plugins" / "core" / "skills" / "self-iteration" / "eval-cases" / "03-regress-proposal-failed-loop.md"
-    if not path.exists():
-        return _fail("eval_case_03_no_stale_problem_score", "eval case 03 file missing")
-    text = path.read_text(encoding="utf-8")
-    # 旧口径：声称 check-iteration-trigger 的 problem 分 +3.0
-    stale_patterns = [
-        r"check-iteration-trigger.*problem.*\+3\.0",
-        r"problem\s*分\s*\+3\.0",
-        r"\+3\.0\s*(?:problem|加权)",
-    ]
-    offenders = []
-    for pat in stale_patterns:
-        if re.search(pat, text):
-            offenders.append(pat)
-    if offenders:
-        return _fail(
-            "eval_case_03_no_stale_problem_score",
-            "eval case 03 still claims proposal_failed adds +3.0 to check-iteration-trigger problem score (removed v0.2.2-fixup-2)",
-        )
-    return _ok("eval_case_03_no_stale_problem_score")
-
-
 def check_proposal_applied_event_sample_complete():
     """self-iteration/SKILL.md 的 proposal_applied 事件样例必须**每一条**都包含 applied_option 字段。
 
@@ -5074,31 +5132,42 @@ def check_agent_protocols_documents_success_false_and_session_id():
 
 
 def check_self_iteration_no_proposals_kinds_match_trigger_script():
-    """self-iteration no-proposals 路径列出的 PM kind 必须覆盖 check-iteration-trigger.py 实际写入的全部 kind。"""
+    """维护提醒的种类：触发脚本恰好产出两种，self-iteration 无提案路径恰好列这两种。
+
+    期望值手写在这里，不取自任一侧——两边一起漏掉一种、或一起把退役的种类写回来，都要红。
+    """
+    name = "self_iteration_no_proposals_kinds_match_trigger_script"
+    expected = {"memory_backlog", "close_check_due"}
+    retired = {"problem_threshold", "activity_threshold", "completed_delta", "cadence_timeout"}
     skill_path = FRAMEWORK_ROOT / "plugins" / "core" / "skills" / "self-iteration" / "SKILL.md"
     script_path = FRAMEWORK_ROOT / "plugins" / "core" / "scripts" / "check-iteration-trigger.py"
     if not (skill_path.exists() and script_path.exists()):
-        return _fail("self_iteration_no_proposals_kinds_match_trigger_script", "files missing")
+        return _fail(name, "files missing")
 
     script_text = script_path.read_text(encoding="utf-8")
     # 提取 signals.append((  "<kind>", ... 中的 kind 字面量
-    script_kinds = set(re.findall(r'signals\.append\(\(\s*"([^"]+)"', script_text))
-    if not script_kinds:
-        return _fail("self_iteration_no_proposals_kinds_match_trigger_script", "could not extract kinds from trigger script")
+    script_kinds = re.findall(r'signals\.append\(\(\s*"([^"]+)"', script_text)
+    if sorted(script_kinds) != sorted(expected) or script_text.count("signals.append(") != len(script_kinds):
+        return _fail(name, f"trigger script writes {sorted(script_kinds)} in {script_text.count('signals.append(')} "
+                           f"signals.append calls, expected exactly {sorted(expected)}")
+    state_io = (FRAMEWORK_ROOT / "plugins" / "core" / "scripts" / "_state_io.py").read_text(encoding="utf-8")
+    m = re.search(r"^RETIRED_PM_KINDS = \(([^)]*)\)", state_io, re.M)
+    if not m or set(re.findall(r'"([^"]+)"', m.group(1))) != retired:
+        return _fail(name, f"_state_io.RETIRED_PM_KINDS 必须恰好是 {sorted(retired)}")
 
     skill_text = skill_path.read_text(encoding="utf-8")
     # 找 no-proposals 段：从"无任何提案生成"到"### 阶段 4"
     m = re.search(r"无任何提案生成.*?(?=### 阶段 4)", skill_text, re.DOTALL)
     if not m:
-        return _fail("self_iteration_no_proposals_kinds_match_trigger_script", "could not find no-proposals section")
-    section = m.group(0)
-    missing = sorted(k for k in script_kinds if f"`{k}`" not in section)
-    if missing:
-        return _fail(
-            "self_iteration_no_proposals_kinds_match_trigger_script",
-            f"no-proposals path missing kinds {missing}; trigger script writes {sorted(script_kinds)}",
-        )
-    return _ok("self_iteration_no_proposals_kinds_match_trigger_script")
+        return _fail(name, "could not find no-proposals section")
+    # 只认「待关闭条目的 kind 为 … 之一」这一句，句里的反引号项就是清单
+    listing = re.search(r"待关闭条目的 kind 为(.*?)之一", m.group(0), re.DOTALL)
+    if not listing:
+        return _fail(name, "no-proposals section lost its kind list sentence")
+    listed = set(re.findall(r"`([^`]+)`", listing.group(1)))
+    if listed != expected:
+        return _fail(name, f"no-proposals path lists {sorted(listed)}, expected {sorted(expected)}")
+    return _ok(name)
 
 
 
@@ -5801,21 +5870,16 @@ def check_task_blocked_producer_policy_consistent():
     return _ok("task_blocked_producer_policy_consistent")
 
 
-def check_iteration_baseline_code_derived():
-    """v0.4 G1#2：迭代基线改代码派生（derive, don't store）——
-    check-iteration-trigger.py 必须含 derive_last_iteration_date()/count_completed_since()
-    且不再引用 iteration-baseline；self-iteration / maintenance-review SKILL 不得残留
-    手工写 baseline 的义务文本（防回滚到"模型记账"层——实测 3 个月零记账产生假警报）。"""
+def check_iteration_baseline_not_written():
+    """iteration-baseline.json 不得回流：触发脚本的代码里不引用它，self-iteration / maintenance-review
+    SKILL 不得残留手工写它的义务文本（防回滚到「模型记账」——实测 3 个月零记账）。"""
+    name = "iteration_baseline_not_written"
     issues = []
     script = FRAMEWORK_ROOT / "plugins" / "core" / "scripts" / "check-iteration-trigger.py"
     if not script.exists():
-        return _fail("iteration_baseline_code_derived", "check-iteration-trigger.py missing")
+        return _fail(name, "check-iteration-trigger.py missing")
     stext = script.read_text(encoding="utf-8")
-    if "def derive_last_iteration_date" not in stext:
-        issues.append("script missing derive_last_iteration_date()")
-    if "def count_completed_since" not in stext:
-        issues.append("script missing count_completed_since()")
-    # 允许 docstring / 注释里作为「已退役」历史说明出现，但不允许作为路径常量 / 读写目标：
+    # 允许 docstring / 注释里作为历史说明出现，但不允许作为路径常量 / 读写目标：
     # 判 AST 里的非 docstring 字符串常量（注释本来就不在 AST 里）
     if re.search(r"^\s*BASELINE_FILE", stext, re.M):
         issues.append("script still defines BASELINE_FILE constant")
@@ -5836,8 +5900,8 @@ def check_iteration_baseline_code_derived():
            re.search(r"更新[^\n]{0,20}iteration-baseline\.json", t):
             issues.append(f"{rel}/SKILL.md still instructs writing iteration-baseline.json")
     if issues:
-        return _fail("iteration_baseline_code_derived", "; ".join(issues))
-    return _ok("iteration_baseline_code_derived")
+        return _fail(name, "; ".join(issues))
+    return _ok(name)
 
 
 def check_doctor_smoke():
@@ -5961,8 +6025,8 @@ def check_event_reliability_enum():
 def check_scaffold_gitkeep_dirs_covered():
     """scaffold 建的每个治理空目录都得在 doctor 的骨架清单里有一档。
 
-    scaffold 建 7 个 .gitkeep 治理目录（evals×3 / proposals×3 / archive），
-    doctor 三档清单一个都没查——目录被误删后零信号。两处都是手写清单，靠这条闸对账。
+    scaffold 建的 .gitkeep 治理目录（清单见 `proj_gitkeep_dirs`），
+    doctor 三档清单曾经一个都没查——目录被误删后零信号。两处都是手写清单，靠这条闸对账。
     `logs/.gitkeep` 不在 `proj_gitkeep_dirs` 里（scaffold 另建它），本闸本来就看不见它；它也**有意**不该进
     doctor 清单（整个 logs/ 被 gitignore，clone 后必然没有，列进来等于给每个克隆项目挂一条永远消不掉的 warn）。
     """
@@ -5976,7 +6040,7 @@ def check_scaffold_gitkeep_dirs_covered():
     m = re.search(r"proj_gitkeep_dirs\s*=\s*\[(.*?)\]", stext, re.S)
     if not m:
         return _fail(name, "找不到 proj_gitkeep_dirs 列表（scaffold 结构变了，闸需同步）")
-    # proj_dir / "evals" / "rules"  →  projects/evals/rules/.gitkeep
+    # proj_dir / "proposals" / "pending"  →  projects/proposals/pending/.gitkeep
     dirs = []
     for line in m.group(1).splitlines():
         parts = re.findall(r'"([^"]+)"', line)
@@ -6385,8 +6449,6 @@ def check_paths_single_source():
         return bad
     segs, joined = _runtime_segments()
     py_owner = FRAMEWORK_ROOT / "plugins" / "core" / "scripts" / "_state_io.py"
-    js_owner = (FRAMEWORK_ROOT / "plugins" / "core" / "skills" / "screenshot"
-                / "scripts" / "screenshot.js")
     if not py_owner.exists():
         return _fail(name, "_state_io.py 缺失——运行态目录的唯一实现没了")
 
@@ -6408,11 +6470,9 @@ def check_paths_single_source():
                     and id(n) not in docstrings:
                 if any(j in n.value for j in joined):
                     literal_hits.append(f"{_rel(p)}:{n.lineno} `{n.value[:60]}`")
-    # JS 侧同一事实的第二个表现层——Node 进程 import 不了 Python，无法合并成一份实现，
-    # 所以按 `closeout-discipline` §同一事实的多个表现层：两处同批改 + 闸把两处一起圈住。
+    # JS 侧不得有运行态目录：分发的 JS 里没有任何一份需要读写状态目录（截图结果只写输出目录的
+    # manifest），Node 进程又 import 不了 `_state_io`——出现即是第二个路径源，**无豁免**。
     for p in _shipped_js():
-        if p == js_owner:
-            continue
         src = p.read_text(encoding="utf-8", errors="replace")
         for i, ln in enumerate(src.splitlines(), 1):
             if any(j in ln for j in joined) or any(f"'{s}'" in ln or f'"{s}"' in ln
@@ -6460,14 +6520,6 @@ def check_paths_single_source():
                     return _fail(name, f"`legacy_present({kind})` 在 `{label}` 形态下答 "
                                        f"{not legacy}——doctor `legacy_state_dir` 与迁移工具靠它看旧目录，"
                                        + ("没迁移的项目在体检里会是绿的" if legacy else "新装项目会被报「没迁移」"))
-    js_src = js_owner.read_text(encoding="utf-8") if js_owner.exists() else ""
-    missing_seg = [s for s in _rt("state").split("/") if f"'{s}'" not in js_src and f'"{s}"' not in js_src]
-    if missing_seg:
-        return _fail(name, f"screenshot.js 的状态目录解析缺 `{_rt('state')}` 的段 {missing_seg}——"
-                           f"截图日志会写进一个该项目根本不用的目录")
-    if _rt("state", legacy=True).split("/")[-1] in js_src:
-        return _fail(name, f"screenshot.js 里还有旧状态目录 `{_rt('state', legacy=True)}` 的末段——JS 侧仍在回退到"
-                           f"旧目录，与 `_state_io`（只读新位置）分叉：没迁移的项目截图日志写进旧目录、没有读者")
     callers = 0
     for p in _shipped_py():
         if p == py_owner:
@@ -7246,6 +7298,9 @@ def check_hook_scripts_tolerate_harness_arg():
             encoding="utf-8", newline="")
         (proj / _rt("memory") / "shared" / "MEMORY.md").write_text(
             "# 共享记忆\n", encoding="utf-8", newline="")
+        # CC 门 shared / 本角色各一条挂载，两份都播，两条才都有输出可比
+        (proj / _rt("memory") / "dev").mkdir(parents=True, exist_ok=True)
+        (proj / _rt("memory") / "dev" / "MEMORY.md").write_text("# dev\n", encoding="utf-8", newline="")
 
     def one_pass(proj, keep_flag):
         """按清单顺序跑完全部命令；返回 [(标签, exit, stdout)]。
@@ -7359,7 +7414,6 @@ _HOOK_PROBE_PAYLOADS = {
                                   "description": "probe"}},
     "PostToolUse": {"tool_input": {"skill": "librarian"}},
     "SubagentStart": {"agent_type": "dev"},
-    "SubagentStop": {"agent_type": "dev"},
     "StopFailure": {"error": "rate_limit"},
     "ConfigChange": {"files": []},
     "SessionEnd": {"reason": "clear"},
@@ -7720,7 +7774,6 @@ def check_state_io_single_source():
     NON_EVENT_APPENDS = {
         # 目标写**文件名**而不是整路径：定义点多是 `X / "logs" / "y.log"` 的分段拼接，
         # 整路径串在源码里根本不存在（写过一版，当场把已声明的那条判成漏网）
-        ("plugins/core/scripts/log-subagent-activity.py", "subagent-activity.log"),
         ("plugins/core/scripts/maintenance_workorder.py", "promotion-candidates.md"),
         # Raw detached-worker stdout/stderr, not JSON events. The exact target
         # remains checked; changing this append to events.jsonl must stay red.
@@ -8142,34 +8195,35 @@ def check_doctor_thresholds_match_trigger():
     return _ok("doctor_thresholds_match_trigger")
 
 
-def check_memory_ask_smoke():
-    """v0.4 G2#7：memory-ask.py 存在、可编译、频控拍板值锁定、hooks.json SessionStart 已接线。
+_RETIRED_HOOK_SCRIPTS = ("memory-ask.py", "log-subagent-activity.py")
 
-    频控参数为 2026-08-06 用户拍板「更克制」：积压 ≥5 条 / 每日 ≤1 次 / 拒绝冷却 5 会话。
-    锁定取值防止后续改动无痕漂移；调整参数须同步改此检查（即显式过一次审）。
+
+def check_retired_hooks_unmounted():
+    """开场记忆巡检卡（memory-ask）与子 agent 活动日志（log-subagent-activity）不得重新挂回任一门。
+
+    记忆整理的入口是首问维护提醒里的 `memory_backlog` 与显式 librarian；子 agent 活动没有读者。
+    扫三份挂载面：CC `hooks.json`、Codex `hooks.codex.json`、Codex 审查基线 `hooks.codex.manifest.json`
+    （door 按它核对实装）。**正向对照**：每份都必须仍能读到 `heartbeat-check.py`——读错文件或读成空
+    时「没有退役脚本」是空真的，不能报绿。脚本文件本身也不得回到 `scripts/`。
     """
-    name = "memory_ask_smoke"
-    script = FRAMEWORK_ROOT / "plugins" / "core" / "scripts" / "memory-ask.py"
-    if not script.exists():
-        return _fail(name, "memory-ask.py missing")
+    name = "retired_hooks_unmounted"
+    hooks_dir = FRAMEWORK_ROOT / "plugins" / "core" / "hooks"
     issues = []
-    text = script.read_text(encoding="utf-8")
-    for pat, what in ((r"^ASK_BACKLOG_MIN_ENTRIES\s*=\s*5\b", "ASK_BACKLOG_MIN_ENTRIES=5"),
-                      (r"^ASK_REFUSAL_COOLDOWN_SESSIONS\s*=\s*5\b", "ASK_REFUSAL_COOLDOWN_SESSIONS=5")):
-        if not re.search(pat, text, re.M):
-            issues.append(f"频控拍板值缺失或被改: {what}")
-    for token in ("initialUserMessage", "--record-refusal", "last_asked_date",
-                  "maintenance-run.flag", "promotion-candidates.md"):
-        if token not in text:
-            issues.append(f"missing token: {token}")
-    hooks_text = json.dumps(json.loads(
-        (FRAMEWORK_ROOT / "plugins" / "core" / "hooks" / "hooks.json").read_text(encoding="utf-8")
-    ).get("hooks", {}).get("SessionStart", []))
-    if "memory-ask.py" not in hooks_text:
-        issues.append("hooks.json SessionStart 未接线 memory-ask.py")
+    for fname in ("hooks.json", "hooks.codex.json", "hooks.codex.manifest.json"):
+        try:
+            text = json.dumps(json.loads((hooks_dir / fname).read_text(encoding="utf-8")), ensure_ascii=False)
+        except Exception as e:
+            issues.append(f"{fname} 读不了（{type(e).__name__}）——无法证明退役脚本未挂载")
+            continue
+        if "heartbeat-check.py" not in text:
+            issues.append(f"{fname} 里找不到 heartbeat-check.py——读到的不是挂载表，「未挂载」无对象")
+        issues += [f"{fname} 又挂上了 {s}" for s in _RETIRED_HOOK_SCRIPTS if s in text]
+    scripts_dir = FRAMEWORK_ROOT / "plugins" / "core" / "scripts"
+    issues += [f"scripts/{s} 又回来了（没有挂载点的脚本会被当成还在用）"
+               for s in _RETIRED_HOOK_SCRIPTS if (scripts_dir / s).exists()]
     if issues:
         return _fail(name, "; ".join(issues))
-    return _ok(name)
+    return _ok(name, f"（{len(_RETIRED_HOOK_SCRIPTS)} 个退役脚本在三份挂载面均缺席，正向对照在场）")
 
 
 def check_maintenance_workorder_smoke():
@@ -8184,7 +8238,7 @@ def check_maintenance_workorder_smoke():
         return _fail(name, "maintenance_workorder.py missing")
     issues = []
     text = script.read_text(encoding="utf-8")
-    for token in ("maintenance-workorder.md", "maintenance-run.flag", "workframe_doctor",
+    for token in ("maintenance-workorder.md", "workframe_doctor",
                   "promotion-candidates", "pending_maintenance",
                   # -p 下 Skill 工具不注入正文（2026-08-06 实测）：工单必须指挥模型 Read librarian SKILL.md
                   "librarian", "notes-archive.md",
@@ -8363,22 +8417,43 @@ def check_librarian_placement_has_automemory_row():
 
 
 def check_notes_entry_count_sync():
-    """memory-ask.py 与 maintenance_workorder.py 的 count_notes_entries 必须逐字一致（同判据两处定义，防漂移）。"""
+    """工单的 notes 积压计数（`maintenance_workorder.count_notes_entries`）在固定样本上给出已知结果。
+
+    它是维护工单（`workframe-maintenance`）里 notes 积压那一项的计数源：漏计 = 工单对真实积压失明。
+    条目定义在 `_notes_entries`，后台采证与首问维护提醒的 `memory_backlog` 也用它。样本覆盖两种条目形态
+    （`### ` 章节头、`- YYYY-MM-DD` 顶层列表含 `[纠正]`、全角冒号、括注）、分组标题不另算一条、已标处置的
+    与模板注释里的不计、日期后不是边界的不计、缩进的子项与无日期列表项不计、零条目的角色不出现。期望值手写
+    在这里，不取自被测函数。子进程里跑：被测模块 import 时会改写
+    进程的 stdout（结果经它包过的那层 print 输出，用原始 `sys.__stdout__` 写会随底层 buffer 被关而丢）。"""
+    import os
     name = "notes_entry_count_sync"
-
-    def _extract(path):
-        text = path.read_text(encoding="utf-8")
-        m = re.search(r"^def count_notes_entries\(.*?(?=^def |\Z)", text, re.M | re.S)
-        return m.group(0).strip() if m else None
-
+    samples = {
+        "dev": "### a\n### b\n- 2026-01-01: x\n",
+        "qa": "- 2026-01-01: x\n- [纠正] 2026-01-02: y\n  - 2026-01-03 nested\n- not dated\n",
+        "pm": "# 标题\n正文\n",
+        "shared": "### x\n- 2026-01-01 a\n- 2026-01-02 b\n- 2026-01-03 c\n",
+        "ops": "<!-- 示例：\n- 2026-01-01: 模板\n-->\n- 2026-01-02：全角\n- 2026-01-03（括注）x\n- 2026-01-04abc\n"
+               "\n- 2026-01-05: y\n  → 不变：已由 z 覆盖（2026-01-06）\n### 单独一条\n正文\n- 2026-01-07: w\n",
+    }
+    want = {"dev": 2, "qa": 2, "shared": 3, "ops": 4}
     scripts_dir = FRAMEWORK_ROOT / "plugins" / "core" / "scripts"
-    a = _extract(scripts_dir / "memory-ask.py")
-    b = _extract(scripts_dir / "maintenance_workorder.py")
-    if a is None or b is None:
-        return _fail(name, "count_notes_entries 函数缺失（memory-ask 或 maintenance_workorder）")
-    if a != b:
-        return _fail(name, "两处 count_notes_entries 函数体不一致")
-    return _ok(name)
+    with tempfile.TemporaryDirectory() as td:
+        mem = Path(td) / "mem"
+        for role, text in samples.items():
+            (mem / role).mkdir(parents=True)
+            (mem / role / "notes.md").write_bytes(text.encode("utf-8"))
+        code = ("import json,sys; sys.path.insert(0, sys.argv[1]); import maintenance_workorder as m; "
+                "from pathlib import Path; print(json.dumps(m.count_notes_entries(Path(sys.argv[2]))), flush=True)")
+        try:
+            r = subprocess.run([sys.executable, "-c", code, str(scripts_dir), str(mem)], capture_output=True,
+                               timeout=60, env=dict(os.environ, CLAUDE_PROJECT_DIR=td, PYTHONUTF8="1"))
+            got = json.loads(r.stdout.decode("utf-8", "replace").strip().splitlines()[-1])
+        except Exception as e:
+            return _fail(name, f"实跑 count_notes_entries 失败: {type(e).__name__}: {e}")
+    if got != want:
+        return _fail(name, f"notes 积压计数在固定样本上不对：期望 {want}，实得 {got}——首问维护提醒的 "
+                           f"memory_backlog 会少报或多报")
+    return _ok(name, f"（固定样本 {len(samples)} 个角色，计数 {want}）")
 
 
 def check_rollback_supports_v2_targets_array():
@@ -8819,40 +8894,6 @@ def check_issues_template_has_attribution_fields():
     if "扁平" not in text:
         return _fail(name, "模板未声明扁平结构原则")
     return _ok(name, f"({len(required)} fields + flat principle)")
-
-
-def check_session_digest_no_end_of_session_writeback():
-    """session-digest/SKILL.md 不应再宣称"会话末尾预写覆盖 hook 骨架"——hook 在 SessionEnd 无条件覆盖该文件。
-
-    检测时允许否定语境引用废弃说法（如"**不存在** XX 的有效路径"）——这是必要的反例说明。
-    """
-    name = "session_digest_no_end_of_session_writeback"
-    f = (
-        FRAMEWORK_ROOT / "plugins" / "core" / "skills" / "session-digest" / "SKILL.md"
-    )
-    if not f.exists():
-        return _fail(name, "session-digest SKILL.md 不存在")
-    text = f.read_text(encoding="utf-8")
-
-    forbidden_phrases = [
-        "覆盖 hook 后续要写的骨架",
-        "会话末尾 best-effort",
-        "会话结束前由 Claude",
-    ]
-    # 否定语境标记——出现这些词的行视为反例引用，不报错
-    negation_markers = ["不存在", "无效", "不要在会话末尾", "会被", "被 hook", "**不**"]
-
-    offenders = []
-    for line in text.splitlines():
-        for phrase in forbidden_phrases:
-            if phrase in line and not any(neg in line for neg in negation_markers):
-                offenders.append(f"{phrase!r} in line: {line.strip()[:80]}")
-    if offenders:
-        return _fail(name, f"session-digest 仍含肯定语境的已废弃说法: {offenders}")
-
-    if "无条件覆盖" not in text or "下次 SessionStart" not in text:
-        return _fail(name, "session-digest 未明确 hook 无条件覆盖 + 唯一有效路径")
-    return _ok(name)
 
 
 def check_agent_protocols_has_rule_processing_order():
@@ -9328,7 +9369,7 @@ def check_scaffold_workframe_config_merge_mode():
         "config_path.exists()",
         "json.loads",
         'existing["project_name"]',
-        'existing["framework_version"]',
+        'existing.setdefault("framework_version"',
         'existing["framework_path"]',
         # 损坏检测三类：JSONDecodeError / OSError / 非 dict
         "json.JSONDecodeError",
@@ -9374,42 +9415,6 @@ def check_agent_protocols_step2_has_init_fallback():
     if missing:
         return _fail(name, f"通用协议片 Step 2 缺兜底语义: {missing}")
     return _ok(name)
-
-
-def check_log_subagent_activity_no_hardcoded_known_agents():
-    """log-subagent-activity.py 不允许硬编码 KNOWN_AGENTS 列表，必须动态发现。
-
-    M1 P0 修复：之前硬编码 5 个 core role + 5 个内置，项目级 custom role
-    （ceo / finance 等）会被记成 "subagent" 通用名。
-    """
-    name = "log_subagent_activity_no_hardcoded_known_agents"
-    f = FRAMEWORK_ROOT / "plugins" / "core" / "scripts" / "log-subagent-activity.py"
-    if not f.exists():
-        return _fail(name, "log-subagent-activity.py 不存在")
-    text = f.read_text(encoding="utf-8")
-    # 必须含动态发现函数
-    if "_discover_known_agents" not in text:
-        return _fail(name, "缺 _discover_known_agents 动态发现函数")
-    if "BUILTIN_AGENTS" not in text:
-        return _fail(name, "缺 BUILTIN_AGENTS 内置名单常量")
-    # 不允许出现旧的硬编码模式 KNOWN_AGENTS = [
-    if re.search(r"^KNOWN_AGENTS\s*=\s*\[", text, re.MULTILINE):
-        return _fail(name, "仍含硬编码 KNOWN_AGENTS 列表")
-    # 必须扫两个来源——判代码不判文字：两个来源的说明在 docstring 与注释里都有，按子串判时把插件级来源
-    # 整个删掉（`plugin_agents_candidates = []`）也照绿
-    fn = next((n for n in ast.walk(ast.parse(text)) if isinstance(n, ast.FunctionDef)
-               and n.name == "_discover_known_agents"), None)
-    calls = {getattr(c.func, "id", None) or getattr(c.func, "attr", None)
-             for c in ast.walk(fn) if isinstance(c, ast.Call)} if fn else set()
-    consts = {c.value for c in ast.walk(fn) if isinstance(c, ast.Constant) and isinstance(c.value, str)} if fn else set()
-    missing = []
-    if not {".claude", "agents"} <= consts:
-        missing.append("项目级 `.claude/agents`（函数体里没有拼这条路径）")
-    if "plugin_root_candidates" not in calls:
-        missing.append("插件级 `<插件根>/agents`（函数体里没有调 plugin_root_candidates()）")
-    if missing:
-        return _fail(name, f"动态发现缺关键来源: {missing}")
-    return _ok(name, "(_discover_known_agents 代码里扫项目级与插件级两个来源)")
 
 
 def check_role_customization_guide_has_protocol_contract_section():
@@ -9960,7 +9965,7 @@ def check_plugins_no_user_docs_path():
     """插件资产不得引用仓根用户文档路径（docs/<篇名>.md）——用户侧插件缓存里没有 docs/。
 
     2026-08-13 文档走查实锤三处死指针：onboard/SKILL.md 相对链接向上爬出插件指向
-    docs/onboarding.md、skill-customization-guide 与 log-subagent-activity.py 的
+    docs/onboarding.md、skill-customization-guide 与当时的子 agent 活动日志脚本的
     docs/ 字面引用。对偶闸 `check_core_assets_no_repo_internal_path` 拦不住：它的扫描面
     （templates/skills/reference/context）不含 scripts/，禁止清单也没有 docs/。
     该闸扫描面若直接扩到 scripts/ 会误伤合法 contributor 注释（tools/validate.py 提及、
@@ -12697,6 +12702,7 @@ def check_sub_shard_event_binding():
     name = "sub_shard_event_binding"
     ic = _inject_context()
     problems, seen, by = [], 0, {}
+    parts = {door: [] for door in HOOK_MANIFEST_RELS}
     for door in HOOK_MANIFEST_RELS:
         try:
             data = _hook_manifest(door)
@@ -12716,6 +12722,8 @@ def check_sub_shard_event_binding():
                     by[f"{door}/{key}"] = by.get(f"{door}/{key}", 0) + 1
                     if is_memory:
                         want, scope = "SubagentStart", None
+                        m_part = re.search(r"--part (\S+)", cmd)
+                        parts[door].append(m_part.group(1) if m_part else "all")
                     else:
                         scope = m_scope.group(1)
                         want = ic.SCOPE_EVENT.get(scope)
@@ -12744,6 +12752,11 @@ def check_sub_shard_event_binding():
                         f"[{door}] {what} 挂在 `{event}` 上，必须是 `{want}`：**子 agent 一个字"
                         f"都收不到**——SessionStart 的注入不传给子 agent，而 hook 会照常执行、"
                         f"marker 照常落地、`--check` 全绿，失效与「模型偶尔不守纪律」同形")
+    for door, want in (("cc", ["role", "shared"]), ("codex", ["all"])):
+        if sorted(parts.get(door, [])) != want:
+            problems.append(f"[{door}] 角色记忆注入的挂载是 {sorted(parts.get(door, []))}，必须恰为 {want}："
+                            f"CC 门两份合一会超单条上限、只剩预览却写着已送达；少挂一份则那份静默送不到，"
+                            f"多挂则同一份投两遍")
     if problems:
         return _fail(name, f"{len(problems)} 项：\n    " + "\n    ".join(problems))
     if seen == 0:
@@ -13414,7 +13427,7 @@ def check_hooks_twin_parity():
     就永不执行，与正常同形。
 
       expected := multiset{ tuple(e) | e ∈ CC 清单, e.event ∉ CODEX_ABSENT_EVENTS, tuple(e) ∉ _TWIN_CC_ONLY }，
-                  其中分片挂载（`--shard *`）折叠为 1；⊎ `_TWIN_CODEX_ONLY`
+                  其中分片挂载（`--shard *`）折叠为 1、分份挂载（`--part`）去掉该参数折叠为 1；⊎ `_TWIN_CODEX_ONLY`
       `_TWIN_CC_ONLY` 每条必须在 CC 清单里恰出现一次——否则豁免项悬空，或同一挂载被复制而豁免一并吞掉。
       actual   := multiset{ tuple(e) | e ∈ Codex 清单 }
       断言 actual == expected —— Counter 不是 set：复制一条 Codex 条目必须红（Codex 会跑两遍）。
@@ -13485,6 +13498,9 @@ def check_hooks_twin_parity():
             continue
         if "--shard *" in r["args"]:
             expected[r["key"]] = 1          # 分片折叠：CC 多片 → Codex 一条
+        elif (r["event"], r["script"]) == ("SubagentStart", "scripts/subagent-memory-inject.py") \
+                and r["args"] in ("--part shared", "--part role"):
+            expected[r["key"][:3] + ("",)] = 1   # 分份折叠，同上；别的脚本带 --part 照原样对账
         else:
             expected[r["key"]] += 1
     for k in _TWIN_CODEX_ONLY:
@@ -13723,6 +13739,66 @@ def check_maintenance_dedup_unit_tests_pass():
     return _run_suite_with_floor(name, "tools/test_maintenance_dedup.py", 25)
 
 
+def check_doc_state_unit_tests_pass():
+    """「未编写」状态单测：跑 tools/test_doc_state.py。
+
+    被测的是 `_doc_state.py` 的三态判定与它的读者、写入入口（查询层、归档深检、`module_init.py` 的
+    `--doc-state` / `--mark-unwritten` / `--unstamp` / 存量盘点）。判宽了真实正文被藏成「未编写」，
+    判窄了骨架被当成实现现状读，两个方向都不报错；套件另钉出厂模板契约（五份模板带 `unwritten: true`、
+    PRD 骨架的 AC 行是「未编写」）——`check_module_init_template_contract` 不查这两样。
+    组数与断言以测试文件自身为准，此处不复述计数。
+    """
+    name = "doc_state_unit_tests_pass"
+    return _run_suite_with_floor(name, "tools/test_doc_state.py", 60)
+
+
+def check_module_nav_unit_tests_pass():
+    """导航段单测：跑 tools/test_module_nav.py。
+
+    被测的是 `_module_nav.py` 的段定位、版式判定、六类段渲染、确认码与写入口，以及 `module_init.py` 的
+    `--refresh-index` / `--check` / `--convert-layout`。漏刷时读者看到旧状态，误写时人写的旧表、尾注与段外
+    文字被抹掉，两个方向都不报错；套件另钉「出厂模板段体 = 渲染器对空数据的产出」（新建模块后零差异）。
+    组数与断言以测试文件自身为准，此处不复述计数。
+    """
+    name = "module_nav_unit_tests_pass"
+    return _run_suite_with_floor(name, "tools/test_module_nav.py", 50)
+
+
+def check_taxonomy_unit_tests_pass():
+    """taxonomy 受控词表单测：跑 tools/test_taxonomy.py。
+
+    被测的是 `_taxonomy.py` 的取词与三态（不适用 / 未配置 / 已配置），以及它的两个读者：`doc-graph-health`
+    的概念热点（未启用时报告总表、详细节、终端摘要三处都要写明）与 `requirement-archiving` 的归档检查（存在未配置
+    节时未知 tag 只提示、不计入异常）。把示例词当真词时热点维度显示「已启用」却永远零命中，把未配置当已配置时刚装
+    项目的每个业务 tag 都报违规——两个方向都不报错。组数与断言以测试文件自身为准，此处不复述计数。
+    """
+    name = "taxonomy_unit_tests_pass"
+    return _run_suite_with_floor(name, "tools/test_taxonomy.py", 25)
+
+
+def check_codex_roles_compare_unit_tests_pass():
+    """Codex 角色新旧比较单测：跑 tools/test_codex_roles_compare.py。
+
+    被测的是 `codex_roles.compare()` 的分类（当前 / 只差版本头 / 正文有变 / 手改 / 未登记 / 缺失 / 未生成 / 已关门）、
+    `connected()` 的接门判定，以及「任一角色文件被手改或未登记 → 整批不写」的写前判定。把落后判成一致时旧装
+    项目永远停在旧角色、door 与 doctor 都报无问题；拿手改过的文件去和源比时升级可能覆盖用户的改动——两个方向都
+    不报错。组数与断言以测试文件自身为准，此处不复述计数。
+    """
+    name = "codex_roles_compare_unit_tests_pass"
+    return _run_suite_with_floor(name, "tools/test_codex_roles_compare.py", 25)
+
+
+def check_install_boundary_unit_tests_pass():
+    """装机边界单测：跑 tools/test_install_boundary.py。
+
+    被测的是 `.workframe-config.json` 的两个字段口径（`framework_version` 只作创建史、`project_type` 可缺而显式值
+    照写）、doctor 的 config 与初装完整度报法（只有初装齐全且无批次才报「已完整落地」），以及 taxonomy 出厂模板的
+    「未配置」提示。三组都是静默说错当前状态的形态。组数与断言以测试文件自身为准，此处不复述计数。
+    """
+    name = "install_boundary_unit_tests_pass"
+    return _run_suite_with_floor(name, "tools/test_install_boundary.py", 25)
+
+
 def check_workframe_query_unit_tests_pass():
     """Run query consumers and zero-write probes; an empty suite is not success.
 
@@ -13759,7 +13835,7 @@ def check_selfiter_unit_tests_pass():
     """
     import os
     name = "selfiter_unit_tests_pass"
-    modules = ("policy", "controller", "evidence", "runner", "capability")
+    modules = ("policy", "controller", "evidence", "candidates", "runner", "capability")
     for module in modules:
         if not (FRAMEWORK_ROOT / "tools" / f"test_selfiter_{module}.py").is_file():
             return _fail(name, f"missing self-iteration suite: {module}")
@@ -13785,8 +13861,7 @@ def check_session_start_output_within_cap():
     """CC 清单 `SessionStart` 上除打包器之外的每条 hook，在 fixture 状态下各自 stdout ≤ 物理上限；
     合计超限只提示。
 
-    这几条（`heartbeat-check.py` / `session-start-prep.py` / `check-stale-modules.py scan-git-diff` /
-    `memory-ask.py`）的输出直接进上下文、直接受同一个上限约束，而 `context_shards_within_cap`
+    这几条（`heartbeat-check.py` / `session-start-prep.py` / `check-stale-modules.py scan-git-diff`）的输出直接进上下文、直接受同一个上限约束，而 `context_shards_within_cap`
     的被检对象是打包器的片，够不着它们。逐 hook 独立判定上限，所以合计超限只在合并成一条 hook
     时才是真风险——分开挂时它是提示不是错误。
 
@@ -13956,8 +14031,13 @@ def check_doctor_inject_shards_behavior():
     doctor 的行为检查都长在本文件里（`tools/` 下没有 doctor 单测文件），本闸就是该项的单测。
     格：①各片到齐不报 ②缺一片报 warn（含重注时只到一片的 2/1/1）③compact 重注（各片 +1）不报 ④旧格式行只计数不判
     ⑤`kind: turn` 与 `shard: all` 行不参与；`kind: skipped_fork`（fork 判过、没投）缺片也不报 ⑥窗口外整组不判，跨窗口边界的组取全部行（一次投递
-    被窗口劈开时不假红、缺片照样红）⑦状态目录有 inject-log 的 spill 时降 info。
-    每格比文案特征而不只比等级：「缺片 warn」与「spill 降 info」若只比等级，互换文案也照样绿。
+    被窗口劈开时不假红、缺片照样红）⑦未并回的 inject-log spill 与主文件合并后再判：a 缺的那片在 spill 里 → 不报；
+    b spill 里是别的组 → 照报 warn（旧实现在这里一律降 info，把别组的真缺片盖掉）；c 主文件不在、只有 spill 且缺片
+    → 照报；d spill 读不了 → 单列 info 点名，不压低已观测的缺片；e 并回时改名留下的副本（`.merged.*`）里有主文件
+    没有的行（并回中途断掉）→ 并入；f 副本里的行主文件已有 → 不重复计；g 只有副本（没有主文件）、副本里是缺片 → 照报；
+    h 副本与未并回 spill 里有逐字相同的行（分不出是同一行还是两次投递）→ 该组既不报到齐也不报缺片、单列 info；
+    i 主文件也含同文行（三处同文）时同样下不了结论，而同次里另一组确定的缺片照报 warn。
+    每格比文案特征而不只比等级：「缺片 warn」与「读不了 info」若只比等级，互换文案也照样绿。
     """
     name = "doctor_inject_shards_behavior"
     import importlib.util
@@ -13987,16 +14067,25 @@ def check_doctor_inject_shards_behavior():
         r.update(kw)
         return r
 
-    def run(rows, spill=False):
+    def run(rows, spill=None, merged=None):
+        """`rows` 为 None 时不建主文件；`spill` 为行列表时写一份 spill，为 "dir" 时建一个读不了的同名目录；
+        `merged` 为行列表时写一份并回后改名留下的副本。"""
         with tempfile.TemporaryDirectory() as td:
             P = doc.Paths(td)
             P.state.mkdir(parents=True, exist_ok=True)
-            (P.state / "inject-log.jsonl").write_text(
-                "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
-                encoding="utf-8", newline="")
-            if spill:
-                (P.state / "inject-log.4242.spill.jsonl").write_text("{}\n", encoding="utf-8",
-                                                                    newline="")
+            if rows is not None:
+                (P.state / "inject-log.jsonl").write_text(
+                    "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                    encoding="utf-8", newline="")
+            sp = P.state / "inject-log.4242.spill.jsonl"
+            if spill == "dir":
+                sp.mkdir()
+            elif spill is not None:
+                sp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in spill),
+                              encoding="utf-8", newline="")
+            if merged is not None:
+                (P.state / "inject-log.4243.spill.jsonl.merged.1").write_text(
+                    "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in merged), encoding="utf-8", newline="")
             return fn({"paths": P})
 
     def has(f, lv, kw):
@@ -14043,12 +14132,42 @@ def check_doctor_inject_shards_behavior():
     f = run(split[:2])
     if not has(f, "warn", "有片没记上"):
         problems.append(f"⑥c 跨窗口边界的组缺片仍应 warn: {f}")
-    f = run(full[:2], spill=True)
-    if warns(f) or not has(f, "info", "spill"):
-        problems.append(f"⑦ 有未并回的 spill 时应降 info: {f}")
+    f = run(full[:2], spill=full[2:])
+    if warns(f) or not has(f, "ok", "各片次数相等"):
+        problems.append(f"⑦a 缺的那片在未并回的 spill 里，合并后到齐，不应报: {f}")
+    other = [row(i, 3, ts(), session_id="s-2", thread_id="s-2") for i in (1, 2, 3)]
+    f = run(full[:2], spill=other)
+    if not has(f, "warn", "有片没记上"):
+        problems.append(f"⑦b spill 里是别的组时，本组缺片仍应 warn（不得被无关 spill 盖掉）: {f}")
+    f = run(None, spill=full[:2])
+    if not has(f, "warn", "有片没记上"):
+        problems.append(f"⑦c 主文件不在、只有 spill 且缺片，应照判 warn: {f}")
+    f = run(full[:2], spill="dir")
+    if not (has(f, "warn", "有片没记上") and has(f, "info", "inject-log.4242.spill.jsonl")
+            and not has(f, "warn", "已并入")):
+        problems.append(f"⑦d spill 读不了时应单列 info 点名该文件、不把它算作已并入，且不压低已观测的缺片 warn: {f}")
+    f = run(full[:2], merged=full[2:])
+    if warns(f) or not has(f, "ok", "各片次数相等"):
+        problems.append(f"⑦e 并回中途断掉、缺的那片只在副本里，合并后到齐，不应报: {f}")
+    f = run(full, merged=full[:1])
+    if warns(f) or not has(f, "ok", "各片次数相等"):
+        problems.append(f"⑦f 副本里那一片主文件已有，不应重复计（否则成 2/1/1 误报缺片）: {f}")
+    f = run(None, merged=other[:2])
+    if not has(f, "warn", "有片没记上"):
+        problems.append(f"⑦g 没有主文件、只有并回副本且缺片，应照报 warn（不得当成「没有记录」）: {f}")
+    two = [row(1, 2, ts()), row(2, 2, ts())]
+    f = run([two[1]], spill=[two[0]], merged=[two[0]])
+    if has(f, "ok", "各片次数相等") or warns(f) or not has(f, "info", "下不了结论"):
+        problems.append(f"⑦h spill 与副本有逐字相同的行时，该组既不应报到齐也不应报缺片，应单列 info: {f}")
+    a1, a2 = two
+    lone = [row(1, 2, ts(), session_id="s-3", thread_id="s-3")]
+    f = run([a1, a2, a2] + lone, spill=[a1], merged=[a1])
+    if has(f, "ok", "各片次数相等") or not has(f, "info", "下不了结论") \
+            or not has(f, "warn", "s-3") or has(f, "warn", "session s-1"):
+        problems.append(f"⑦i 三处同文的组应下不了结论（不报 ok、不报该组缺片），另一组确定的缺片照报: {f}")
     if problems:
         return _fail(name, f"{len(problems)} 格不符：" + "；".join(problems[:6]))
-    return _ok(name, "(缺片 / compact / 旧格式 / 窗口 / spill 各格均符)")
+    return _ok(name, "(缺片 / compact / 旧格式 / 窗口 / spill 与并回副本九格均符)")
 
 
 def check_discipline_spotcheck_contract():
@@ -14207,9 +14326,15 @@ _CORE_SCRIPT_DATA = ("plugins/core/.workframe-meta/**", "plugins/core/templates/
 _SCAFFOLD_DATA = ("plugins/core/reference/**", "plugins/core/.claude-plugin/**")
 SLOW_CHECK_TRIGGERS = {
     "check_workframe_query_unit_tests_pass": ("tools/**", "plugins/workframe-launcher/skills/setup/**") + _CORE_ALL,
+    "check_doc_state_unit_tests_pass": ("tools/test_doc_state.py",) + _CORE_ALL,
+    "check_module_nav_unit_tests_pass": ("tools/test_module_nav.py",) + _CORE_ALL,
+    "check_taxonomy_unit_tests_pass": ("tools/test_taxonomy.py",) + _CORE_ALL,
+    "check_codex_roles_compare_unit_tests_pass": ("tools/test_codex_roles_compare.py",) + _CORE_ALL,
+    "check_install_boundary_unit_tests_pass": ("tools/test_install_boundary.py",) + _CORE_ALL,
     "check_selfiter_unit_tests_pass": (
         "tools/test_selfiter_policy.py", "tools/test_selfiter_controller.py",
-        "tools/test_selfiter_evidence.py", "tools/test_selfiter_runner.py", "tools/test_selfiter_capability.py", "plugins/core/scripts/**",
+        "tools/test_selfiter_evidence.py", "tools/test_selfiter_candidates.py",
+        "tools/test_selfiter_runner.py", "tools/test_selfiter_capability.py", "plugins/core/scripts/**",
         "plugins/core/skills/self-iteration/**", "plugins/core/.workframe-meta/event-schema.json",
     ),
     "check_migrate_unit_tests_pass": ("tools/test_workframe_migrate.py",) + _CORE_ALL,
@@ -14481,7 +14606,7 @@ CHECKS = [
     check_new_hook_scripts_exist,
     check_skill_metrics_recompute_is_deterministic,
     check_workframe_state_templates_exist,
-    check_activity_state_has_dormant_profile,
+    check_activity_state_no_dormant_profile,
     check_self_iteration_confidence_formula,
     check_eval_cases_exist,
     check_shared_agent_contract,
@@ -14491,7 +14616,7 @@ CHECKS = [
     check_event_registry_consistency,
     check_slash_namespace_consistency,
     check_pending_maintenance_schema_documented,
-    check_pm_retention_matches_events_window,
+    check_pm_retention_used_by_gc,
     check_activity_state_wake_up_pending,
     # v0.2.2 — Agent 边界与去耦合
     check_agents_no_business_skill_in_body,
@@ -14534,13 +14659,13 @@ CHECKS = [
     check_role_enum_single_source,
     # v1.0.0 审查修复批次 — I-040 防回退（skills 禁 ${CLAUDE_PLUGIN_ROOT}）
     check_no_plugin_root_env_in_skills,
+    check_skill_recipes_use_session_root,
     # v0.2.x 发布前一致性扫描
     check_release_consistency,
     # v0.2.x self-iteration fixes
     check_self_iteration_allowed_tools_complete,
     check_self_iteration_score_formula_uses_risk_penalty,
     check_self_iteration_proposal_schema_complete,
-    check_eval_case_03_no_stale_problem_score,
     check_proposal_applied_event_sample_complete,
 
     # v0.2.x event chain & boundary fixes
@@ -14557,7 +14682,7 @@ CHECKS = [
     check_text_writes_pin_newline,
     check_utf8_stream_wrap_symmetric,
     check_task_blocked_producer_policy_consistent,
-    check_iteration_baseline_code_derived,
+    check_iteration_baseline_not_written,
     check_doctor_smoke,
     check_validate_self_no_duplicates,
     check_validate_slow_trigger_table_sound,
@@ -14583,7 +14708,7 @@ CHECKS = [
     check_setup_state_steps_wired,
     check_doctor_install_group_contract,
     check_doctor_thresholds_match_trigger,
-    check_memory_ask_smoke,
+    check_retired_hooks_unmounted,
     check_maintenance_workorder_smoke,
     check_notes_entry_count_sync,
     check_write_time_audn_present,
@@ -14602,7 +14727,6 @@ CHECKS = [
     check_scaffold_has_ensure_project_scaffold,
     check_scaffold_templates_exist,
     check_issues_template_has_attribution_fields,
-    check_session_digest_no_end_of_session_writeback,
     check_agent_protocols_has_rule_processing_order,
     check_gitignore_template_has_required_entries,
     check_board_template_matches_task_management_schema,
@@ -14623,7 +14747,6 @@ CHECKS = [
     check_scaffold_creates_baseline_role_memory,
     check_scaffold_workframe_config_merge_mode,
     check_agent_protocols_step2_has_init_fallback,
-    check_log_subagent_activity_no_hardcoded_known_agents,
     check_role_customization_guide_has_protocol_contract_section,
 
     # M3 modules/ 体系（Codex 4 轮 + D1/D2 决策 + 5 轮 fix-1~10）
@@ -14637,6 +14760,7 @@ CHECKS = [
     check_signoff_guard_unit_tests_pass,
     check_dispatch_name_guard_unit_tests_pass,
     check_role_memory_unit_tests_pass,
+    check_opening_reminders_unit_tests_pass,
     check_module_memory_unit_tests_pass,
     check_signoff_consumers_carry_pointer,
     check_modules_no_legacy_display_name_or_slug,
@@ -14718,6 +14842,11 @@ CHECKS = [
     # 已装项目迁移工具 / --commit 记账去重
     check_migrate_unit_tests_pass,
     check_maintenance_dedup_unit_tests_pass,
+    check_doc_state_unit_tests_pass,
+    check_module_nav_unit_tests_pass,
+    check_taxonomy_unit_tests_pass,
+    check_codex_roles_compare_unit_tests_pass,
+    check_install_boundary_unit_tests_pass,
     check_workframe_query_unit_tests_pass,
     check_selfiter_unit_tests_pass,
 ]

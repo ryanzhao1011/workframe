@@ -27,10 +27,6 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-stale-modules.py\" scan-git-diff --harness cc"
-          },
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/memory-ask.py\" --harness cc"
           }
         ]
       },
@@ -147,7 +143,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/subagent-memory-inject.py\" --harness cc"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/subagent-memory-inject.py\" --harness cc --part shared"
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/subagent-memory-inject.py\" --harness cc --part role"
           },
           {
             "type": "command",
@@ -160,17 +160,6 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-context.py\" --harness cc --scope sub --shard 3/3"
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-subagent-activity.py\" --harness cc"
           }
         ]
       }

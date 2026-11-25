@@ -15,11 +15,11 @@ allowed-tools: [Bash, Read, Grep, Glob, Edit, AskUserQuestion]
 
 ## 怎么跑
 
-从项目根目录执行（插件根路径由 SessionStart hook 写入 `plugin-root.txt`，不依赖 PATH）：
+从项目根目录执行（插件根取 `$WF_PLUGIN_ROOT`，即会话开场注入的「本会话插件根」，不依赖 PATH）：
 
 ```bash
-python "$(cat .workframe/state/plugin-root.txt)/skills/doc-graph-health/scripts/graph_health.py"          # 全量巡检 + 覆写报告
-python "$(cat .workframe/state/plugin-root.txt)/skills/doc-graph-health/scripts/graph_health.py" --dry    # 只看摘要不写报告
+python "$WF_PLUGIN_ROOT/skills/doc-graph-health/scripts/graph_health.py"          # 全量巡检 + 覆写报告
+python "$WF_PLUGIN_ROOT/skills/doc-graph-health/scripts/graph_health.py" --dry    # 只看摘要不写报告
 ```
 
 跑完对比上次：`git diff -- projects/modules/graph-health.md`（收敛趋势比绝对数字重要）。
@@ -38,7 +38,7 @@ python "$(cat .workframe/state/plugin-root.txt)/skills/doc-graph-health/scripts/
 
 ## 概念热点的词表来源（项目自配）
 
-优先级：`.workframe-config.json` 的 `graph_health.hotspot_words`（显式覆盖）→ `projects/specs/_meta/taxonomy.md`「## 能力域」表格（推荐正源：词表随项目 tags 纪律自然生长）→ 两者皆无则**跳过本维度**并在报告中给启用指引。
+优先级：`.workframe-config.json` 的 `graph_health.hotspot_words`（显式覆盖）→ `projects/specs/_meta/taxonomy.md`「## 能力域」表格（推荐正源：词表随项目 tags 纪律自然生长）→ 两者皆无则本维度**未启用**，报告总表、详细节与终端摘要都写明并给启用指引。词表里的出厂示例词（`示例能力A` 这类）不算词，能力域只剩它们时同样是未启用。
 
 报告会标注词表来源与 taxonomy 的 updated 时间——**词表停更 = 本维度漏检新概念**，看到来源时间明显陈旧时先更新词表再看结论。
 

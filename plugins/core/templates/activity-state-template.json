@@ -1,16 +1,16 @@
 {
   "__schema__": "workframe.activity-state.v1",
-  "__doc__": "Maintained by session-start-prep.py + session-end-flush.py + check-iteration-trigger.py + user-prompt-inject.py + maintenance_workorder.py (all writes go through _state_io's lock/atomic-replace/three-way-merge). heartbeat-check.py and memory-ask.py READ it only. Drives dormant/wake-up detection, memory decay gating, pending_maintenance state, summary drift repair history. recent_drift_repairs (v0.2.2): ISO timestamps of recent SessionStart drift repairs in last 30d, used by C+ drift check to detect SessionEnd timeout patterns. DEPRECATED: weighted_events_since_last_iteration is kept for backward compatibility only — check-iteration-trigger.py recomputes weights in real time from events.jsonl and does not read or update this field.",
+  "__doc__": "Maintained by session-start-prep.py + session-end-flush.py + check-iteration-trigger.py + user-prompt-inject.py + maintenance_workorder.py (all writes go through _state_io's lock/atomic-replace/three-way-merge). Drives dormant/wake-up detection, memory decay gating, pending_maintenance state, summary drift repair history. The dormant profile itself lives only in .workframe-config.json (dormant_profile); a dormant_profile key left here by older versions is no longer read. last_prompt_injected_session_id: session id (\"sid:<id>\", or the session counter when no id is available) whose first prompt already carried the maintenance reminder (latest only, kept for compatibility); prompt_reminded_sessions (written on demand) keeps the last 200 such markers so interleaved sessions do not take each other's first prompt (a bound, not a guarantee: after 200 other sessions an old session's next prompt counts as first again); on upgrade the single legacy marker is folded into it. maintenance_notified (written on demand): version keys (<PM id>#<content digest>) of maintenance items already shown once; an item is shown again only when its content changes. recent_drift_repairs (v0.2.2): ISO timestamps of recent SessionStart drift repairs in last 30d, read by /core:audit for the repair frequency. DEPRECATED: weighted_events_since_last_iteration is kept for backward compatibility only — nothing reads or updates it.",
   "__pending_maintenance_schema__": {
-    "__doc__": "Field contract for each pending_maintenance entry. Written by check-iteration-trigger.py upsert_pending(); GC'd by session-start-prep.py after status=closed + closed_at older than PM_CLOSED_RETENTION_DAYS. Kept here (not in prose docs) so the contract ships with the plugin and stays machine-checkable.",
+    "__doc__": "Field contract for each pending_maintenance entry. Written by check-iteration-trigger.py upsert_pending(); GC'd by session-start-prep.py after status=closed or retired + closed_at older than PM_CLOSED_RETENTION_DAYS. Kept here (not in prose docs) so the contract ships with the plugin and stays machine-checkable.",
     "id": "PM-<YYYYMMDD>-<seq>",
-    "kind": "signal category, e.g. problem_threshold / cadence_timeout / memory_backlog / close_check_due",
+    "kind": "signal category: memory_backlog / close_check_due (entries of kinds no longer produced may linger as retired until they expire)",
     "severity": "info | warn",
     "source": "producer script name",
     "created_at": "ISO-8601",
     "dedup_key": "stable identity WITHOUT a time component — a time-bearing key piles up synonymous entries while the condition stays unresolved",
-    "status": "open | closed",
-    "closed_at": "ISO-8601 or null. NOT just an audit stamp: this timestamp IS the scoring baseline for the entry's own dedup_key — dismissing a signal means the user judged every piece of evidence before that moment closed out, so check-iteration-trigger.py restarts that kind's count from here (dismissal_baseline(); per dedup_key, closing one kind never affects another). Three shapes: evidence-filter kinds (problem_threshold / activity_threshold / close_check_due) only count evidence whose ts is > closed_at — events.jsonl entries for the first two, each stale entry's last_marked_at for the third; date-baseline kinds (cadence_timeout / completed_delta) move their start date past it, and never backwards (cadence takes whichever is later, the dismissal or the last iteration); the suppression-window kind (memory_backlog) is skipped wholesale while a non-GC'd closed entry exists — it scans current notes state, so there is no evidence timestamp to compare and no separate constant to tune. Consequences: never hand-edit it, and keep PM_CLOSED_RETENTION_DAYS == EVENTS_WINDOW_DAYS and >= CADENCE_DAYS (validate: pm_retention_matches_events_window) — this entry is the only carrier of the suppression, so its GC deadline is how long the suppression lasts.",
+    "status": "open | closed | retired (session-start-prep.py: an open entry of a kind no longer produced; not a dismissal, never a baseline)",
+    "closed_at": "ISO-8601 or null. NOT just an audit stamp: for a closed entry this timestamp IS the baseline for the entry's own dedup_key — dismissing a signal means the user judged everything before that moment handled, so check-iteration-trigger.py restarts that kind from here (dismissal_baseline(); per dedup_key, closing one kind never affects the other). Two shapes: the evidence-filter kind (close_check_due) only counts stale entries whose last_marked_at is > closed_at; the suppression-window kind (memory_backlog) is skipped wholesale while a non-GC'd closed entry exists — it scans current notes state, so there is no evidence timestamp to compare and no separate constant to tune. Consequences: never hand-edit it — this entry is the only carrier of the suppression, so its GC deadline (PM_CLOSED_RETENTION_DAYS) is how long the suppression lasts.",
     "details": "human-readable description"
   },
   "session_counter": 0,
@@ -19,8 +19,6 @@
   "weighted_events_since_last_iteration": 0.0,
   "dormant": false,
   "wake_up_pending": false,
-  "dormant_profile": "normal",
-  "last_digest_at": null,
   "last_prompt_injected_session_id": null,
   "pending_maintenance": [],
   "recent_drift_repairs": []

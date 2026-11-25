@@ -1,7 +1,7 @@
 # J5 maintenance 两阶段（judge → --commit）
 
 - 前置：pm notes 有余量条目、promotion-candidates 有 1 条未拍板、proposals/applied
-  有逾期未验证提案、pending_maintenance 有自迭代节奏信号（cadence/problem）
+  有逾期未验证提案、pending_maintenance 有 close_check_due 信号
 - 动作 phase 1（judge）：
   `claude -p "<工单 prompt>" --maintenance --permission-mode acceptEdits --add-dir <plugin根>`
   ——**prompt 必须放在 --add-dir 之前**（--add-dir nargs 贪婪，会把后置 prompt 吞成目录）
@@ -14,13 +14,13 @@
      `build_workorder()` 为准
   2. notes 评估落盘 + 快照 `logs/librarian-snapshots/` + 运行日志 `logs/librarian/`
   3. 逾期提案 verified 回写，「无法验证」与「验证失败」明确区分
-  4. **close_pm 为空**——cadence_timeout / problem_threshold 不由批处理关闭
+  4. **close_pm 为空**——close_check_due 不由批处理关闭
   5. manifest `logs/maintenance-commit.json` 结构合法（promotions/extra_events/close_pm/done）
 - 动作 phase 2：`CLAUDE_PROJECT_DIR=<沙盒> python maintenance_workorder.py --commit`
 - 断言 phase 2：
   6. sidecar/events 由代码落盘（memory_promoted + skill_used + proposal_verified 按 schema）
   7. 工单全部打勾、manifest 归档 `.applied.json`
   8. flag 不删除属设计内（30 分钟 mtime 自动过期）
-- 实测 2026-08-07：✅ 8/8。全程 0 permission denials（工单规约让模型根本不去碰
+- 实测 2026-08-07（**断言 4 当时用的是别的信号种类，未按现口径复跑**）：✅ 8/8。全程 0 permission denials（工单规约让模型根本不去碰
   状态目录）。中途两次中断（session limit / API 断连）后 `--resume` 接续，评估
   结论无损落盘——judge 中断重入路径顺带验证。

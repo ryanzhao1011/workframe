@@ -4,7 +4,7 @@
 入口全部子进程实跑（临时项目，`CLAUDE_PROJECT_DIR` 指过去；Codex 门的载荷带 `cwd`），看 stdout 与事件流：
 
 1. **CC 的 skill 入口**（`log-skill-invoked.py`）：模型调 Skill 与用户直敲 `/skill` 都投、hookEventName 跟着事件走、
-   stdout 是唯一一串纯 ASCII 的 JSON；同周期再调不投（skipped_dedup）；**投递判定在分钟级去重之前**；
+   stdout 是唯一一串纯 ASCII 的 JSON；同周期再调不投、不写回执；**投递判定在分钟级去重之前**；
    未映射不投（unmapped）；子线程不投（skipped_subthread），fork 只给一次指针、不记进父会话；记忆缺失可见「未加载」且不记已投；
    超预算给条目目录、可见「未完整加载」、长度在上限内；`--harness codex` 下同一载荷同样投（本模块不读门）。
 2. **Codex 的 skill 入口**：shell 读 `SKILL.md`（`signoff-guard.py` 的 Bash 路径）与提示里的 `$skill`
@@ -20,6 +20,8 @@
 7. **SubagentStart 对 fork 跳过**（`subagent-memory-inject.py` 与 `inject-context.py --scope sub`）：CC 的 `agent_type=fork`
    与 Codex 的 rollout 首行 `forked_from_id` 两种认法；fork 载荷零 stdout、sub 片在 inject-log 记一行 `kind=skipped_fork`；
    普通子 agent 照投（对照组，证明探针走得到投递路径）；rollout 读不到时按普通子 agent 处理。
+8. **SubagentStart 分两份投**（CC 门 `--part shared|role`）：写满框架预算时各自全文送达；单份超预算只给目录并标
+   「未完整加载」；某份缺失时那份零输出；每份只承诺自己；Codex 派生合成一条。
 
 > **测的是脚本 stdin → stdout 与事件流，不是 harness 是否把 additionalContext 送进模型**——那要真实会话看
 > transcript 的 hook 附件 / Codex rollout 才验得了。
@@ -144,9 +146,10 @@ def test_skill_entry(proj):
     check("事件 injected / skill_tool / 全名", [(x["outcome"], x["trigger"], x.get("skill")) for x in e]
           == [("injected", "skill_tool", "core:test-case-design")], str(e))
 
+    n_before = len(events(proj, "s1"))
     rc, out, _ = run(proj, "log-skill-invoked.py", skill_payload("s1", "core:code-review", proj))
     check("同周期同域再调零 stdout", rc == 0 and out == "", out[:80])
-    check("事件 skipped_dedup", events(proj, "s1")[-1]["outcome"] == "skipped_dedup")
+    check("去重跳过不写回执（零新增投递事件）", len(events(proj, "s1")) == n_before, str(events(proj, "s1")[n_before:]))
 
     # 投递判定在分钟级去重之前：同分钟已有同 skill 的 skill_invoked，新会话照样投
     import datetime
@@ -227,12 +230,12 @@ def test_codex_skill_entries(proj):
           [(x["outcome"], x["trigger"], x.get("skill")) for x in events(proj, "k1")]
           == [("injected", "skill_read", "core:test-case-design")], str(events(proj, "k1")))
     rc, out, _ = run(proj, "signoff-guard.py", bash_payload("k1", f"cat '{md('code-review')}'", proj), args=CODEX)
-    check("同周期同域再读零 stdout、skipped_dedup", out == "" and events(proj, "k1")[-1]["outcome"] == "skipped_dedup")
+    check("同周期同域再读零 stdout、去重跳过不写回执", out == "" and len(events(proj, "k1")) == 1, str(events(proj, "k1")))
     rc, out, _ = run(proj, "signoff-guard.py", bash_payload("k1", "git status --short", proj), args=CODEX)
-    check("没有 SKILL.md 的命令零 stdout、零事件", rc == 0 and out == "" and len(events(proj, "k1")) == 2)
+    check("没有 SKILL.md 的命令零 stdout、零事件", rc == 0 and out == "" and len(events(proj, "k1")) == 1)
     rc, out, _ = run(proj, "signoff-guard.py",
                      bash_payload("k1", "cat skills/not-a-skill/SKILL.md myskills/code-review/SKILL.md", proj), args=CODEX)
-    check("磁盘上没有的 skill、同形字面串不认", out == "" and len(events(proj, "k1")) == 2, str(events(proj, "k1")[-1:]))
+    check("磁盘上没有的 skill、同形字面串不认", out == "" and len(events(proj, "k1")) == 1, str(events(proj, "k1")[-1:]))
     rc, out, _ = run(proj, "signoff-guard.py",
                      bash_payload("k2", f"cat '{md('document-norms')}' '{md('prd-writer')}' '{md('technical-design')}'", proj),
                      args=CODEX)
@@ -338,8 +341,8 @@ def test_codex_skill_entries(proj):
             act.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8", newline="")
             rc, out, _ = run(proj, "user-prompt-inject.py", ups("k12", "$core:code-review"), args=CODEX)
             ctx = safe_ctx(out)[1]
-            check(f"维护提醒超长时先截断，记忆仍投得进去、整条 ≤ {rm.DELIVER_BUDGET}",
-                  "已截断" in ctx and SENTINEL_QA in ctx and rm.u16len(ctx) <= rm.DELIVER_BUDGET, f"u16={rm.u16len(ctx)}")
+            check(f"维护提醒超长时少列几条（其余留到下次），记忆仍投得进去、整条 ≤ {rm.DELIVER_BUDGET}",
+                  "下次再提醒" in ctx and SENTINEL_QA in ctx and rm.u16len(ctx) <= rm.DELIVER_BUDGET, f"u16={rm.u16len(ctx)}")
         finally:
             pm.write_text(pm_saved, encoding="utf-8", newline="")
     finally:
@@ -435,8 +438,9 @@ def test_restore(proj):
     check("最近使用的在前（此处即后投的 pm）", 0 <= out.find(SENTINEL_PM) < out.find(SENTINEL_QA), out[:80])
     st = json.loads((proj / ".workframe" / "state" / rm.STATE_FILE_NAME).read_text(encoding="utf-8"))["sessions"][sid]
     check("周期号 +1、补过全文的在新周期算已投", st["cycle"] == 1 and set(st["delivered"]) == {"qa", "pm"}, str(st))
+    n_before = len(events(proj, sid))
     rc, out, _ = run(proj, "log-skill-invoked.py", skill_payload(sid, "core:test-case-design", proj))
-    check("补投后同域再调不重复", out == "" and events(proj, sid)[-1]["outcome"] == "skipped_dedup")
+    check("补投后同域再调不重复、不写回执", out == "" and len(events(proj, sid)) == n_before, str(events(proj, sid)[n_before:]))
     rc, out, _ = run(proj, "role-memory-restore.py", dict(compact, agent_id="a2", agent_type="core:qa"))
     st2 = json.loads((proj / ".workframe" / "state" / rm.STATE_FILE_NAME).read_text(encoding="utf-8"))["sessions"][sid]
     check("子线程压缩：零 stdout、不动父会话周期", out == "" and st2["cycle"] == 1, str(st2))
@@ -529,14 +533,18 @@ def test_opening(proj):
     check("开场有条目目录（dev / qa 标题，[纠正] 保留）",
           "角色记忆条目目录" in out and SENTINEL_DEV in out and "[纠正] 09-02 纠正条目" in out, out[-400:])
     check("开场不带角色正文", "第一条" in out and "尾部正文哨兵" not in out)
-    act = proj / ".workframe" / "state" / "activity-state.json"
-    data = json.loads(act.read_text(encoding="utf-8"))
-    data["dormant_profile"] = "archive"
-    act.write_text(json.dumps(data), encoding="utf-8", newline="")
+    # 活动档位只认 .workframe-config.json（运行态里不再存这一份）
+    cfg_path = proj / ".workframe-config.json"
+    cfg_saved = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else None
+    cfg = json.loads(cfg_saved) if cfg_saved else {}
+    cfg["dormant_profile"] = "archive"
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8", newline="")
     rc, out, _ = run(proj, "session-start-prep.py", dict(start, session_id="o2"))
     check("archive（dormant）态照样有 shared", "[archive]" in out and SENTINEL_SHARED in out, out[:200])
-    data["dormant_profile"] = "normal"
-    act.write_text(json.dumps(data), encoding="utf-8", newline="")
+    if cfg_saved is None:
+        cfg_path.unlink()
+    else:
+        cfg_path.write_text(cfg_saved, encoding="utf-8", newline="")
     rc, out, _ = run(proj, "session-start-prep.py", dict(start, session_id="o3"),
                      args=("--harness", "codex", "--output", "hook-json"))
     ev, ctx = safe_ctx(out)
@@ -621,6 +629,112 @@ def test_static():
     check("CC 清单把补投挂在 SessionStart matcher=compact 的组",
           any(g.get("matcher") == "compact" and any("role-memory-restore.py" in h["command"] for h in g["hooks"])
               for g in groups))
+
+
+def test_subagent_start_parts(proj):
+    print("[SubagentStart：CC 门两份分开投]")
+    mem = proj / ".workframe" / "agent-memory"
+    shared_f, qa_f = mem / "shared" / "MEMORY.md", mem / "qa" / "MEMORY.md"
+    keep = shared_f.read_bytes(), qa_f.read_bytes()
+    marker = "[workframe] 角色记忆注入"
+    # 期望值不取被测代码的常量：预算与码元计数各自独立写一遍
+    budget, u16 = 9500, lambda s: sum(2 if ord(c) > 0xFFFF else 1 for c in s)
+    shared_f, qa_f = shared_f.resolve(), qa_f.resolve()
+    zero = lambda res: res[0] == 0 and res[2] == ""
+
+    def part(which, agent_type="core:qa"):
+        args = ("--harness", "cc", "--part", which) if which else CODEX
+        rc, out, err = run(proj, "subagent-memory-inject.py",
+                           {"session_id": "p1", "cwd": str(proj), "hook_event_name": "SubagentStart",
+                            "agent_id": "a-p1", "agent_type": agent_type, "transcript_path": ""}, args=args)
+        return rc, safe_ctx(out)[1], out
+
+    try:
+        rs, cs, _ = part("shared")
+        rr, cr, _ = part("role")
+        check("shared 份只有 shared、role 份只有本角色",
+              rs == rr == 0 and SENTINEL_SHARED in cs and SENTINEL_QA not in cs
+              and SENTINEL_QA in cr and SENTINEL_SHARED not in cr, f"{cs[:80]!r} {cr[:80]!r}")
+        check("每份都带标记与闭围栏，只承诺自己那份、并指出另一份的路径",
+              cs.startswith("[workframe] 共享记忆注入") and marker not in cs and cr.startswith(marker)
+              and all(c.endswith("=== 记忆注入结束 ===") for c in (cs, cr))
+              and "`.workframe/agent-memory/shared/MEMORY.md` 全文已由本段送达" in cs and f"没有它的全文时 Read `{qa_f.as_posix()}`" in cs
+              and "`.workframe/agent-memory/qa/MEMORY.md` 全文已由本段送达" in cr and f"没有它的全文时 Read `{shared_f.as_posix()}`" in cr,
+              f"{cs[:200]!r} {cr[:200]!r}")
+
+        # 预算上限（shared 4,000 ＋ role 8,000）：合一超 10,000，分开各自全文送达
+        fill = lambda head, n: head + "字" * (n - len(head) - 4) + "尾部哨兵"
+        shared_f.write_text(fill("- 2026-09-01：甲", 4000), encoding="utf-8", newline="")
+        qa_f.write_text(fill("- 2026-09-01：乙", 8000), encoding="utf-8", newline="")
+        both, cs, cr = part(None)[1], part("shared")[1], part("role")[1]
+        check("两份都写满框架预算：合一超 10,000（缺陷形态仍在），分开各自逐字全文且不超单段预算",
+              u16(both) > 10000 and all(f.read_text(encoding="utf-8") in c and "未完整加载" not in c.split("\n===")[0] and u16(c) <= budget
+                                        for f, c in ((shared_f, cs), (qa_f, cr))), f"{u16(both)} {u16(cs)} {u16(cr)}")
+
+        # 到线 / 越线一格 / 星平面字符：按 UTF-16 码元判
+        base = u16(cr) - 8000
+        edge = budget - base
+        for label, body, whole in (("恰到预算：全文", fill("- 2026-09-01：乙", edge), True),
+                                   ("超一个码元：只给目录", fill("- 2026-09-01：乙", edge + 1), False),
+                                   ("Python 长度没超、UTF-16 超（emoji）：只给目录", fill("- 2026-09-01：乙", edge - 4) + "😀" * 3, False)):
+            qa_f.write_text(body, encoding="utf-8", newline="")
+            cr = part("role")[1]
+            check(f"role 份 {label}", u16(cr) <= budget and (body in cr) is whole
+                  and (f"**开工前 Read `{qa_f.as_posix()}` 取全文**" in cr) is not whole
+                  and ("未完整加载" in cr) is not whole and ("已由本段送达" in cr) is whole
+                  and (marker in cr) is whole, f"{u16(cr)} {cr[:120]!r}")
+        cs = part("shared")[1]
+        check("角色份降级时 shared 份不替它说送到了", "送达" not in cs.replace("`.workframe/agent-memory/shared/MEMORY.md` 全文已由本段送达", "", 1)
+              and f"没有它的全文时 Read `{qa_f.as_posix()}`" in cs, cs[:260])
+        qa_f.write_text("".join(f"- 2026-09-01：条目{i}" + "字" * 60 + "\n" for i in range(600)), encoding="utf-8", newline="")
+        cr = part("role")[1]
+        check("目录本身也超：截断后仍不超预算、带闭围栏与取全文的路径",
+              u16(cr) <= budget and "目录过长已截断" in cr and cr.endswith("=== 记忆注入结束 ===")
+              and f"**开工前 Read `{qa_f.as_posix()}` 取全文**" in cr, f"{u16(cr)}")
+
+        # 缺失与解析不出角色
+        shared_f.write_bytes(keep[0])
+        qa_f.unlink()
+        cs, (rr, cr, out) = part("shared")[1], part("role")
+        check("角色记忆缺失：role 份零输出；shared 份点明只解析到 shared、不说另一段会送",
+              rr == 0 and out == "" and "只解析到 shared" in cs and "`core:qa`" in cs and "另一段" not in cs, f"{out[:80]!r} {cs[:160]!r}")
+        check("内置 agent：role 份零输出、shared 份照投", zero(part("role", "Explore")) and SENTINEL_SHARED in part("shared", "Explore")[1])
+        check("agent_type=shared（含大小写变体）：不把 shared 当角色再投一遍", zero(part("role", "shared")) and zero(part("role", "core:Shared")))
+        cap = mem / "Shared"
+        if not cap.exists():  # 大小写敏感的文件系统：`Shared` 是另一个角色，照投
+            cap.mkdir()
+            (cap / "MEMORY.md").write_text("- 2026-09-01：另一份\n", encoding="utf-8", newline="")
+            check("与 shared 只差大小写、但文件不同的角色：照投", "另一份" in part("role", "core:Shared")[1])
+            (cap / "MEMORY.md").unlink()
+            cap.rmdir()
+        check("agent_type 不是字符串：role 份零输出、shared 份照投",
+              zero(part("role", 7)) and SENTINEL_SHARED in part("shared", 7)[1])
+        odd = subprocess.run([sys.executable, str(SCRIPTS / "subagent-memory-inject.py"), "--harness", "cc", "--part", "shared"],
+                             input=b'{"agent_type":"\\ud800","transcript_path":""}', capture_output=True, timeout=60, cwd=str(proj),
+                             env=dict(os.environ, CLAUDE_PROJECT_DIR=str(proj), CLAUDE_PLUGIN_ROOT=str(PLUGIN)))
+        check("agent_type 是未配对代理码元：不崩、shared 照投",
+              odd.returncode == 0 and SENTINEL_SHARED in safe_ctx(odd.stdout.decode("utf-8", "replace"))[1], odd.stderr[-160:].decode("utf-8", "replace"))
+        both = part(None, "qa-085-t1")[1]
+        check("Codex 具名、只解析到 shared：用共享标记、不说两份都送到了",
+              both.startswith("[workframe] 共享记忆注入") and marker not in both.split("\n===")[0] and "只解析到 shared" in both
+              and "必读记忆已由本段送达" not in both, both[:160])
+        qa_f.write_bytes(keep[1])
+        shared_f.unlink()
+        check("shared 缺失：shared 份零输出、role 份照投",
+              zero(part("shared")) and SENTINEL_QA in part("role")[1])
+        shared_f.write_bytes(keep[0])
+        check("fork：两份都零输出、exit 0", zero(part("shared", "fork")) and zero(part("role", "fork")))
+        both = part(None)[1]
+        check("不带 --part（Codex 清单）：仍是一段两份", SENTINEL_SHARED in both and SENTINEL_QA in both and both.startswith(marker))
+    finally:
+        shared_f.write_bytes(keep[0])
+        qa_f.write_bytes(keep[1])
+
+    cc = json.loads((PLUGIN / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    cx = ch.derive(cc)
+    cmds = lambda data: [h["command"] for g in data["hooks"]["SubagentStart"] for h in g["hooks"] if "subagent-memory-inject" in h["command"]]
+    check("派生：CC 两份合成 Codex 一条、不带 --part",
+          len(cmds(cc)) == 2 and len(cmds(cx)) == 1 and "--part" not in cmds(cx)[0], str(cmds(cx)))
 
 
 def test_subagent_start_fork(proj):
@@ -741,6 +855,7 @@ def main():
         test_opening(proj)
         test_opening_over_budget()
         test_opening_missing()
+        test_subagent_start_parts(proj)
         test_subagent_start_fork(proj)
     finally:
         shutil.rmtree(proj, ignore_errors=True)

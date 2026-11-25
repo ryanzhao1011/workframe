@@ -73,7 +73,7 @@ allowed-tools: [Read, Write, Edit, Grep, Glob]
 | 子模块调研 | `<sub>/research/<topic>.md` | `research` | 手动 |
 | 子模块杂项 | `<sub>/others/<name>.md` | `concept` | 手动 |
 | 跨模块技术方案 | `projects/specs/plans/<YYYY-MM-DD>-<plan-name>.md` | `plan` | 手动 |
-| **过程档**（执行计划 / 迁移手册 / 跨会话执行跟踪）| 项目根 `tmp/`——与 §6.1 是**同一个目录、不同受众**：那里管资源与中间产物，本行管过程档。**收口即删**，提炼归位按 必载片 §收口时的归位 | — | 手动 |
+| **过程档**（执行计划 / 迁移手册 / 跨会话执行跟踪）| 项目根 `tmp/`——与 §6.1 是**同一个目录、不同受众**：那里管资源与中间产物，本行管过程档。**收口即删**，提炼归位按 必载片 §收口时的归位；**例外**：跨会话交接稿由进行中的看板任务指向，任务完成时在稿首标为历史并指向继任材料，不删 | — | 手动 |
 | 跨模块设计规范 | `projects/specs/{design-system,api-conventions,compliance}/` | `concept` | 手动 |
 | **单模块**分析产物（指标 / 反馈 / 竞品）| `<sub>/research/{METRICS,FEEDBACK,COMP}-{序号}.md`（研究类归 research/，**不是 others/**——后者是杂项黑洞，见 §10 反模式）| `research` | 对应 PM skill |
 | 跨模块分析产物（指标体系 / 反馈分析 / 竞品分析）| `projects/specs/{METRICS,FEEDBACK,COMP}-{序号}.md` | `research` / `concept` | `product-metrics-design` / `user-feedback-analysis` / `competitive-analysis` |
@@ -210,6 +210,17 @@ sub_req_slug: <sub_req_slug>           # 与子需求目录一致；默认子需
 ```
 
 > `version` 字段不使用；需求版本演进进 `prd.md` 正文「变更与决策记录」章，目录层级不表达版本（详见 `module-architecture.md` §4.3）。
+
+#### 未编写标识（current-state 四件与 `prd.md`）
+
+```yaml
+unwritten: "sha256:<64 位小写十六进制>"   # 建骨架时的正文摘要；模板里是字面 true，创建入口随即换成摘要
+```
+
+当前正文摘要与它相同才算「未编写」，正文改过一个字即视为已编写，`status` / `updated` 等 frontmatter 改动不算。
+**不要手写或手改这个值**：判定、盖戳与删除只经 `module_init.py --doc-state / --mark-unwritten / --unstamp`
+（判定唯一在插件 `scripts/_doc_state.py`）。值不是合法摘要（如字面 `true`）时读者一律按已编写处理。
+写入方首次写正文成功之后删掉它，只为整洁，判定不依赖它。
 
 #### review 类
 
@@ -412,6 +423,7 @@ overview_level: sub-module
 | 修改 `submodule.yaml.status` / `meta.yaml.status` | 该子模块所在路径所有上级 overview | 手动调 `module-index-refresh` |
 | 修改 `submodule.yaml.last_synced_at` / **`last_synced_ref`** | 该子模块 `<sub>/overview.md` 的 `current-state-summary` 段（「最近同步」行的日期与基准 commit 括注均取自这两个字段）| 手动调 `module-index-refresh`；走 `code-to-doc` 时由它 Step 6 一并触发 |
 | **`code-to-doc` 完成 current-state/ 写入** | 该子模块 `<sub>/overview.md` 的 `current-state-summary` 段（基于 4 个 current-state 文件的 frontmatter + 首段提炼摘要）| `code-to-doc` skill 内显式调用 |
+| 写入 PRD / 评审 / 用例（`prd-writer`、`requirement-archiving` Phase 4、`code-review` 存档、`test-case-design` 落盘）| 该需求所在路径的上级 overview（子需求表的状态、摘要、评审、用例列与需求清单的摘要列都取自这些文件）| 写入方在写入成功后 `module_init.py --refresh-index --scope <刚写的文件>` |
 | 大规模迁移 | 全量递归 | `migrate-to-modules` skill 内 |
 | 用户主动 | 全量或路径限定 | `/core:module-index-refresh` |
 
@@ -425,6 +437,7 @@ overview_level: sub-module
 > - 父需求 `<req_slug>/meta.yaml.status` 变更 → 走 §4.2 的 `meta.yaml.status` 路径（影响 requirements-by-status 段）
 > - 子需求 `<sub_req_slug>/prd.md` frontmatter `status` / `owner_role` 变更 → 触发 `<basic>/<sub>/requirements/<req_slug>` 路径增量刷新（sub-requirements-index 段从 prd.md frontmatter 提炼，详见 `module-index-refresh` §Step 2 数据源表）
 > - 新增 / 删除 `<sub_req_slug>/` 目录或其中 `prd.md` → 同上触发
+> - 新增 / 删除 `reviews/`、`test-cases/` 下的文件 → 同上触发（「评审」「用例」两列逐个链接这些文件）
 
 > **注意**：`current-state/` 内容**会**触发 `<sub>/overview.md` 的 `current-state-summary` 段刷新（详见 §4.2 表第 3 行）；本节"不触发"指的是更纤细的 frontmatter 刷新，不包括 current-state 内容写入。`code-to-doc` skill Step 6 会主动调 `module-index-refresh` 限定路径同步。
 
@@ -537,7 +550,7 @@ prototypes/
 2. 调用方判断用途：
    - **PRD 长期引用** → 移到 `<iteration-dir>/assets/`（与 `prd.md` 平级，进 git）
    - **仅作外部发布插图、不引用** → 留在 `tmp/screenshots/<task_id>/`，发布完后由调用方手动清理
-3. SessionEnd hook **存在**（执行 events flush + digest + GC），但**不清理 `tmp/screenshots/`**——调用方必须自己清
+3. SessionEnd hook **存在**（执行 events flush + 重算 + GC），但**不清理 `tmp/screenshots/`**——调用方必须自己清
 
 ### 6.3 不放在子需求目录下的内容
 
@@ -604,7 +617,7 @@ Step 1: 上级 overview 同步
 
 Step 2: 反向索引同步
   - 改 submodule.yaml.code_paths → PostToolUse 自动重建（无需手动）
-  - 损坏报警时手动跑 `python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" rebuild-index` 全量重建
+  - 损坏报警时手动跑 `python "$WF_PLUGIN_ROOT/scripts/check-stale-modules.py" rebuild-index` 全量重建
 
 Step 3: L2 broken link 检查
   - 大改文件名/路径 → 调 `obsidian-link-audit` 全仓 broken-link 扫描

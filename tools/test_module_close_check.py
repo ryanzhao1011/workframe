@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-单元测试 — plugins/core/scripts/module_close_check.py 九项检查 + 升级计数 + 标记命令 + 关键回归。
+单元测试 — plugins/core/scripts/module_close_check.py 十项检查 + 升级计数 + 标记命令 + 关键回归。
 
 覆盖（每个判定分支用它自己的失败方式打一遍——「从没真正执行过的检查」与通过
 长得一模一样）：
@@ -132,7 +132,16 @@ def make_fixture(tmp, ref_map=None, source_repo="fw", overview_tail=""):
         f"- **最近同步**：2026-01-01（基准 commit {refs['overview']}{overview_tail}）\n",
         encoding="utf-8", newline="\n")
     (tmp / STATE_REL).mkdir(parents=True)
+    # 按声明建好反向索引：真实项目里 SessionStart 补扫每会话都会建，缺它检查 1 判「从未构建」
+    _build_index(tmp)
     return h1
+
+
+def _build_index(tmp):
+    r = subprocess.run([sys.executable, str(SCRIPT_PATH.parent / "check-stale-modules.py"), "rebuild-index"],
+                       env={**os.environ, "CLAUDE_PROJECT_DIR": str(Path(tmp).resolve())},
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
 
 
 # ---------- 用例 ----------
@@ -327,8 +336,8 @@ def test_module_refreshed(mcc):
         csm = mcc._load_csm(tmp)
         subs = mcc._collect_submodules(Path(tmp), csm)
         f = _findings(mcc.check_module_refreshed(Path(tmp), csm, subs))
-        if not _has(f, "ok", "刷新到位"):
-            failures.append(f"基准=HEAD 应 ok: {f}")
+        if f != [("ok", "已对账 1 · 未首同步 0 · 已豁免 0 · 外仓不可核 0 · 未配置 0")]:
+            failures.append(f"基准=HEAD 应只有一条 ok 且计入已对账 1: {f}")
         # 基准后再提交一次命中 code_paths → 漏刷
         (fw / "src" / "app.py").write_text("v2\n", encoding="utf-8", newline="\n")
         _git(fw, "add", "-A")
@@ -338,8 +347,8 @@ def test_module_refreshed(mcc):
             failures.append(f"基准后命中提交应报漏刷: {f}")
         subs[0]["source_ref"] = _short_head(fw)  # 刷平
         f = _findings(mcc.check_module_refreshed(Path(tmp), csm, subs))
-        if not _has(f, "ok", "刷新到位"):
-            failures.append(f"刷平后应 ok: {f}")
+        if f != [("ok", "已对账 1 · 未首同步 0 · 已豁免 0 · 外仓不可核 0 · 未配置 0")]:
+            failures.append(f"刷平后应只有一条 ok 且计入已对账 1: {f}")
         # 工作树命中改动
         (fw / "src" / "app.py").write_text("v3-dirty\n", encoding="utf-8", newline="\n")
         f = _findings(mcc.check_module_refreshed(Path(tmp), csm, subs))
@@ -993,13 +1002,12 @@ def test_code_map_coverage(mcc):
     f = []
     SP = 'source_paths: ["src/app.py", "src/**"]'
 
-    # ① 基线：两侧同指一组文件 → ok
+    # ① 基线：两侧同指一组文件 → ok，且真的计入已对账 1（此前这格没建夹具，靠「0 个已对账」的 ok 过）
     with tempfile.TemporaryDirectory() as tmp:
+        make_fixture(tmp)
         r = _cov(mcc, tmp)
-        if any(lv == "error" for lv, _ in r):
-            f.append(f"基线不应报 error: {r}")
-        if not _has(r, "ok", "覆盖率已对账"):
-            f.append(f"基线应有 ok 汇总行: {r}")
+        if r != [("ok", "已对账 1 · 未首同步 0 · 已豁免 0 · 外仓不可核 0 · 未配置 0")]:
+            f.append(f"基线应只有一条 ok 且计入已对账 1: {r}")
 
     # ② L3「少」：仓里新增文件被 code_paths 的 glob 覆盖，而 source_paths 只列了单文件
     with tempfile.TemporaryDirectory() as tmp:
@@ -1146,7 +1154,7 @@ def test_run_all_shapes(mcc):
         ids = [r["id"] for r in results]
         expected = ["stale-clean", "code-paths", "ref-consistency",
                     "module-refreshed", "repo-status", "code-map-coverage", "ledger",
-                    "yaml-parse", "discipline-trace"]
+                    "yaml-parse", "discipline-trace", "nav-index"]
         if ids != expected:
             failures.append(f"run_all 检查项不符: {ids}")
         if any(set(r) != {"id", "name", "status", "findings"} for r in results):
@@ -1154,7 +1162,7 @@ def test_run_all_shapes(mcc):
     with tempfile.TemporaryDirectory() as tmp:  # 非 modules 项目：1-6 整体跳过
         results = mcc.run_all(Path(tmp))
         ids = [r["id"] for r in results]
-        if ids != ["modules", "ledger", "yaml-parse", "discipline-trace"]:
+        if ids != ["modules", "ledger", "yaml-parse", "discipline-trace", "nav-index"]:
             failures.append(f"非 modules 项目应整体跳过 1-6: {ids}")
         if results[0]["status"] != "ok":
             failures.append(f"跳过不应报非绿: {results[0]}")
@@ -1165,7 +1173,7 @@ def test_run_all_shapes(mcc):
         (Path(tmp) / "projects" / "modules").mkdir(parents=True)
         results = mcc.run_all(Path(tmp))
         ids = [r["id"] for r in results]
-        if ids != ["modules", "ledger", "yaml-parse", "discipline-trace"]:
+        if ids != ["modules", "ledger", "yaml-parse", "discipline-trace", "nav-index"]:
             failures.append(f"空 modules 目录应合并成一条，不得输出六项绿勾: {ids}")
         f = [(x["level"], x["msg"]) for x in results[0]["findings"]]
         if not _has(f, "info", "这不等于检查通过"):
@@ -1276,6 +1284,19 @@ def test_discipline_trace_criteria(mcc):
             failures.append(f"① 零 skill_used 应出 info 提示: {f}")
         if trace.get("result") != "green" or item["status"] != "ok":
             failures.append(f"① 判据 a 不得让项级变红: {trace} status={item['status']}")
+    # ①' 有 hook 记的调起、没有自报：提示要说「有调起」，不能再说「没有」，也不因此放行 a
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _trace_fixture(tmp)
+        ev = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "type": "skill_invoked", "skill": "x"}
+        (_state(p) / "events.jsonl").write_text((json.dumps(ev) + "\n") * 2 + '{"type": ["skill_used"]}\n',
+                                                encoding="utf-8", newline="\n")
+        _, f, trace = _trace_item(mcc, p)
+        if not _has(f, "info", "记到 2 次 skill 调起"):
+            failures.append(f"①' 只有调起记录时应提示「有调起、缺自报」: {f}")
+        if _has(f, "info", "项目里没有任何 `skill_used`——若"):
+            failures.append(f"①' 有调起记录时不应再出零痕迹那句: {f}")
+        if (trace.get("criteria") or {}).get("a") != "info" or trace.get("result") != "green":
+            failures.append(f"①' 判据 a 应仍为 info、项级仍绿: {trace}")
     # ② 无当日账本段：b 红 ＋ exit 1 ＋ 运行行 exit_code 1、不进计数（c 保持绿）
     with tempfile.TemporaryDirectory() as tmp:
         p = _trace_fixture(tmp, ledger_today=False, skill_used=True)
@@ -1662,6 +1683,789 @@ def test_discipline_mark_command(mcc):
 # ---------- 汇总 ----------
 
 
+# ---------- 检查 1：反向索引只读对账 × 有写权限的读者自修 ----------
+
+
+_DRIFT_DECL = {
+    "a/x": ["src/a/**", "lib/one.py"],
+    "b/y": ["src/b/**"],
+}
+
+
+def _drift_fixture(tmp, decl=None):
+    p = Path(tmp)
+    for sub, pats in (decl or _DRIFT_DECL).items():
+        d = p / "projects" / "modules" / sub
+        d.mkdir(parents=True, exist_ok=True)
+        body = "".join(f"  - {x}\n" for x in pats)
+        (d / "submodule.yaml").write_text(f"name: {sub}\ncode_paths:\n{body}" if pats else f"name: {sub}\ncode_paths: []\n",
+                                          encoding="utf-8", newline="\n")
+    (p / STATE_REL).mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _yaml(p, sub):
+    return p / "projects" / "modules" / sub / "submodule.yaml"
+
+
+def _index_file(p):
+    return p / STATE_REL / "code-paths-index.json"
+
+
+def _drift_errors(mcc, csm, p):
+    subs = mcc._collect_submodules(p, csm)
+    return [m for lv, m in mcc.check_stale_clean(p, csm, subs) if lv == "error"]
+
+
+def test_index_drift_matrix(mcc):
+    """每例三个观测，按序：只读对账（并核它没改缓存字节）→ 有写权限的 lookup（断言完整模块集合）→ 再对账。
+
+    期望值手写在用例里，不取自被测函数。`lookup` 断言完整集合而非非空：`src/a/f.py` 在修复前就命中 a/x，
+    只断言非空的话旧实现也绿。
+    """
+    failures = []
+
+    def run(label, mutate, probe, want_hits, want_first=(), want_after=(), fixture=None, n_first=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = _drift_fixture(tmp, fixture)
+            csm = mcc._load_csm(p)
+            csm.rebuild_full_index(trigger="manual")
+            mutate(p, csm)
+            before = _index_file(p).read_bytes() if _index_file(p).exists() else None
+            first = _drift_errors(mcc, csm, p)
+            after_check = _index_file(p).read_bytes() if _index_file(p).exists() else None
+            if before != after_check:
+                failures.append(f"{label}: 只读对账改动了缓存文件")
+            for kw in want_first:
+                if not any(kw in m for m in first):
+                    failures.append(f"{label}: 首次对账应含「{kw}」，实际 {first}")
+            if not want_first and first:
+                failures.append(f"{label}: 首次对账应无 error，实际 {first}")
+            if n_first is not None and len(first) != n_first:   # 只该报这几条：多报一条「缺」也算错
+                failures.append(f"{label}: 首次对账应恰 {n_first} 条 error，实际 {first}")
+            if probe is not None:
+                hits = csm.lookup_submodules(probe)
+                if hits != want_hits:
+                    failures.append(f"{label}: lookup({probe}) = {hits}，应为 {want_hits}")
+            second = _drift_errors(mcc, csm, p)
+            for kw in want_after:
+                if not any(kw in m for m in second):
+                    failures.append(f"{label}: lookup 后对账应含「{kw}」，实际 {second}")
+            if not want_after and second:
+                failures.append(f"{label}: lookup 后对账应无 error，实际 {second}")
+
+    def add_pair(p, csm):   # b/y 也声明 src/a/** ⇒ 缓存缺这一对
+        _yaml(p, "b/y").write_text("name: b/y\ncode_paths:\n  - src/b/**\n  - src/a/**\n",
+                                   encoding="utf-8", newline="\n")
+    run("缺一对", add_pair, "src/a/f.py", ["a/x", "b/y"], want_first=["缺 1 条"], n_first=1)
+
+    def drop_pair(p, csm):  # a/x 不再声明 lib/one.py ⇒ 缓存多这一对
+        _yaml(p, "a/x").write_text("name: a/x\ncode_paths:\n  - src/a/**\n", encoding="utf-8", newline="\n")
+    run("多一对", drop_pair, "lib/one.py", [], want_first=["多 1 条"], n_first=1)
+
+    def wrong_bucket(p, csm):  # 存量形态：旧缓存没有 source_stamp，且一对放错了桶
+        d = json.loads(_index_file(p).read_text(encoding="utf-8"))
+        d.pop("source_stamp")
+        d["buckets"].setdefault("lib", {})
+        d["buckets"]["src"]["lib/one.py"] = d["buckets"]["lib"].pop("lib/one.py")
+        del d["buckets"]["lib"]
+        _index_file(p).write_text(json.dumps(d), encoding="utf-8", newline="\n")
+    run("只错桶", wrong_bucket, "lib/one.py", ["a/x"], want_first=["错桶 1 条"], n_first=1)
+
+    def touch(p, csm):     # 戳旧、内容同：对账不报，lookup 重建一次
+        f = _yaml(p, "a/x")
+        st = f.stat()
+        os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000_000))
+    run("戳旧内容同", touch, "src/a/f.py", ["a/x"])
+
+    def same_stat(p, csm):  # 同字节同 mtime 但声明变：stat 判据的已知盲区，只有对账看得见
+        f = _yaml(p, "b/y")
+        st = f.stat()
+        text = f.read_text(encoding="utf-8")
+        f.write_text(text.replace("src/b/**", "src/d/**"), encoding="utf-8", newline="\n")
+        os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns))
+        assert f.stat().st_size == st.st_size and f.stat().st_mtime_ns == st.st_mtime_ns
+    # lookup 仍按旧缓存答（盲区如实保留），对账前后都红——证明兜底在对账、不在 lookup
+    run("同大小同mtime", same_stat, "src/b/f.py", ["b/y"], want_first=["缺 1 条", "多 1 条"],
+        want_after=["缺 1 条", "多 1 条"])
+
+    run("缓存缺失", lambda p, csm: _index_file(p).unlink(), "src/a/f.py", ["a/x"], want_first=["从未构建"])
+    run("顶层坏", lambda p, csm: _index_file(p).write_text("{not json", encoding="utf-8", newline="\n"),
+        "src/a/f.py", ["a/x"], want_first=["损坏"])
+
+    def inner_bad(p, csm):  # 模块列表写成字符串：旧 lookup 会逐字符 extend 出一串单字母「子模块」
+        d = json.loads(_index_file(p).read_text(encoding="utf-8"))
+        d["buckets"]["src"]["src/a/**"] = "a/x"
+        _index_file(p).write_text(json.dumps(d), encoding="utf-8", newline="\n")
+    run("内层坏-字符串", inner_bad, "src/a/f.py", ["a/x"], want_first=["形态不合法"])
+
+    def empty_list(p, csm):
+        d = json.loads(_index_file(p).read_text(encoding="utf-8"))
+        d["buckets"]["src"] = {"src/a/**": []}
+        _index_file(p).write_text(json.dumps(d), encoding="utf-8", newline="\n")
+    run("内层坏-空列表", empty_list, "src/b/f.py", ["b/y"], want_first=["形态不合法"])
+
+    def bucket_list(p, csm):  # 桶本身写成列表（方案点名的 `{"src": []}`）：与「模块列表坏」是不同的一层
+        d = json.loads(_index_file(p).read_text(encoding="utf-8"))
+        d["buckets"]["src"] = []
+        _index_file(p).write_text(json.dumps(d), encoding="utf-8", newline="\n")
+    run("桶坏-列表", bucket_list, "src/a/f.py", ["a/x"], want_first=["形态不合法"], n_first=1)
+
+    # 合法空树：声明里一条 code_paths 都没有、缓存也没有 ⇒ 对账不报（不是「从未构建」）
+    run("合法空树", lambda p, csm: _index_file(p).unlink(), "src/a/f.py", [],
+        fixture={"a/x": [], "b/y": []})
+
+    # stale 非空 ＋ 漂移：两条都报，互不吞并
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _drift_fixture(tmp)
+        csm = mcc._load_csm(p)
+        csm.rebuild_full_index(trigger="manual")
+        drop_pair(p, csm)
+        csm.mark_stale("a/x", "code_changed:src/a/f.py")
+        errs = _drift_errors(mcc, csm, p)
+        if not (any("仍挂 stale" in m for m in errs) and any("多 1 条" in m for m in errs)):
+            failures.append(f"stale 非空且漂移应两条都报: {errs}")
+    return failures
+
+
+def test_index_unreadable_declaration(mcc):
+    """一份声明读不了：对账报 error（不当空声明）；有写权限的读者不覆盖旧缓存、留痕、status=unreadable。
+
+    两种读不了：非 UTF-8 字节；路径是目录（模拟两次读之间被换掉——旧 parse_code_paths 吞异常返回 []）。
+    """
+    failures = []
+    for label, breaker in (
+            ("非UTF-8", lambda f: f.write_bytes(b"name: b\ncode_paths:\n  - src/\xff\xfe/**\n")),
+            ("变成目录", lambda f: (f.unlink(), f.mkdir()))):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = _drift_fixture(tmp)
+            csm = mcc._load_csm(p)
+            csm.rebuild_full_index(trigger="manual")
+            cache = _index_file(p).read_bytes()
+            breaker(_yaml(p, "b/y"))
+            errs = _drift_errors(mcc, csm, p)
+            if not any("b/y/submodule.yaml 读不了" in m for m in errs):
+                failures.append(f"{label}: 对账应报读不了: {errs}")
+            index, status = csm.ensure_fresh_index()
+            if status != "unreadable":
+                failures.append(f"{label}: status 应为 unreadable，实际 {status}")
+            if _index_file(p).read_bytes() != cache:
+                failures.append(f"{label}: 读不了时覆盖了旧缓存")
+            if csm.lookup_submodules("src/b/f.py") != ["b/y"]:
+                failures.append(f"{label}: 应沿用旧缓存回答 lookup")
+            evs = [json.loads(x) for x in (p / STATE_REL / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+            if not any(e.get("type") == "modules_check_stale_error"
+                       and "index_rebuild_skipped_unreadable" in e.get("error", "") for e in evs):
+                failures.append(f"{label}: 未留 modules_check_stale_error")
+    return failures
+
+
+def test_index_zero_submodules(mcc):
+    """`projects/modules/` 在但零子模块：缓存里还有项 ⇒ 检查 1 照跑并报红；没有缓存 ⇒ 维持合并成一条 info。"""
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _drift_fixture(tmp)
+        csm = mcc._load_csm(p)
+        csm.rebuild_full_index(trigger="manual")
+        for sub in ("a/x", "b/y"):
+            _yaml(p, sub).unlink()
+        results = mcc.run_all(p)
+        item = [r for r in results if r["id"] == "stale-clean"]
+        if not item or item[0]["status"] != "error" or not any("多 3 条" in x["msg"] for x in item[0]["findings"]):
+            failures.append(f"零子模块而缓存残留应报 [stale-clean] error: {item}")
+        if not any(r["id"] == "modules" for r in results):
+            failures.append("零子模块时原有的「无对象可查」info 不应消失")
+    return failures
+
+
+# ---------- 检查 4 / 检查 6 的五档结论 ----------
+
+
+def _tally_fixture(tmp, mods, root_git=False):
+    """mods: [(rel, code_paths, ref, source_repo, exempt)]。基准写在 submodule.yaml，code-map 带同值 frontmatter。"""
+    p = Path(tmp)
+    for rel, cps, ref, repo, exempt in mods:
+        d = p / "projects" / "modules" / rel
+        (d / "current-state").mkdir(parents=True, exist_ok=True)
+        body = "".join(f"  - {x}\n" for x in cps) if cps else ""
+        (d / "submodule.yaml").write_text(
+            f"name: {rel}\ncode_paths:{'' if cps else ' []'}\n{body}"
+            f'last_synced_ref: "{ref}"\nsource_repo: "{repo}"\n'
+            + ("code_map_coverage: exempt\n" if exempt else ""), encoding="utf-8", newline="\n")
+        (d / "current-state" / "code-map.md").write_text(
+            f'---\ntype: current-state\nsource_repo: "{repo}"\nsource_ref: "{ref}"\n'
+            f"source_paths: {json.dumps(cps)}\n---\n", encoding="utf-8", newline="\n")
+    (p / STATE_REL).mkdir(parents=True, exist_ok=True)
+    if root_git:
+        _git(p, "init")
+        _git(p, "add", "-A")
+        _git(p, "commit", "-m", "root")
+    _build_index(p)
+    return p
+
+
+def _tally_of(findings):
+    return [f.tally for f in findings if getattr(f, "tally", None) is not None]
+
+
+def test_tally_tiers(mcc):
+    failures = []
+
+    def counts(t):
+        return {k: getattr(t, k) for k in mcc._Tally.KEYS}
+
+    # B 形态：外仓基准、本地 code_paths 为空 ×7 —— 修复前计成「7 个均已刷新」
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _tally_fixture(tmp, [(f"b/m{i}", [], "5d4a3751", "外部仓标识", False) for i in range(7)])
+        csm = mcc._load_csm(p)
+        subs = mcc._collect_submodules(p, csm)
+        f = mcc.check_module_refreshed(p, csm, subs)
+        t = _tally_of(f)
+        want = {"reconciled": 0, "unsynced": 0, "exempt": 0, "external": 7, "unconfigured": 0}
+        if len(t) != 1 or counts(t[0]) != want:
+            failures.append(f"B 形态 [module-refreshed] 应 external=7: {[counts(x) for x in t]} / {f}")
+        if [lv for lv, _ in f] != ["info"]:
+            failures.append(f"B 形态 [module-refreshed] 应只出一条 info: {f}")
+        rows = mcc.run_all(p)
+        heads = {r["id"]: r["status"] for r in rows}
+        if heads.get("module-refreshed") != "info" or heads.get("code-map-coverage") != "info":
+            failures.append(f"B 形态两项项头应为 info: {heads}")
+        cov = _tally_of(mcc.check_code_map_coverage(p, csm, subs))
+        if len(cov) != 1 or cov[0].external != 7 or cov[0].reconciled != 0:
+            failures.append(f"B 形态 [code-map-coverage] 应 external=7: {[counts(x) for x in cov]}")
+        # CLI 项头、总计与 gates 查询三层分别看
+        rc, out = _run_main(mcc, p)
+        if "i [module-refreshed]" not in out or "i [code-map-coverage]" not in out:
+            failures.append(f"CLI 项头应打 i 而非 ✓: {[l for l in out.splitlines() if 'refreshed' in l or 'coverage' in l]}")
+        m = re.search(r"结果: ok (\d+) / info (\d+) / warn (\d+) / error (\d+)", out)
+        if not m or int(m.group(2)) < 2:
+            failures.append(f"CLI 总计应计入 info（≥2 项）: {out.splitlines()[-1:]}")
+        sys.path.insert(0, str(SCRIPT_PATH.parent))
+        import _query_gates
+        gates = _query_gates.normalize("close", rows, {})
+        lv = [[c["level"] for c in gates["checks"] if c["id"] == cid][-1:]
+              for cid in ("module-refreshed", "code-map-coverage")]
+        if lv != [["info"], ["info"]]:
+            failures.append(f"gates 查询按单条 finding 展平，两项结论应为 info: {lv}")
+
+    # 真正空配置 ×7：根仓基准、无 code_paths —— 必须与 B 形态的结果不同
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _tally_fixture(tmp, [(f"e/m{i}", [], "5d4a3751", "", False) for i in range(7)])
+        csm = mcc._load_csm(p)
+        t = _tally_of(mcc.check_module_refreshed(p, csm, mcc._collect_submodules(p, csm)))
+        want = {"reconciled": 0, "unsynced": 0, "exempt": 0, "external": 0, "unconfigured": 7}
+        if len(t) != 1 or counts(t[0]) != want:
+            failures.append(f"空配置 ×7 应 unconfigured=7: {[counts(x) for x in t]}")
+
+    # 混合：已对账 / 未首同步 / 已豁免 code-map（检查 4 照判刷新，不进 exempt）
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        (p / "src").mkdir()
+        (p / "src" / "a.py").write_text("v\n", encoding="utf-8", newline="\n")
+        _git(p, "init")
+        _git(p, "add", "-A")
+        _git(p, "commit", "-m", "c")
+        head = _short_head(p)
+        _tally_fixture(p, [("m/ok", ["src/a.py"], head, "", False),
+                           ("m/new", ["src/a.py"], "", "", False),
+                           ("m/ex", ["src/a.py"], head, "", True)])
+        _git(p, "add", "-A")
+        _git(p, "commit", "-m", "docs")
+        csm = mcc._load_csm(p)
+        subs = mcc._collect_submodules(p, csm)
+        f = mcc.check_module_refreshed(p, csm, subs)
+        t = _tally_of(f)
+        want = {"reconciled": 2, "unsynced": 1, "exempt": 0, "external": 0, "unconfigured": 0}
+        if len(t) != 1 or counts(t[0]) != want or [lv for lv, _ in f] != ["ok"]:
+            failures.append(f"混合形态 [module-refreshed] 应 reconciled=2 unsynced=1: {[counts(x) for x in t]} / {f}")
+        cov = _tally_of(mcc.check_code_map_coverage(p, csm, subs))
+        want = {"reconciled": 1, "unsynced": 1, "exempt": 1, "external": 0, "unconfigured": 0}
+        if len(cov) != 1 or counts(cov[0]) != want:
+            failures.append(f"混合形态 [code-map-coverage] 计数不符: {[counts(x) for x in cov]}")
+
+    # 归属仓成功、另一仓 git status 失败：原 warn 照报，不计入已对账
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        (p / "src").mkdir()
+        (p / "src" / "a.py").write_text("v\n", encoding="utf-8", newline="\n")
+        (p / ".gitignore").write_text("bad/\n", encoding="utf-8", newline="\n")
+        _git(p, "init")
+        _git(p, "add", "-A")
+        _git(p, "commit", "-m", "c")
+        (p / "bad" / "x").mkdir(parents=True)
+        (p / "bad" / ".git").write_text("gitdir: ../nowhere\n", encoding="utf-8", newline="\n")
+        _tally_fixture(p, [("m/two", ["src/a.py", "bad/x/**"], _short_head(p), "", False)])
+        _git(p, "add", "-A")
+        _git(p, "commit", "-m", "docs")
+        csm = mcc._load_csm(p)
+        f = mcc.check_module_refreshed(p, csm, mcc._collect_submodules(p, csm))
+        t = _tally_of(f)
+        if not _has(_findings(f), "warn", "git status 失败"):
+            failures.append(f"另一仓 git status 失败应 warn: {f}")
+        if len(t) != 1 or t[0].reconciled != 0:
+            failures.append(f"另一仓 git status 失败不应计入已对账: {[counts(x) for x in t]}")
+
+    # 零子模块：直接调用两项都是 info「没有可判的对象」
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        (p / "projects" / "modules").mkdir(parents=True)
+        csm = mcc._load_csm(p)
+        for fn in (mcc.check_module_refreshed, mcc.check_code_map_coverage):
+            f = fn(p, csm, [])
+            if [lv for lv, _ in f] != ["info"] or "没有可判的对象" not in f[0][1]:
+                failures.append(f"{fn.__name__} 零子模块应只出 info: {f}")
+    return failures
+
+
+def test_stale_clean_failures(mcc):
+    """检查 1 的三种故障各自独立报 error、不吞别的结论：stale 清单读不了 / 模块目录列不了 / 修复命令绑项目。"""
+    from unittest import mock
+    failures = []
+
+    def add_pair(p):   # b/y 也声明 src/a/** ⇒ 缓存缺这一对
+        _yaml(p, "b/y").write_text("name: b/y\ncode_paths:\n  - src/b/**\n  - src/a/**\n",
+                                   encoding="utf-8", newline="\n")
+
+    # stale 清单读不了 ＋ 缓存缺一对：两条 error 都在，项头 error（修复前整项抛到 run_all、降成 warn，缺的那条也丢）
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _drift_fixture(tmp)
+        csm = mcc._load_csm(p)
+        csm.rebuild_full_index(trigger="manual")
+        add_pair(p)
+        (p / STATE_REL / "stale-modules.yaml").write_bytes(b"submodules:\n  a/x:\n    reasons: [\xff\xfe]\n")
+        errs = _drift_errors(mcc, csm, p)
+        if not any("stale 清单读不了" in m for m in errs) or not any("缺 1 条" in m for m in errs):
+            failures.append(f"stale 读不了与缺对应各报一条 error: {errs}")
+        head = {r["id"]: r["status"] for r in mcc.run_all(p)}.get("stale-clean")
+        if head != "error":
+            failures.append(f"stale 读不了时项头应为 error，实际 {head}")
+
+    # 模块目录列不了：对账报「读不了」，不拿残缺声明去比（修复前 glob 静默跳过，残缺缓存对残缺声明报绿）
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _drift_fixture(tmp)
+        csm = mcc._load_csm(p)
+        csm.rebuild_full_index(trigger="manual")
+        blocked = (p / "projects" / "modules" / "b").resolve()
+        real = os.scandir
+
+        def scandir(path="."):
+            if Path(path).resolve() == blocked:
+                raise PermissionError(13, "denied", str(path))
+            return real(path)
+
+        with mock.patch("os.scandir", scandir):
+            errs = _drift_errors(mcc, csm, p)
+        if len(errs) != 1 or "projects/modules/b/ 读不了" not in errs[0]:
+            failures.append(f"列不了的目录应报一条「读不了」: {errs}")
+
+    # 修复命令绑定被检查的项目：从另一个项目的环境照抄执行，修好的是被检查的那个、另一个缓存字节不变
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _drift_fixture(Path(tmp) / "target")
+        other = _drift_fixture(Path(tmp) / "other")
+        _build_index(other)
+        other_bytes = _index_file(other).read_bytes()
+        csm = mcc._load_csm(p)
+        csm.rebuild_full_index(trigger="manual")
+        add_pair(p)
+        errs = _drift_errors(mcc, csm, p)
+        m = re.search(r'python "([^"]+)" rebuild-index --project "([^"]+)"', errs[0] if errs else "")
+        if not m or Path(m.group(2)) != p.resolve():
+            failures.append(f"修复命令应带 --project 指向被检查的项目: {errs}")
+        else:
+            r = subprocess.run([sys.executable, m.group(1), "rebuild-index", "--project", m.group(2)],
+                               env={**os.environ, "CLAUDE_PROJECT_DIR": str(other.resolve())},
+                               capture_output=True, text=True, encoding="utf-8", errors="replace")
+            csm = mcc._load_csm(p)
+            if r.returncode != 0 or _drift_errors(mcc, csm, p):
+                failures.append(f"照抄修复命令后被检查的项目应无漂移: rc={r.returncode} {r.stderr[-200:]}")
+            if _index_file(other).read_bytes() != other_bytes:
+                failures.append("照抄修复命令不应改动环境所在项目的缓存")
+    return failures
+
+
+def _commit(p, msg):
+    _git(p, "add", "-A")
+    _git(p, "commit", "-m", msg)
+
+
+def test_tally_edges(mcc):
+    """检查 4 / 6 的边界：双空配置、非法路径、外仓 ＋ 本地脏、git 路径匹配与框架同一规则、档位互斥与三层输出。"""
+    failures = []
+
+    def counts(t):
+        return {k: getattr(t, k) for k in mcc._Tally.KEYS}
+
+    zero = dict.fromkeys(mcc._Tally.KEYS, 0)
+
+    # 检查 6 双空 ⇒ 未配置（不是「已对账 1」）；对照：只 source_paths 非空 ⇒ 报「多了」
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        (p / "AGENTS.md").write_text("x\n", encoding="utf-8", newline="\n")
+        _tally_fixture(p, [("e/m", [], "5d4a3751", "", False)], root_git=True)
+        csm = mcc._load_csm(p)
+        subs = mcc._collect_submodules(p, csm)
+        f = mcc.check_code_map_coverage(p, csm, subs)
+        t = _tally_of(f)
+        if len(t) != 1 or counts(t[0]) != {**zero, "unconfigured": 1} or [lv for lv, _ in f] != ["info"]:
+            failures.append(f"检查 6 双空应只出 info、未配置 1: {[counts(x) for x in t]} / {f}")
+        cm = p / "projects" / "modules" / "e" / "m" / "current-state" / "code-map.md"
+        cm.write_text(cm.read_text(encoding="utf-8").replace("source_paths: []", 'source_paths: ["AGENTS.md"]'),
+                      encoding="utf-8", newline="\n")
+        f = mcc.check_code_map_coverage(p, csm, mcc._collect_submodules(p, csm))
+        if not _has(_findings(f), "error", "**多了** 1 个文件"):
+            failures.append(f"只 source_paths 非空应报「多了 1 个文件」: {f}")
+
+    # code_paths 全非法：检查 2 报红；检查 4 / 6 不计档、不报「都在别的仓」「source_repo 填错」
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        (p / "src").mkdir()
+        (p / "src" / "a.py").write_text("v\n", encoding="utf-8", newline="\n")
+        _git(p, "init")
+        _commit(p, "c")
+        _tally_fixture(p, [("m/bad", ["../bad"], _short_head(p), "", False)])
+        _commit(p, "docs")
+        csm = mcc._load_csm(p)
+        subs = mcc._collect_submodules(p, csm)
+        f4 = mcc.check_module_refreshed(p, csm, subs)
+        if any("基准不可能属于根仓" in m for _lv, m in f4):
+            failures.append(f"非法路径不应被说成外仓: {f4}")
+        if [counts(x) for x in _tally_of(f4)] != [zero]:
+            failures.append(f"非法路径不计任何档: {[counts(x) for x in _tally_of(f4)]}")
+        f6 = mcc.check_code_map_coverage(p, csm, subs)
+        if any("source_repo 填错" in m for _lv, m in f6):
+            failures.append(f"非法路径不应报 source_repo 填错: {f6}")
+        if not _has(_findings(mcc.check_code_paths_health(p, csm, subs)), "error", "../bad"):
+            failures.append("检查 2 应报非法路径")
+
+    # 外仓不可核 ＋ 本地另一仓（根仓）有脏文件：脏文件照报 error；提交后只出一条 info、外仓 1
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        (p / "src").mkdir()
+        (p / "src" / "a.py").write_text("v\n", encoding="utf-8", newline="\n")
+        _git(p, "init")
+        _commit(p, "c")
+        _tally_fixture(p, [("m/ext", ["src/a.py"], "5d4a3751", "外部仓标识", False)])
+        _commit(p, "docs")
+        (p / "src" / "a.py").write_text("v2\n", encoding="utf-8", newline="\n")
+        csm = mcc._load_csm(p)
+        subs = mcc._collect_submodules(p, csm)
+        f = mcc.check_module_refreshed(p, csm, subs)
+        if not _has(_findings(f), "error", "未提交改动"):
+            failures.append(f"外仓模块的本地脏文件应照报: {f}")
+        _commit(p, "c2")
+        f = mcc.check_module_refreshed(p, csm, subs)
+        t = _tally_of(f)
+        if [lv for lv, _ in f] != ["info"] or [counts(x) for x in t] != [{**zero, "external": 1}]:
+            failures.append(f"提交后应只出 info、外仓 1: {f}")
+
+    # git 路径匹配与框架同一规则（`:(glob)`）：`s/**/x.py` 含零层目录、`t/*/y.py` 的 `*` 不跨 `/`
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        for rel in ("s/x.py", "s/a/b/x.py", "t/y.py", "t/a/b/y.py"):
+            (p / rel).parent.mkdir(parents=True, exist_ok=True)
+            (p / rel).write_text("v\n", encoding="utf-8", newline="\n")
+        _git(p, "init")
+        _commit(p, "c1")
+        base = _short_head(p)
+        (p / "s" / "x.py").write_text("v2\n", encoding="utf-8", newline="\n")      # 框架规则命中 s/**/x.py
+        (p / "t" / "a" / "b" / "y.py").write_text("v2\n", encoding="utf-8", newline="\n")  # 不命中 t/*/y.py
+        _commit(p, "c2")
+        _tally_fixture(p, [("m/a", ["s/**/x.py"], base, "", False), ("m/b", ["t/*/y.py"], base, "", False)])
+        _commit(p, "docs")
+        csm = mcc._load_csm(p)
+        subs = mcc._collect_submodules(p, csm)
+        errs = [m for lv, m in mcc.check_module_refreshed(p, csm, subs) if lv == "error"]
+        if len(errs) != 1 or not errs[0].startswith("m/a 基准") or "1 个提交" not in errs[0]:
+            failures.append(f"应只有 m/a 报 1 个提交漏刷（m/b 不该红）: {errs}")
+        (p / "s" / "x.py").write_text("v3\n", encoding="utf-8", newline="\n")
+        errs = [m for lv, m in mcc.check_module_refreshed(p, csm, subs) if lv == "error"]
+        if not any(m.startswith("m/a @") and "未提交改动" in m for m in errs):
+            failures.append(f"git status 也按框架规则匹配（s/x.py 未提交）: {errs}")
+
+    # 档位互斥（检查 6 全键比较）＋ 三层输出：CLI 总计 = 各项头计数，gates 逐条保留全部 finding
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _tally_fixture(tmp, [(f"b/m{i}", [], "5d4a3751", "外部仓标识", False) for i in range(7)])
+        csm = mcc._load_csm(p)
+        cov = _tally_of(mcc.check_code_map_coverage(p, csm, mcc._collect_submodules(p, csm)))
+        if [counts(x) for x in cov] != [{**zero, "external": 7}]:
+            failures.append(f"检查 6 B 形态应只计外仓 7: {[counts(x) for x in cov]}")
+        rows = mcc.run_all(p)
+        rc, out = _run_main(mcc, p)
+        m = re.search(r"结果: ok (\d+) / info (\d+) / warn (\d+) / error (\d+)", out)
+        want = [sum(1 for r in rows if r["status"] == k) for k in ("ok", "info", "warn", "error")]
+        if not m or [int(x) for x in m.groups()] != want or sum(want) != len(rows):
+            failures.append(f"CLI 总计应逐项等于项头计数 {want}: {m.groups() if m else out.splitlines()[-1:]}")
+        import _query_gates
+        gates = _query_gates.normalize("close", rows, {})
+        for r in rows:
+            if r["id"] == "modules":
+                continue
+            got = [(c["level"], c["message"]) for c in gates["checks"] if c["id"] == r["id"]]
+            if got != [(x["level"], x["msg"]) for x in r["findings"]]:
+                failures.append(f"gates 应逐条保留 [{r['id']}] 的全部 finding: {got}")
+
+    # 检查 6 空配置 ×7 ⇒ 未配置 7（与检查 4 同口径）
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _tally_fixture(tmp, [(f"e/m{i}", [], "5d4a3751", "", False) for i in range(7)])
+        csm = mcc._load_csm(p)
+        cov = _tally_of(mcc.check_code_map_coverage(p, csm, mcc._collect_submodules(p, csm)))
+        if [counts(x) for x in cov] != [{**zero, "unconfigured": 7}]:
+            failures.append(f"检查 6 空配置 ×7 应未配置 7: {[counts(x) for x in cov]}")
+    return failures
+
+
+def test_match_semantics(mcc):
+    """检查 4 的命中与反向索引同一套规则（不交给 git 判）：中文 `?` / `[桌]`、非整段 `**`、`*` 不跨 `/`、
+    已删除文件的提交、深层脏文件不误命中，以及调用方环境里的 `GIT_LITERAL_PATHSPECS` 不改结论。
+
+    期望手写：每条 code_paths 对每个改动文件「该不该命中」按框架 glob 规则人工判定，不取自 `glob_to_regex`。"""
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        files = ("doc/桌面/a.md", "plugins/core/scripts/module_close_check.py", "t/y.py", "t/a/b/y.py", "gone/old.py",
+                 "plugins/core/.workframe-meta/e.json")
+        for rel in files:
+            (p / rel).parent.mkdir(parents=True, exist_ok=True)
+            (p / rel).write_text("v\n", encoding="utf-8", newline="\n")
+        _git(p, "init")
+        _commit(p, "c1")
+        base = _short_head(p)
+        for rel in ("doc/桌面/a.md", "plugins/core/scripts/module_close_check.py", "t/a/b/y.py",
+                    "plugins/core/.workframe-meta/e.json"):
+            (p / rel).write_text("v2\n", encoding="utf-8", newline="\n")
+        (p / "gone" / "old.py").unlink()
+        _commit(p, "c2")
+        mods = [("m/q", ["doc/?面/a.md"]), ("m/cls", ["doc/[桌]面/*.md"]), ("m/seg", ["plugins/**close_check.py"]),
+                ("m/star", ["t/*/y.py"]), ("m/del", ["gone/*.py"]), ("m/lit", ["plugins/core/scripts/module_close_check.py"]),
+                ("m/cc", ["plugins/core/[w/./z]workframe-meta/*.json"]),       # 字符类里的 `.` 是类成员
+                ("m/stars", ["plugins/core/scripts/***/module_close_check.py"]),
+                ("m/dbl", ["plugins/core//scripts/module_close_check.py"]),     # 索引命不中：检查 2 报
+                ("m/dblg", ["plugins/core//scripts/*.py"]),
+                ("m/plus", ["plugins**//core/scripts/module_close_check.py"]),  # 非整段 `**`：索引命中，合法
+                ("m/trail", ["plugins/core/scripts/module_close_check.py/"]),   # 尾斜杠：磁盘在、索引命不中
+                ("m/case", ["plugins/core/scripts/MODULE_CLOSE_CHECK.py"]),     # 大小写错拼（Windows 磁盘在）
+                ("m/bs", ["plugins\\core\\scripts\\module_close_check.py"]),    # 反斜杠：非法形态
+                ("m/esc", ["plugins/core/scripts/[m\\-]odule_close_check.py"]),  # 字符类里的 `\` 是转义：合法
+                ("m/st2", ["plugins/core/***/"]),                               # 以 `***/` 结尾：不命中任何文件
+                ("m/dir", ["plugins/core/scripts"]),                            # literal 指向目录：检查 2 报
+                ("m/badg", ["src/[z-a].py"])]                                    # 编译不了：只让本模块不可核
+        _tally_fixture(p, [(rel, cps, base, "", False) for rel, cps in mods])
+        _commit(p, "docs")
+        csm = mcc._load_csm(p)
+        subs = mcc._collect_submodules(p, csm)
+        # m/star：t/*/y.py 不命中 t/a/b/y.py；m/stars：`***/` 要求 scripts/ 下再有一层，不命中；
+        # m/dbl、m/dblg、m/trail、m/case、m/st2、m/dir：索引命不中，检查 4 也不计；m/bs：非法形态；m/badg：不可核
+        want = {"m/q": 1, "m/cls": 1, "m/seg": 1, "m/del": 1, "m/lit": 1, "m/cc": 1, "m/plus": 1, "m/esc": 1}
+        # 独立对照：真实反向索引 lookup 对 c2 里每个改动文件的命中，并起来应恰是 want 的模块
+        changed = ("doc/桌面/a.md", "plugins/core/scripts/module_close_check.py", "t/a/b/y.py",
+                   "plugins/core/.workframe-meta/e.json", "gone/old.py")
+        # 逐文件比（不先取并集：命中落在错的文件上、并集碰巧不变时也要红）
+        want_by_file = {"doc/桌面/a.md": {"m/q", "m/cls"},
+                        "plugins/core/scripts/module_close_check.py": {"m/seg", "m/lit", "m/plus", "m/esc"},
+                        "t/a/b/y.py": set(), "plugins/core/.workframe-meta/e.json": {"m/cc"}, "gone/old.py": {"m/del"}}
+        for f in changed:
+            got_f = set(csm.lookup_submodules(f, project_dir=p))
+            if got_f != want_by_file[f]:
+                failures.append(f"反向索引对 {f} 的命中 {sorted(got_f)} 应为 {sorted(want_by_file[f])}")
+        if set().union(*want_by_file.values()) != set(want):
+            failures.append("测试自身：逐文件期望的并集应等于检查 4 的期望")
+        # 检查 2 同一现场的结论：索引命不中的几条各自由它报红（形态归它管，检查 4 不各自变通）
+        c2 = mcc.check_code_paths_health(p, csm, subs)
+        for rel, kw in (("m/dbl", "非法形态"), ("m/dblg", "非法形态"), ("m/stars", "展开为空"),
+                        ("m/trail", "静默失明"), ("m/case", "静默失明"), ("m/bs", "非法形态"),
+                        ("m/st2", "展开为空"), ("m/dir", "literal 指向目录"), ("m/badg", "无法编译")):
+            if not any(lv == "error" and m.startswith(rel + " ") and kw in m for lv, m in c2):
+                failures.append(f"检查 2 应对 {rel} 报「{kw}」: {[m for lv, m in c2 if m.startswith(rel + ' ')]}")
+        # m/del 的文件已删：检查 2 报它展开为空是对的（终态归检查 2），检查 4 照样数到删除那次提交
+        if any(m.startswith(r + " ") for lv, m in c2 if lv == "error" for r in set(want) - {"m/del"}):
+            failures.append(f"检查 2 不应对命中的那几条报红: {c2}")
+
+        def red(env_extra=None):
+            old = {k: os.environ.get(k) for k in (env_extra or {})}
+            os.environ.update(env_extra or {})
+            try:
+                f = mcc.check_module_refreshed(p, csm, subs)
+                if not _has(_findings(f), "warn", "m/badg @ (项目根仓): code_paths 有编译不了的 glob"):
+                    failures.append(f"坏 glob 应只让 m/badg 报 warn: {f}")
+                got = {}
+                for lv, m in f:
+                    mm = re.match(r"(\S+) 基准（\w+）之后有 (\d+) 个提交", m)
+                    if lv == "error" and mm:
+                        got[mm.group(1)] = int(mm.group(2))
+                return got
+            finally:
+                for k, v in old.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
+        got = red()
+        if got != want:
+            failures.append(f"漏刷（模块 → 提交数）应为 {want}，实际 {got}")
+        got = red({"GIT_LITERAL_PATHSPECS": "1"})
+        if got != want:
+            failures.append(f"GIT_LITERAL_PATHSPECS=1 下结论不应变，实际 {got}")
+        # 工作树：深层 t/a/b/y.py 脏不命中 t/*/y.py；中文 ? 照样命中
+        (p / "t" / "a" / "b" / "y.py").write_text("v3\n", encoding="utf-8", newline="\n")
+        (p / "doc" / "桌面" / "a.md").write_text("v3\n", encoding="utf-8", newline="\n")
+        dirty = {m.split(" ", 1)[0] for lv, m in mcc.check_module_refreshed(p, csm, subs)
+                 if lv == "error" and "未提交改动" in m}
+        if dirty != {"m/q", "m/cls"}:
+            failures.append(f"未提交改动命中应为 m/q、m/cls，实际 {sorted(dirty)}")
+        # 检查 9：坏 glob 只让它自己的模块判不了，同仓其他模块的命中照算
+        applicable, hit, unknown, _nested = mcc.trace_premise(p, csm, subs, datetime.now(timezone.utc) - timedelta(hours=1))
+        if applicable is not True or hit != set(want):
+            failures.append(f"检查 9 前提：坏 glob 不应撤掉同仓命中: {applicable} {sorted(hit)}")
+        if unknown != ["m/badg（code_paths 有编译不了的 glob）"]:
+            failures.append(f"检查 9 前提：判不了的应只有 m/badg 且原因写明: {unknown}")
+        tr = next(r for r in mcc.run_all(p) if r["id"] == "discipline-trace")
+        if not any(f["level"] == "info" and "适用前提里有未能核验的仓或路径" in f["msg"] and "m/badg" in f["msg"]
+                   for f in tr["findings"]):
+            failures.append(f"检查 9 混合态应留一条「部分判不了」明细: {tr['findings']}")
+
+    # 只在合并提交里发生的改动：两边分支都没碰 g.txt，合并时才改。检查 4 与检查 9 的前提都要看见它
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        old = datetime.now(timezone.utc) - timedelta(days=3)
+        for rel in ("f.txt", "g.txt"):
+            (p / rel).write_text("v\n", encoding="utf-8", newline="\n")
+        _git(p, "init", "-b", "main")
+        _commit_all_at(p, old, "c1")
+        base = _short_head(p)
+        _git(p, "checkout", "-q", "-b", "side")
+        (p / "f.txt").write_text("side\n", encoding="utf-8", newline="\n")
+        _commit_all_at(p, old + timedelta(hours=1), "side")
+        _git(p, "checkout", "-q", "main")
+        _git(p, "merge", "--no-ff", "--no-commit", "side")
+        (p / "g.txt").write_text("fixed in merge\n", encoding="utf-8", newline="\n")
+        _commit(p, "merge with fix")
+        _tally_fixture(p, [("m/g", ["g.txt"], base, "", False)])
+        _commit(p, "docs")
+        csm = mcc._load_csm(p)
+        errs = [m for lv, m in mcc.check_module_refreshed(p, csm, mcc._collect_submodules(p, csm)) if lv == "error"]
+        if len(errs) != 1 or "之后有 1 个提交" not in errs[0] or "merge with fix" not in errs[0]:
+            failures.append(f"只在合并提交里的改动应报 1 个提交漏刷: {errs}")
+        since = old + timedelta(days=1)   # 两个父提交都在窗口外，只有合并提交在窗口内
+        if mcc._repo_touched_since(p, ["g.txt"], since, known_repo=True) is not True:
+            failures.append("检查 9 前提：窗口内只有合并提交改了 g.txt，也应判为有改动")
+        if mcc._repo_touched_since(p, ["src/[z-a].py"], since, known_repo=True) is not None:
+            failures.append("检查 9 前提：编译不了的 glob 应判「判不了」（None），不抛异常")
+
+    # `-z` 输出按 NUL 原样切：文件名含 U+2028 时，先按行拆再拼回会把它拆坏（喂假 git 输出，不建这种文件）。
+    # 在 `_git` **之下**（subprocess）喂：`_git` 自己若又拆行这条照样红；工作树与提交历史两个入口都测
+    from unittest import mock
+    name = "a" + chr(0x2028) + "b.py"   # 用 chr 构造：源码里不放不可见字符
+
+    def fake_run(cmd, **kw):
+        out = f" M {name}\0" if "status" in cmd else f"\x01abc1234 subject\0\n{name}\0"
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    with mock.patch.object(mcc.subprocess, "run", fake_run):
+        rc, lines, _err = mcc._git_dirty(Path("."), [name])
+        rc2, commits, _err2 = mcc._git_commits(Path("."), [name], "x..HEAD")
+    if rc != 0 or lines != [f" M {name}"]:
+        failures.append(f"含 U+2028 的文件名应在工作树入口原样命中: {lines!r}")
+    if rc2 != 0 or commits != ["abc1234 subject"]:
+        failures.append(f"含 U+2028 的文件名应在提交历史入口原样命中: {commits!r}")
+    return failures
+
+
+def test_index_consistency_edges(mcc):
+    """检查 2 与反向索引在三处边界上同判：嵌套仓前缀的拼写、取不到 git 视野时的目录、带首尾空格的文件名。"""
+    from unittest import mock
+    failures = []
+    # 嵌套仓前缀写成 `./sub` 或大小写变体：反向索引拿规范文件名查，永远命不中——检查 2 报红，检查 4 不计已对账
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        (p / ".gitignore").write_text("sub/\n", encoding="utf-8", newline="\n")
+        _git(p, "init")
+        _commit(p, "root")
+        (p / "sub").mkdir()
+        (p / "sub" / "a.py").write_text("v\n", encoding="utf-8", newline="\n")
+        _git(p / "sub", "init")
+        _commit(p / "sub", "c")
+        h = _short_head(p / "sub")
+        _tally_fixture(p, [("m/ok", ["sub/a.py"], h, "sub", False), ("m/dot", ["./sub/a.py"], h, "./sub", False),
+                           ("m/up", ["SUB/a.py"], h, "SUB", False)])
+        csm = mcc._load_csm(p)
+        subs = mcc._collect_submodules(p, csm)
+        hits = set(csm.lookup_submodules("sub/a.py", project_dir=p))
+        if hits != {"m/ok"}:
+            failures.append(f"夹具前提：反向索引只有 m/ok 命中 sub/a.py，实际 {sorted(hits)}")
+        c2 = mcc.check_code_paths_health(p, csm, subs)
+        for rel in ("m/dot", "m/up"):
+            if not any(lv == "error" and m.startswith(rel + " ") for lv, m in c2):
+                failures.append(f"检查 2 应对 {rel} 报红（索引命不中）: {[m for lv, m in c2 if m.startswith(rel)]}")
+        if any(lv == "error" and m.startswith("m/ok ") for lv, m in c2):
+            failures.append(f"检查 2 不应对规范写法 m/ok 报红: {c2}")
+        f4 = mcc.check_module_refreshed(p, csm, subs)
+        t = _tally_of(f4)
+        if t and t[0].reconciled != 1:
+            failures.append(f"检查 4 只该对账 m/ok 一个: {[x.reconciled for x in t]} / {f4}")
+    # 根仓不是 git 仓：literal 退回磁盘判，目录照旧判红
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        (p / "d").mkdir()
+        (p / "d" / "x.py").write_text("v\n", encoding="utf-8", newline="\n")
+        _tally_fixture(p, [("m/d", ["d"], "", "", False), ("m/f", ["d/x.py"], "", "", False)])
+        csm = mcc._load_csm(p)
+        c2 = mcc.check_code_paths_health(p, csm, mcc._collect_submodules(p, csm))
+        if not _has(_findings(c2), "error", "m/d 的 code_paths 里的 literal 指向目录"):
+            failures.append(f"无 git 视野时 literal 目录仍应判红: {c2}")
+        if any(lv == "error" and m.startswith("m/f ") for lv, m in c2):
+            failures.append(f"无 git 视野时存在的文件不应判红: {c2}")
+        only_file = [s for s in mcc._collect_submodules(p, csm) if s["rel"] == "m/f"]
+        ok = [m for lv, m in mcc.check_code_paths_health(p, csm, only_file) if lv == "ok"]
+        if len(ok) != 1 or "1 条所在仓取不到 git 视野，按磁盘判" not in ok[0]:
+            failures.append(f"按磁盘判的 literal，成功行应说明证据来源: {ok}")
+    # git 文件清单无损：带首空格的文件名原样进视野（喂 subprocess 输出，不建这种文件）
+    def fake_run(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 0, stdout=" leading.py\0plain.py\0", stderr="")
+
+    with mock.patch.object(mcc.subprocess, "run", fake_run):
+        index, unavailable = mcc._repo_file_index(Path("."), [])
+    if index.get("") != {" leading.py", "plain.py"} or unavailable:
+        failures.append(f"文件清单应原样保留首空格: {index} {unavailable}")
+    return failures
+
+
+def test_coverage_keeps_diagnostics(mcc):
+    """检查 6 的分档不抹掉别的诊断：已知仓读取失败先于「未配置」；code_paths 全非法时 source_paths 自身的错照报。"""
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        (p / ".gitignore").write_text("bad/\n", encoding="utf-8", newline="\n")
+        _git(p, "init")
+        _commit(p, "c")
+        (p / "bad" / "x").mkdir(parents=True)
+        (p / "bad" / "x" / ".git").write_text("gitdir: ../nowhere\n", encoding="utf-8", newline="\n")
+        _tally_fixture(p, [("m/use", ["bad/x/**"], "5d4a3751", "bad/x", False),
+                           ("m/empty", [], "5d4a3751", "bad/x", False)])
+        csm = mcc._load_csm(p)
+        f = mcc.check_code_map_coverage(p, csm, mcc._collect_submodules(p, csm))
+        if not _has(_findings(f), "warn", "m/empty: bad/x git ls-files 失败"):
+            failures.append(f"已知仓读取失败不应被「未配置」抹掉: {f}")
+        t = _tally_of(f)
+        if len(t) != 1 or t[0].unconfigured != 0:
+            failures.append(f"应恰有一条结论、且读取失败的模块不计入未配置: {[x.unconfigured for x in t]}")
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        _git(p, "init")
+        _commit(p, "c")
+        _tally_fixture(p, [("m/bad", ["../bad"], "5d4a3751", "", False)])
+        cm = p / "projects" / "modules" / "m" / "bad" / "current-state" / "code-map.md"
+        cm.write_text(cm.read_text(encoding="utf-8").replace('source_paths: ["../bad"]', 'source_paths: ["../doc-only"]'),
+                      encoding="utf-8", newline="\n")
+        csm = mcc._load_csm(p)
+        f = mcc.check_code_map_coverage(p, csm, mcc._collect_submodules(p, csm))
+        if not _has(_findings(f), "error", "source_paths 含非法形态（../doc-only）"):
+            failures.append(f"code_paths 全非法时 source_paths 自身的非法项仍应报: {f}")
+        if any("source_repo 填错" in m for _lv, m in f):
+            failures.append(f"不应报 source_repo 填错: {f}")
+    return failures
+
+
 def main():
     mcc = _load_mcc()
     mcc._load_csm(REPO_ROOT)  # 先完成唯一一次 exec，后续全走重定向
@@ -1669,12 +2473,21 @@ def main():
         ("load_csm 双载回归", test_load_csm_regression),
         ("CLI 在 GBK 管道下输出 UTF-8", test_cli_survives_gbk_pipe),
         ("检查1 stale + reason 事件", test_stale_and_reason_event),
+        ("检查1 反向索引对账 × 读者自修", test_index_drift_matrix),
+        ("检查1 声明读不了不覆盖缓存", test_index_unreadable_declaration),
+        ("检查1 零子模块仍对账", test_index_zero_submodules),
         ("检查2 code_paths 形态与指向", test_code_paths_health),
         ("检查3 基准同值性", test_ref_consistency),
         ("检查3 overview 提取式（真实路径）", test_overview_ref_extraction),
         ("检查4 命中已刷新", test_module_refreshed),
         ("检查5 仓状态判级", test_repo_status),
         ("检查6 code-map 覆盖率对账", test_code_map_coverage),
+        ("检查4/6 五档结论与项头", test_tally_tiers),
+        ("检查1 三种故障独立报错", test_stale_clean_failures),
+        ("检查4/6 边界与三层输出", test_tally_edges),
+        ("检查4 命中规则与反向索引一致", test_match_semantics),
+        ("检查6 分档不抹掉别的诊断", test_coverage_keeps_diagnostics),
+        ("检查2 与反向索引的边界同判", test_index_consistency_edges),
         ("[ledger] 账本字段", test_ledger),
         ("[yaml-parse] YAML 可解析性", test_yaml_parse),
         ("_yaml_probe.safe_load 共用解析入口", test_yaml_safe_load),
@@ -1684,6 +2497,7 @@ def main():
         ("[discipline-trace] 放行 / 假绿分支", test_discipline_trace_branches),
         ("[discipline-trace] 升级计数", test_discipline_trace_counting),
         ("[discipline-trace] 标记命令", test_discipline_mark_command),
+        ("[nav-index] 四条路径、零写入、定位到文件", test_nav_index),
     ]
     total_failures = []
     for name, fn in tests:
@@ -1699,6 +2513,152 @@ def main():
     print(f"\n{'全部通过' if not total_failures else f'{len(total_failures)} 项失败'}"
           f"（{len(tests)} 组用例）")
     return 1 if total_failures else 0
+
+
+def _nav_tree(tmp, subs=("乙", "丙")):
+    """脚本建树（module-init 同路径），新版式段与出厂模板逐字一致。"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "plugins" / "core" / "scripts"))
+    import module_init
+    params = Path(tmp) / "params.json"
+    params.write_text(json.dumps({"basics": [{"name": "甲", "subs": [{"name": s} for s in subs]}]},
+                                 ensure_ascii=False), encoding="utf-8", newline="")
+    module_init.create_tree(Path(tmp), module_init.load_params(params))
+    params.unlink()
+    return Path(tmp) / "projects" / "modules" / "甲"
+
+
+def _snap(root):
+    return {p: p.read_bytes() for p in sorted(Path(root).rglob("*")) if p.is_file()}
+
+
+def _nav_row(mcc, p):
+    return next(r for r in mcc.run_all(Path(p)) if r["id"] == "nav-index")
+
+
+def test_nav_index(mcc):
+    """[nav-index]：新版式漂移 warn / 旧版式 info / 段结构坏 warn「无法检查」/ 字段值不合法 warn；
+    每条都带具体文件路径，gates 查询据此定位；零写入；永不产 error；检查自身异常只降 warn。"""
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        b = _nav_tree(tmp)
+        gates = importlib.import_module("_query_gates")
+        row = _nav_row(mcc, tmp)
+        f = [(x["level"], x["msg"]) for x in row["findings"]]
+        if row["status"] != "ok" or not _has(f, "ok", "与实物一致"):
+            failures.append(f"新建树应 ok「与实物一致」: {row}")
+        # 四种问题各放一份文件，互不遮挡
+        ov = b / "乙" / "overview.md"
+        ov.write_bytes(ov.read_bytes().replace("进行中 0 · 规划 0".encode(), "进行中 9 · 规划 0".encode(), 1))
+        req = b / "乙" / "requirements" / "overview.md"
+        req.write_bytes(req.read_bytes().replace(b"| req_slug | owner | \xe6\x91\x98\xe8\xa6\x81 |", b"| req_slug | owner |", 1))
+        bad = b / "丙" / "overview.md"
+        bad.write_bytes(bad.read_bytes().replace(b"<!-- WORKFRAME:AUTO-INDEX:END:current-state-summary -->", b"", 1))
+        arch = b / "乙" / "current-state" / "architecture.md"
+        arch.write_bytes(re.sub(rb"(?m)^unwritten: .*$", b"unwritten: true", arch.read_bytes(), count=1))
+        rel = lambda p: p.relative_to(Path(tmp)).as_posix()
+        before = _snap(tmp)
+        row = _nav_row(mcc, tmp)
+        if _snap(tmp) != before:
+            failures.append("[nav-index] run_all 必须零写入")
+        by = {}
+        for x in row["findings"]:
+            by.setdefault(x["level"], []).append(x)
+        warn_paths = sorted(str(x.get("path")) for x in by.get("warn", []))
+        want = sorted([rel(ov), rel(bad), rel(arch)])
+        if warn_paths != want:
+            failures.append(f"warn 应恰好三份文件（漂移 / 无法检查 / 字段值不合法）: {warn_paths} vs {want}")
+        msgs = {x.get("path"): x["msg"] for x in by.get("warn", [])}
+        if "requirements-index" not in msgs.get(rel(ov), "") or "--refresh-index" not in msgs.get(rel(ov), ""):
+            failures.append(f"漂移 warn 应列段名并给 --refresh-index: {msgs.get(rel(ov))}")
+        if "无法检查" not in msgs.get(rel(bad), "") or "不配对" not in msgs.get(rel(bad), ""):
+            failures.append(f"段结构坏应报「无法检查」并说原因: {msgs.get(rel(bad))}")
+        if "--unstamp" not in msgs.get(rel(arch), "") or "--mark-unwritten" not in msgs.get(rel(arch), ""):
+            failures.append(f"字段值不合法应给两条修法: {msgs.get(rel(arch))}")
+        if not any("旧版式" in x["msg"] and "--convert-layout" in x["msg"] for x in by.get("info", [])):
+            failures.append(f"旧版式应汇总一条 info 并给 --convert-layout: {by.get('info')}")
+        if row["status"] != "warn" or "error" in by:
+            failures.append(f"项头应为 warn、永不产 error: {row['status']} / {list(by)}")
+        if any(x["level"] == "ok" for x in row["findings"]):
+            failures.append("有 warn 时不应再打 ok 勾")
+        # gates：结论定位到那份文件，不退回整棵目录
+        v = gates.normalize("close-check", [row], {"nav-index": ["projects/modules/"]})
+        docs = sorted(str(c["doc_path"]) for c in v["checks"] if c["level"] == "warn")
+        if docs != want:
+            failures.append(f"gates 的 doc_path 应是各自那份文件: {docs}")
+        if any(c["files"] != [c["doc_path"]] for c in v["checks"] if c["level"] == "warn"):
+            failures.append("gates 的 files 应只含那份文件")
+        info = [c for c in v["checks"] if c["level"] == "info"]
+        if not info or info[0]["files"] != ["projects/modules/"]:
+            failures.append(f"不带 path 的汇总 info 应回落到行级输入: {info}")
+    with tempfile.TemporaryDirectory() as tmp:   # 全是旧版式：一段都没比较上 → 项头 info，不打 ok 勾
+        b = _nav_tree(tmp, subs=("乙",))
+        for p in (b / "乙" / "requirements" / "overview.md",):
+            p.write_bytes(p.read_bytes().replace(b"| req_slug | owner | \xe6\x91\x98\xe8\xa6\x81 |", b"| req_slug | owner |", 1))
+        import _module_nav
+        real = _module_nav.plan
+
+        def only_legacy(*a, **k):
+            pl = real(*a, **k)
+            pl.changes = [c for c in pl.changes if c.kind == "legacy"]
+            return pl
+        _module_nav.plan = only_legacy
+        try:
+            row = _nav_row(mcc, tmp)
+        finally:
+            _module_nav.plan = real
+        if row["status"] != "info" or any(x["level"] == "ok" for x in row["findings"]):
+            failures.append(f"零比较段时项头应为 info、不打 ok 勾: {row}")
+
+        def boom(*a, **k):
+            raise RuntimeError("探针")
+        _module_nav.plan = boom
+        try:
+            row = _nav_row(mcc, tmp)
+        finally:
+            _module_nav.plan = real
+        if row["status"] != "warn" or "检查自身异常" not in row["findings"][0]["msg"]:
+            failures.append(f"检查自身异常应降 warn、不炸整个命令: {row}")
+    with tempfile.TemporaryDirectory() as tmp:   # stale-clean 的结论同样定位到子模块 overview
+        make_fixture(tmp)
+        p = Path(tmp)
+        csm = mcc._load_csm(p)
+        csm.mark_stale("basicA/subA", "code_changed:x")
+        row = next(r for r in mcc.run_all(p) if r["id"] == "stale-clean")
+        hit = [x for x in row["findings"] if "仍挂 stale" in x["msg"]]
+        if not hit or not hit[0].get("path", "").endswith("/overview.md"):
+            failures.append(f"stale 结论应带子模块 overview 路径: {row['findings']}")
+        gates = importlib.import_module("_query_gates")
+        related = {"stale-clean": ["projects/modules/basicA/subA/current-state/code-map.md"]}
+
+        def located(row):
+            return [(c["doc_path"], c["files"]) for c in gates.normalize("close-check", [row], related)["checks"]
+                    if c["level"] == "error"]
+        csm.clear_stale("basicA/subA", reason="测完")
+        # 缓存损坏：指向缓存文件（非 Markdown → doc_path 为空），不退回某份无关的模块文档
+        idx = Path(csm.INDEX_FILE)
+        good = idx.read_bytes()
+        idx.write_bytes(b"{not json")
+        row = next(r for r in mcc.run_all(p) if r["id"] == "stale-clean")
+        loc = located(row)
+        want_idx = idx.resolve().relative_to(p.resolve()).as_posix()
+        if loc != [(None, [want_idx])]:
+            failures.append(f"缓存损坏应定位到缓存文件、doc_path 为空: {loc}")
+        idx.write_bytes(good)
+        # 声明读不了：指向那份 submodule.yaml
+        decl = p / "projects" / "modules" / "basicA" / "subA" / "submodule.yaml"
+        decl_raw = decl.read_bytes()
+        decl.write_bytes(b"\xff\xfe" + decl_raw)
+        row = next(r for r in mcc.run_all(p) if r["id"] == "stale-clean")
+        loc = located(row)
+        if loc != [(None, ["projects/modules/basicA/subA/submodule.yaml"])]:
+            failures.append(f"声明读不了应定位到那份 submodule.yaml: {loc}")
+        decl.write_bytes(decl_raw)
+        # 不带 path 的 stale-clean 结论也不退回行级的模块文档
+        v = gates.normalize("close-check", [{"id": "stale-clean", "name": "x",
+                                             "findings": [{"level": "error", "msg": "无文件"}]}], related)
+        if v["checks"][0]["doc_path"] is not None:
+            failures.append(f"stale-clean 不带 path 的结论不得指向无关文档: {v['checks'][0]}")
+    return failures
 
 
 if __name__ == "__main__":

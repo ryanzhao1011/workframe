@@ -12,8 +12,18 @@ module_init.py — modules/ 体系 basic / sub 两层骨架的确定性落盘（
     # 建树（幂等：已存在文件一律跳过；收尾自动重建两层索引段）
     python module_init.py --project "<dir>" --params "<tree.json>"
 
-    # 仅重建索引段（global basic-modules-index + 各 basic 的 submodules-index）
-    python module_init.py --project "<dir>" --refresh-index [--basic "<name>"]
+    # 导航段（六类 AUTO-INDEX 段；规则唯一在 _module_nav.py）
+    python module_init.py --project "<dir>" --refresh-index [--basic "<name>"] [--scope <路径>…] [--json]
+    python module_init.py --project "<dir>" --check [--scope <路径>…] [--json]            # 零写入
+    python module_init.py --project "<dir>" --convert-layout [--scope …] [--choice <路径>=<选项>…]
+        [--apply --confirm <码>] [--json]                                           # 旧版式转换，默认只预览
+
+    # 「未编写」状态（判定唯一在 _doc_state.py）
+    python module_init.py --project "<dir>" --doc-state <文件…> [--json]        # 零写入
+    python module_init.py --project "<dir>" --mark-unwritten <文件…>            # 复制模板后盖戳
+    python module_init.py --project "<dir>" --unstamp <文件…>                   # 正文写入成功后删字段
+    python module_init.py --project "<dir>" --mark-unwritten --scan [--extra-skeleton [类型=]<文件>…]
+        [--apply --confirm <码>] [--json]                                      # 存量盘点，默认只预览
 
 params JSON（launcher setup / module-init SKILL 采集对话后写出）：
     {
@@ -30,16 +40,21 @@ params JSON（launcher setup / module-init SKILL 采集对话后写出）：
 
 职责边界：
     - 只建 basic / sub 两层；requirement 资产包归 module-init SKILL（转写阶段的产物）
-    - 索引段只管 global `basic-modules-index` 与 basic `submodules-index` 两类匿名段，
-      生成规则与 module-index-refresh SKILL Step 2/3 对齐（该 SKILL 在这两层改调本脚本，
-      需求层各段仍归 SKILL）——单一实现，防两处漂移
+    - 导航段六类都由 `_module_nav.py` 渲染与写入，本脚本只做 CLI；module-index-refresh SKILL
+      调本脚本、只把取数表留作规格，close-check 拿同一个规划器做零写入比较——单一实现，防两处漂移
     - 反向索引不重新实现：subprocess 调 `check-stale-modules.py init-submodule`
       （复用其文件锁 + 原子写），经 CLAUDE_PROJECT_DIR 环境变量定位项目
 
-退出码：0 成功；2 参数 / 校验错误（ParamError）；1 插件不完整（InstallError）或其他异常。
+退出码：0 成功；2 参数 / 校验错误（ParamError，含几种模式同时给）；1 插件不完整（InstallError）或其他异常。
+    导航三条命令另有：--refresh-index 3 = 有冲突（其余已写）、2 = 段问题；--check 1 = 有差异或旧版式、2 = 无法检查；
+    --convert-layout --apply 确认码不符是 2、零写入。
+    「未编写」几条命令：--doc-state 逐份报状态、读不到的也只报不改退出码（看输出）；
+    --unstamp / --mark-unwritten 有任一份 missing / refused / error 即 1；--scan --apply 整批要么全写、要么零写入，
+    零写入时 1（确认码不符是 2）。
 """
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -48,6 +63,11 @@ import subprocess
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _doc_state  # noqa: E402
+import _module_nav  # noqa: E402
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES_DIR = PLUGIN_ROOT / "templates" / "modules-template"
@@ -67,21 +87,13 @@ SUB_POSITIONING_PLACEHOLDER = (
     "<!-- 子模块的功能定位 / 用户价值 / 与父基础模块的关系。**这一段由人写**，反映稳定信息。 -->"
 )
 
-# 匿名机器维护段边界（global / basic overview 各只有一段；具名段不归本脚本管）
-IDX_START = "<!-- WORKFRAME:AUTO-INDEX:START -->"
-IDX_END = "<!-- WORKFRAME:AUTO-INDEX:END -->"
-IDX_PATTERN = re.compile(
-    re.escape(IDX_START) + r"[\s\S]*?" + re.escape(IDX_END)
-)
-
-
 class ParamError(Exception):
     """参数缺失 / 校验失败——必须让调用方当场看见，不静默降级。退出码 2。"""
 
 
 class InstallError(Exception):
     """插件自身不完整（模板目录缺失等）——不是用户输入的问题。退出码 1，
-    与 module-init SKILL 处置表的「确认 plugin-root.txt 指向的插件根有效」对齐。"""
+    与 module-init SKILL 处置表的「确认 `$WF_PLUGIN_ROOT` 指向的插件根有效」对齐。"""
 
 
 # ---------------------------------------------------------------- 基础工具
@@ -125,19 +137,7 @@ def _validate_name(name, label):
         raise ParamError(f"{label} 「{name}」不是合法目录名")
 
 
-def _flat_yaml(path: Path) -> dict:
-    """读顶层 `key: value` 平铺字段（本脚本只需 name/status/notes，不引第三方库）。"""
-    data = {}
-    if not path.exists():
-        return data
-    for line in _read_text(path).splitlines():
-        if not line or line.startswith((" ", "\t", "#", "-")):
-            continue
-        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*(?:#.*)?$", line)
-        if m:
-            val = m.group(2).strip().strip('"').strip("'")
-            data[m.group(1)] = val
-    return data
+_flat_yaml = _module_nav.flat_yaml   # 唯一实现在 _module_nav（导航取数与这里共用）
 
 
 # ---------------------------------------------------------------- params 校验
@@ -200,8 +200,8 @@ def _render_tree_files(src_dir: Path, dst_dir: Path, mapping: dict,
     if not src_dir.is_dir():
         raise InstallError(
             f"模板目录不存在：{src_dir}\n"
-            f"  插件安装不完整或模板被删。确认运行态状态目录下的 plugin-root.txt "
-            f"指向的插件根有效（重装 core 插件可修复），再重跑。")
+            f"  插件安装不完整或模板被删。确认会话开场注入的「本会话插件根」"
+            f"有效（重装 core 插件可修复），再重跑。")
     for src in sorted(src_dir.rglob("*")):
         if not src.is_file():
             continue
@@ -228,6 +228,15 @@ def _render_tree_files(src_dir: Path, dst_dir: Path, mapping: dict,
             else:
                 content = content.replace(
                     "## 定位\n", "## 定位\n\n" + positioning.strip() + "\n", 1)
+        kind = _doc_state.kind_of(rel)
+        if kind and _doc_state.mark_value(content.encode("utf-8"), trusted=True) == "true":
+            # 模板里的 `unwritten: true` 只说明「从模板来」；刚渲染的正文必然是骨架，
+            # 在这里就换成正文摘要，免得新建的现状文档停在 unstamped
+            try:
+                content = _doc_state.stamp(content.encode("utf-8"), kind, trusted=True).decode("utf-8")
+            except _doc_state.StampError as e:
+                raise InstallError(f"模板 {src} 渲染后无法盖未编写戳（{e.code}：{e}）——"
+                                   f"模板正文与骨架判定不一致") from e
         created.append(str(dst))
         _write_text(dst, content)
 
@@ -300,7 +309,14 @@ def create_tree(project_dir: Path, basics: list):
                         f"{b['name']}/{s['name']}: submodule.yaml 的 code_paths 与 params 不一致，"
                         f"以文件现值为准未覆盖")
 
-    idx_report = refresh_index(project_dir, only_basic=None)
+    idx_report, nav_plan, nav_results = refresh_index(project_dir, only_basic=None)
+    top = lambda path: len(Path(path).parts) <= 4   # projects/modules/overview.md 与 <basic>/overview.md
+    broken = [d for d in nav_plan.diagnostics if d.code in _module_nav.STRUCTURAL and top(d.path)]
+    broken += [_module_nav.Diagnostic(r.path, 0, r.status, r.reason) for r in nav_results
+               if r.status in ("error", "conflict") and top(r.path)]
+    if broken:
+        # 与旧实现同口径：上两层导航段坏了就以参数错误退出，不把「上级导航没更新」报成成功
+        raise ParamError("上级导航段无法刷新：" + "；".join(f"{d.path}：{d.code}（{d.detail}）" for d in broken))
     return created, skipped, warnings, idx_report
 
 
@@ -338,8 +354,10 @@ def _init_reverse_index(project_dir: Path, module_path: str):
             env=env, capture_output=True, text=True, encoding="utf-8", timeout=30,
         )
         if r.returncode != 0:
-            return False, (f"{module_path}: 反向索引初始化失败（exit {r.returncode}）——"
-                           f"事后可手动 `python check-stale-modules.py rebuild-index` 兜底")
+            detail = (r.stderr or "").strip().splitlines()
+            return False, (f"{module_path}: 反向索引未刷新（exit {r.returncode}"
+                           f"{'：' + detail[0] if detail else ''}）——修好后跑 "
+                           f"`python check-stale-modules.py rebuild-index`")
         return True, ""
     except Exception as e:
         return False, f"{module_path}: 反向索引初始化异常 {e}——事后 rebuild-index 兜底"
@@ -348,111 +366,335 @@ def _init_reverse_index(project_dir: Path, module_path: str):
 # ---------------------------------------------------------------- 索引段重建
 
 
-def _clean_summary(text: str) -> str:
-    """摘要清洗：链接展开为显示文本、去粗体、竖线换全角——脏字符进表格会破列，
-    截断切穿 wikilink 会坏渲染（2026-08-11 真实项目树沙盒实测抓出）。"""
-    text = re.sub(r"\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]",
-                  lambda m: m.group(2) or m.group(1), text)
-    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
-    return text.replace("**", "").replace("|", "／").strip()
+def refresh_index(project_dir: Path, only_basic=None, scope=None):
+    """刷新导航段（规则唯一在 _module_nav）。返回 (report_lines, plan, results)。
 
-
-def _positioning_summary(overview_path: Path, yaml_fallback: dict) -> str:
-    """摘要提取（与 module-index-refresh SKILL 对齐）：
-    定位段首句 → frontmatter/description 或 yaml notes → '-'；清洗后 ≤80 字符。"""
-    text = ""
-    if overview_path.exists():
-        lines = _read_text(overview_path).splitlines()
-        try:
-            i = next(n for n, l in enumerate(lines) if l.strip() == "## 定位")
-            for l in lines[i + 1:]:
-                s = l.strip()
-                if not s:
-                    continue
-                if s.startswith((">", "#", "```")):
-                    break  # 引导占位 blockquote = 尚无人写定位
-                text = s
-                break
-        except StopIteration:
-            pass
-    if not text:
-        text = yaml_fallback.get("notes") or yaml_fallback.get("description") or ""
-    if not text:
-        return "-"
-    # 取首句
-    for sep in ("。", "；", "\n"):
-        if sep in text:
-            text = text.split(sep)[0] + ("。" if sep == "。" else "")
-            break
-    text = _clean_summary(text)
-    return text[:80] + ("…" if len(text) > 80 else "")
-
-
-def _replace_anon_segment(path: Path, new_body: str) -> bool:
-    """整段替换匿名 AUTO-INDEX 段，校验段外内容零变化。"""
-    content = _read_text(path)
-    m = IDX_PATTERN.search(content)
-    if not m:
-        raise ParamError(f"{path} 缺少匿名 AUTO-INDEX 段边界，无法重建索引")
-    replacement = IDX_START + "\n" + new_body.rstrip("\n") + "\n" + IDX_END
-    # 段外内容由构造方式天然保全：prefix + 新段 + suffix 逐字节来自原文，无需事后校验
-    new_content = content[:m.start()] + replacement + content[m.end():]
-    if new_content != content:
-        _write_text(path, new_content)
-        return True
-    return False
-
-
-def refresh_index(project_dir: Path, only_basic=None):
-    """重建 global basic-modules-index +（各/指定）basic 的 submodules-index。"""
-    modules_dir = project_dir / "projects" / "modules"
+    只写 update：前两层匿名段一直照常刷新；后四类段遇旧版式只报不写（等 --convert-layout）。
+    建树（create_tree）调的也是它，所以建一个无关模块不会改动存量旧表。"""
+    p = _module_nav.plan(project_dir, scope=scope, basic=only_basic)
+    results = _module_nav.apply(p)
+    written = {r.path for r in results if r.status == "written"}
     report = []
-    basics = sorted(
-        [d for d in modules_dir.iterdir() if d.is_dir() and (d / "module.yaml").exists()],
-        key=lambda d: d.name,
-    ) if modules_dir.exists() else []
-
-    # global 段
-    g_path = modules_dir / "overview.md"
-    if g_path.exists():
-        rows = []
-        for b_dir in basics:
-            y = _flat_yaml(b_dir / "module.yaml")
-            summary = _positioning_summary(b_dir / "overview.md", y)
-            rows.append(f"| [{b_dir.name}](./{b_dir.name}/overview.md) "
-                        f"| {y.get('status', '-')} | {summary} |")
-        if not rows:
-            rows = ["| _（暂无基础模块。运行 `/core:module-init` 创建第一个）_ | - | - |"]
-        body = ("> ⚙️ 此段由 `module-index-refresh` 自动维护，请勿手动编辑。\n\n"
-                "| 基础模块 | 状态 | 摘要 |\n|---|---|---|\n" + "\n".join(rows) + "\n")
-        changed = _replace_anon_segment(g_path, body)
-        report.append(f"global basic-modules-index：{'已重建' if changed else '无变化'}")
-
-    # 各 basic 段
-    for b_dir in basics:
-        if only_basic and b_dir.name != only_basic:
-            continue
-        subs = sorted(
-            [d for d in b_dir.iterdir() if d.is_dir() and (d / "submodule.yaml").exists()],
-            key=lambda d: d.name,
-        )
-        rows = []
-        for s_dir in subs:
-            y = _flat_yaml(s_dir / "submodule.yaml")
-            summary = _positioning_summary(s_dir / "overview.md", y)
-            rows.append(f"| [{s_dir.name}](./{s_dir.name}/overview.md) "
-                        f"| {y.get('status', '-')} | {summary} |")
-        if not rows:
-            rows = ["| _（暂无子模块。运行 `/core:module-init` 创建第一个）_ | - | - |"]
-        body = ("> ⚙️ 此段由 `module-index-refresh` 自动维护，请勿手动编辑。\n\n"
-                "| 子模块 | 状态 | 摘要 |\n|---|---|---|\n" + "\n".join(rows) + "\n")
-        overview = b_dir / "overview.md"
-        if overview.exists():
-            changed = _replace_anon_segment(overview, body)
-            report.append(f"{b_dir.name} submodules-index：{'已重建' if changed else '无变化'}")
+    for c in p.changes:
+        seg = c.seg_kind if c.segment is None else c.segment
+        if c.kind == "legacy":
+            report.append(f"{c.path} {seg}：旧版式，待转换（--convert-layout 预览）")
+        elif c.kind == "update":
+            report.append(f"{c.path} {seg}：{'已重建' if c.path in written else '未写'}")
         else:
-            report.append(f"{b_dir.name}：缺 overview.md，跳过（异常状态，建议人工检查）")
-    return report
+            report.append(f"{c.path} {seg}：无变化")
+    for r in results:
+        if r.status in ("conflict", "error"):
+            report.append(f"{r.path}：{r.status}（{r.reason}）")
+    for d in p.diagnostics:
+        if d.code != "unstamped":
+            report.append(f"{d.path}：{d.code}（{d.detail}）")
+    return report, p, results
+
+
+# ---------------------------------------------------------------- 未编写状态（判定在 _doc_state）
+
+
+SCAN_CLASSES = ("纯骨架", "疑似", "已编写", "无信号", "已盖戳", "摘要失配", "异常")
+
+
+def _project_path(project_dir: Path, raw_path: str) -> Path:
+    """命令行给的文档路径 → 项目内绝对路径；落在项目外拒绝（这几条命令会写文件）。"""
+    path = Path(raw_path)
+    path = (path if path.is_absolute() else project_dir / path).resolve()
+    try:
+        path.relative_to(project_dir)
+    except ValueError:
+        raise ParamError(f"{raw_path} 不在项目 {project_dir} 内")
+    return path
+
+
+def _rel(project_dir: Path, path: Path) -> str:
+    return path.relative_to(project_dir).as_posix()
+
+
+def _atomic_write_bytes(path: Path, data: bytes):
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
+
+
+def doc_states(project_dir: Path, paths):
+    """[{path, kind, state}]；state 多出 missing / error 两种读不到的情形。"""
+    out = []
+    for raw_path in paths:
+        path = _project_path(project_dir, raw_path)
+        item = {"path": _rel(project_dir, path), "kind": _doc_state.kind_of(path)}
+        if not path.is_file():
+            item["state"] = "missing"
+        else:
+            try:
+                item["state"] = _doc_state.effective_state(path.read_bytes())
+            except OSError as e:
+                item["state"], item["reason"] = "error", f"{type(e).__name__}: {e}"
+        out.append(item)
+    return out
+
+
+def mark_unwritten(project_dir: Path, paths, extra=()):
+    """把各文件的 `unwritten: true` 换成正文摘要。[{path, status, reason}]，
+    status ∈ stamped / already / refused / error。"""
+    out = []
+    for raw_path in paths:
+        path = _project_path(project_dir, raw_path)
+        item = {"path": _rel(project_dir, path)}
+        kind = _doc_state.kind_of(path)
+        try:
+            if kind is None:
+                raise _doc_state.StampError("unknown-kind", "只认 current-state 四件与 prd.md")
+            raw = path.read_bytes()
+            new = _doc_state.stamp(raw, kind, extra)
+            if new == raw:
+                item["status"] = "already"
+            else:
+                _atomic_write_bytes(path, new)
+                item["status"] = "stamped"
+        except _doc_state.StampError as e:
+            item["status"], item["reason"] = "refused", f"{e.code}：{e}"
+        except OSError as e:
+            item["status"], item["reason"] = "error", f"{type(e).__name__}: {e}"
+        out.append(item)
+    return out
+
+
+def unstamp_docs(project_dir: Path, paths):
+    """删掉各文件的 unwritten 字段。[{path, status}]，status ∈ removed / absent / missing / refused / error。"""
+    out = []
+    for raw_path in paths:
+        path = _project_path(project_dir, raw_path)
+        item = {"path": _rel(project_dir, path)}
+        try:
+            if not path.is_file():
+                item["status"] = "missing"
+            else:
+                raw = path.read_bytes()
+                new = _doc_state.unstamp(raw)
+                if new == raw:
+                    item["status"] = "absent"
+                else:
+                    _atomic_write_bytes(path, new)
+                    item["status"] = "removed"
+        except _doc_state.StampError as e:
+            item["status"], item["reason"] = "refused", f"{e.code}：{e}"
+        except OSError as e:
+            item["status"], item["reason"] = "error", f"{type(e).__name__}: {e}"
+        out.append(item)
+    return out
+
+
+def load_extra_skeletons(project_dir: Path, specs):
+    """`--extra-skeleton [<类型>=]<文件>` → {类型: [(id, 正文)]}；类型缺省按文件名认。
+
+    返回的 id 带样本正文摘要，进确认码——换了样本，旧确认码即失效。"""
+    extras = {}
+    for spec in specs or ():
+        kind, _, file_part = spec.rpartition("=") if "=" in spec else ("", "", spec)
+        path = Path(file_part)
+        path = path if path.is_absolute() else project_dir / path
+        kind = kind or _doc_state.kind_of(path)
+        if kind not in _doc_state.KINDS:
+            raise ParamError(f"--extra-skeleton {spec}：认不出类型，写成 <类型>=<文件>，"
+                             f"类型取 {' / '.join(_doc_state.KINDS)}")
+        if not path.is_file():
+            raise ParamError(f"--extra-skeleton {spec}：文件不存在")
+        raw = path.read_bytes()
+        body = _doc_state.normalize_body(_doc_state._body_text(raw))
+        sid = f"extra:{path.name}:{_doc_state.body_digest(raw)[7:15]}"
+        extras.setdefault(kind, []).append((sid, body))
+        EXTRA_TEXTS[sid] = raw.decode("utf-8", errors="replace")
+    return extras
+
+
+EXTRA_TEXTS = {}   # 额外样本 id → 文件原文（预览给人核准用；比对只用归一正文）
+
+
+def _scan_targets(project_dir: Path):
+    """全部 `current-state/*.md` 与两层子需求的 `prd.md`；解析后落到项目外的（经目录链接）不收——
+    盘点会写这些文件，项目边界与显式路径的 `_project_path` 同一口径。"""
+    modules = project_dir / "projects" / "modules"
+    found = set(modules.glob("*/*/current-state/*.md"))
+    found.update(modules.glob("*/*/requirements/*/*/prd.md"))
+    out = []
+    for p in sorted(found):
+        if not p.is_file():
+            continue
+        try:
+            p.resolve().relative_to(project_dir)
+        except ValueError:
+            continue
+        out.append(p)
+    return out
+
+
+def _nearest_diff(body, skeletons):
+    import difflib
+    if not skeletons:
+        return None, []
+    body_lines = body.split("\n")
+
+    def resolved(skeleton):
+        # 带渲染变量位的骨架行，换成正文里第一条能被它通配匹配上的行——否则每份疑似件都会把
+        # 「# {{SUB_NAME}} …」「- {{TODAY}} 初次解析」报成差异，真正的正文增量被淹没
+        used, out = set(), []
+        for line in skeleton.split("\n"):
+            if "{{" in line:
+                rx = _doc_state._skeleton_regex(line)
+                hit = next((i for i, b in enumerate(body_lines) if i not in used and rx.fullmatch(b)), None)
+                if hit is not None:
+                    used.add(hit)
+                    line = body_lines[hit]
+            out.append(line)
+        return out
+
+    candidates = [(sid, resolved(skel)) for sid, skel in skeletons]
+    sid, skel_lines = max(candidates, key=lambda s: difflib.SequenceMatcher(
+        None, s[1], body_lines, autojunk=False).ratio())
+    # 只去掉两行文件头与 @@ 段头；内容行恒以 + / - / 空格开头，「+++ 正文」这类真实增量照留
+    lines = [line for line in list(difflib.unified_diff(skel_lines, body_lines, lineterm="", n=0))[2:]
+             if not line.startswith("@@")]
+    return sid, lines
+
+
+def scan_unwritten(project_dir: Path, extras):
+    """存量盘点：每份 current-state/*.md 与 prd.md 恰落一类（SCAN_CLASSES），只有「纯骨架」进候选。
+    不是四件之一的现状文件没有骨架可比，按有无内容落「已编写」或「无信号」。"""
+    from _skeletons import SIGNATURES
+    files = []
+    for path in _scan_targets(project_dir):
+        kind = _doc_state.kind_of(path)
+        item = {"path": _rel(project_dir, path), "kind": kind}
+        files.append(item)
+        try:
+            raw = path.read_bytes()
+        except OSError as e:
+            item.update({"class": "异常", "reason": f"{type(e).__name__}: {e}"})
+            continue
+        item["sha256"] = hashlib.sha256(raw).hexdigest()
+        body = _doc_state.normalize_body(_doc_state._body_text(raw))
+        value = _doc_state.mark_value(raw)
+        state = _doc_state.effective_state(raw)
+        if state == "unwritten":
+            item["class"] = "已盖戳"
+        elif value is _doc_state.DUPLICATE:
+            item.update({"class": "异常", "reason": "unwritten 字段重复"})
+        elif value is _doc_state.INCONSISTENT:
+            item.update({"class": "异常", "reason": "unwritten 的行内写法与 YAML 解析出的值不一致"})
+        elif value is not None and value != "true" and not _doc_state.DIGEST_RE.fullmatch(value):
+            item.update({"class": "异常", "reason": f"unwritten 的值「{value}」异常"})
+        elif value is not None and value != "true":
+            item.update({"class": "摘要失配", "reason": "盖过戳，正文已改（即已编写）；可删掉该字段"})
+        elif not body:
+            item["class"] = "无信号"
+        elif _doc_state.split(raw).fm_lines is None and \
+                _doc_state.match_skeleton(raw, kind, extras.get(kind, ())):
+            item.update({"class": "异常", "reason": "正文是骨架但没有闭合的 frontmatter，无处盖戳"})
+        else:
+            sid = None if value not in (None, "true") else \
+                _doc_state.match_skeleton(raw, kind, extras.get(kind, ()))
+            if sid:
+                try:
+                    _planned_stamp(raw, kind, extras.get(kind, ()))
+                    item.update({"class": "纯骨架", "skeleton": sid})
+                except _doc_state.StampError as e:
+                    item.update({"class": "异常", "reason": f"正文是骨架但盖不了戳：{e.code}：{e}"})
+            else:
+                hits = [s for s in SIGNATURES.get(kind, ()) if s in body]
+                if hits:
+                    near, diff = _nearest_diff(body, _doc_state.known_skeletons(kind, extras.get(kind, ())))
+                    item.update({"class": "疑似", "signatures": hits, "nearest": near, "diff": diff})
+                else:
+                    item["class"] = "已编写"
+    return files
+
+
+def scan_confirm_code(project_dir: Path, files, extras):
+    payload = {
+        "project": str(project_dir),
+        "candidates": [[f["path"], f["sha256"], f["skeleton"]] for f in files if f["class"] == "纯骨架"],
+        "extras": sorted([k, sid] for k, items in extras.items() for sid, _ in items),
+    }
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def _planned_stamp(raw, kind, extra):
+    """盘点与执行共用的改写：没有字段的插一行，字面 true 的换值。"""
+    if _doc_state.mark_value(raw) is None:
+        return _doc_state.insert_stamp(raw, kind, extra)
+    return _doc_state.stamp(raw, kind, extra)
+
+
+def apply_scan(project_dir: Path, files, extras):
+    """给纯骨架盖戳：没有字段的插一行，字面 true 的换值。
+
+    先在内存里把整批算完：任一候选的字节与预览时不同（确认码绑的是预览那一刻）、或盖戳被拒，
+    整批不写，返回各自原因；全部通过才逐份写盘（临时文件 + `os.replace`），每份替换前重读一次、
+    重核仍在项目内。中途某份写失败或被改动即停：已写的报 stamped、出事的报原因、其余报 skipped，
+    调用方据此知道哪些文件变了。重读与替换之间仍有一个很短的窗口，期间若有人保存该文件，那次
+    保存会被覆盖——这是本命令的已知边界。"""
+    planned, results = [], []
+    for f in files:
+        if f["class"] != "纯骨架":
+            continue
+        path = project_dir / f["path"]
+        extra = extras.get(f["kind"], ())
+        try:
+            raw = path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != f["sha256"]:
+                raise _doc_state.StampError("changed", "预览之后文件变了，确认作废；重新预览")
+            new = _planned_stamp(raw, f["kind"], extra)
+            planned.append((path, raw, new, len(results)))
+            results.append({"path": f["path"], "status": "stamped"})
+        except _doc_state.StampError as e:
+            results.append({"path": f["path"], "status": "refused", "reason": f"{e.code}：{e}"})
+        except OSError as e:
+            results.append({"path": f["path"], "status": "error", "reason": f"{type(e).__name__}: {e}"})
+    if any(r["status"] != "stamped" for r in results):
+        for r in results:
+            if r["status"] == "stamped":
+                r.update({"status": "skipped", "reason": "同批有候选未通过，整批未写"})
+        return results
+    for n, (path, raw, new, idx) in enumerate(planned):
+        try:
+            path.resolve().relative_to(project_dir)
+            if path.read_bytes() != raw:
+                raise _doc_state.StampError("changed", "执行中文件被改动，未覆盖")
+            _atomic_write_bytes(path, new)
+        except (ValueError, OSError, _doc_state.StampError) as e:
+            code = e.code if isinstance(e, _doc_state.StampError) else type(e).__name__
+            results[idx].update({"status": "error", "reason": f"{code}：{e}" if str(e) else code})
+            for _, _, _, rest in planned[n + 1:]:
+                results[rest].update({"status": "skipped", "reason": "前一份写入失败，其余未写"})
+            break
+    return results
+
+
+def _print_scan(files, extras, code, diff_cap=30):
+    counts = {c: sum(1 for f in files if f["class"] == c) for c in SCAN_CLASSES}
+    print(f"[module-init] 盘点 {len(files)} 份：" + " · ".join(f"{c} {n}" for c, n in counts.items()))
+    for kind, items in sorted(extras.items()):
+        for sid, body in items:
+            print(f"\n[module-init] 传入的额外骨架 {sid}（类型 {kind}）全文——请核准它确实是没人写过的骨架：")
+            print(EXTRA_TEXTS.get(sid, body))
+    for f in files:
+        line = f"  {f['class']}  {f['path']}"
+        if f["class"] == "纯骨架":
+            line += f"（{f['skeleton']}）"
+        elif f.get("reason"):
+            line += f"：{f['reason']}"
+        print(line)
+        if f["class"] == "疑似":
+            print(f"      命中占位：{'、'.join(f['signatures'])}；与 {f['nearest']} 的差异行：")
+            for d in f["diff"][:diff_cap]:
+                print(f"        {d}")
+            if len(f["diff"]) > diff_cap:
+                print(f"        …另有 {len(f['diff']) - diff_cap} 行，--json 看全部")
+    print(f"\n[module-init] 确认码 {code}——核对清单后跑 --mark-unwritten --scan --apply --confirm {code}"
+          f"（带同样的 --extra-skeleton）")
 
 
 # ---------------------------------------------------------------- CLI
@@ -474,26 +716,246 @@ def _force_utf8_io():
         pass
 
 
+NAV_MODES = ("--refresh-index", "--check", "--convert-layout")
+
+
+def _nav_rows(p, file_status=None):
+    """导航命令的逐段结果行；file_status 为 apply 结果（{path: Result}），只在写过的命令里给。"""
+    writable = ("update", "convert") if p.convert else ("update",)
+    rows = []
+    for c in p.changes:
+        status, reason = c.kind, ""
+        if file_status is not None and c.kind in writable:
+            r = file_status.get(c.path)
+            status, reason = (r.status, r.reason) if r else ("unchanged", "")
+        elif c.kind == "legacy":
+            reason = "旧版式，待转换（--convert-layout 预览）"
+        elif c.kind == "blocked":
+            reason = "该文件段结构或取数有问题，整份不写"
+        row = {"path": c.path, "segment": c.segment or c.seg_kind, "status": status, "reason": reason, "line": c.line}
+        if c.kind in ("update", "legacy", "convert", "blocked"):
+            line, old, new = c.diff()
+            row.update(line=line, old_lines=old, new_lines=new)
+        rows.append(row)
+    if file_status is not None:
+        covered = {c.path for c in p.changes if c.kind in writable}
+        for path, _, line in p.examples:
+            r = file_status.get(path)
+            if r and path not in covered:
+                rows.append({"path": path, "segment": "example-diagram", "status": r.status, "reason": r.reason,
+                             "line": line})
+    for d in p.diagnostics:
+        rows.append({"path": d.path, "segment": d.segment, "status": "unstamped" if d.code == "unstamped" else "problem",
+                     "reason": d.code + (f"：{d.detail}" if d.detail else ""), "line": d.line})
+    return rows
+
+
+def _nav_error(command, message, as_json):
+    """导航命令的失败回执：--json 时 stdout 照样给一份结构化结果。退出码 2。"""
+    if as_json:
+        print(json.dumps({"schema": _module_nav.SCHEMA, "command": command, "results": [],
+                          "error": {"code": "bad_usage", "message": message}}, ensure_ascii=False))
+    print(f"[module-init] {message}", file=sys.stderr)
+    return 2
+
+
+def _nav_command(project_dir: Path, args):
+    command = "refresh-index" if args.refresh_index else "check" if args.check else "convert-layout"
+    try:
+        return _nav_run(project_dir, args, command)
+    except ParamError as e:
+        return _nav_error(command, str(e), args.json)
+
+
+def _nav_run(project_dir: Path, args, command):
+    if args.convert_layout and args.confirm and not args.apply:
+        raise ParamError("--confirm 只配合 --apply 使用")
+    if args.convert_layout and args.apply and not args.confirm:
+        raise ParamError("--apply 需要预览给出的 --confirm <码>")
+    try:
+        p = _module_nav.plan(project_dir, scope=args.scope, convert=args.convert_layout, basic=args.basic)
+    except _module_nav.ScopeError as e:
+        raise ParamError(str(e))
+    choices = {}
+    for spec in args.choice or []:
+        raw, sep, opt = spec.rpartition("=")
+        if not sep or opt not in _module_nav.CHOICES:
+            raise ParamError(f"--choice {spec}：形如 <路径>=<{'|'.join(_module_nav.CHOICES)}>")
+        rel = _rel(project_dir, _project_path(project_dir, raw))
+        if rel not in {path for path, _, _ in p.examples}:
+            raise ParamError(f"--choice {spec}：该文件不在本次预览的示例图清单里")
+        choices[rel] = opt
+    problems = _module_nav.has_problems(p)
+    out = {"schema": _module_nav.SCHEMA, "command": command}
+    if args.check:
+        out["results"] = _nav_rows(p)
+        code = 2 if problems else 1 if any(c.kind in ("update", "legacy") for c in p.changes) else 0
+    elif args.refresh_index or args.apply:
+        if args.convert_layout and args.confirm != _module_nav.confirm_code(p, choices):
+            raise ParamError("确认码不符（预览之后有目标文件、PRD、meta、附件或 --choice 变了，或码抄错）"
+                             "——整批拒绝、零写入；重新预览")
+        results = _module_nav.apply(p, choices)
+        out["results"] = _nav_rows(p, {r.path: r for r in results})
+        code = 2 if problems else 3 if any(r.status in ("conflict", "error") for r in results) else 0
+    else:
+        out["results"] = _nav_rows(p)
+        out["confirm"] = _module_nav.confirm_code(p, choices)
+        out["details"] = [dict(path=c.path, segment=c.segment or c.seg_kind, **_module_nav.convert_details(c))
+                          for c in p.changes if c.kind == "convert"]
+        out["examples"] = [{"path": path, "line": line} for path, _, line in p.examples]
+        out["contradictions"] = p.contradictions
+        code = 2 if problems else 0
+    if args.json:
+        print(json.dumps(out, ensure_ascii=False))
+        return code
+    for r in out["results"]:
+        if r["status"] == "unchanged":
+            continue
+        print(f"[module-init] {r['status']}\t{r['path']}:{r['line']}\t{r['segment'] or '-'}"
+              + (f"\t{r['reason']}" if r["reason"] else ""))
+        if command == "check":
+            for line in r.get("old_lines", [])[:20]:
+                print(f"    - {line}")
+            for line in r.get("new_lines", [])[:20]:
+                print(f"    + {line}")
+    if command == "convert-layout" and not args.apply:
+        for d in out["details"]:
+            print(f"\n== {d['path']}（{d['segment']}）将消失的旧行 {len(d['gone'])} 条：")
+            for line in d["gone"]:
+                print(f"  - {line}")
+            for col in d["extra_columns"]:
+                print(f"  项目自加列「{col['column']}」有值单元格 {len(col['cells'])} 个（转换后丢弃）：")
+                for key, val in col["cells"]:
+                    print(f"    {key}：{val}")
+        for ex in out["examples"]:
+            print(f"\n== {ex['path']}:{ex['line']} 段外有出厂示例图：--choice {ex['path']}=replace-example 换成说明，缺省保留")
+        if out["contradictions"]:
+            print("\n== 段外人写句与需求状态可能矛盾（按状态词粗筛，只列不改，可能漏也可能误列）：")
+            for c in out["contradictions"]:
+                print(f"  {c['path']}:{c['line']}（meta.yaml status: {c['status']}）{c['text']}")
+        print(f"\n确认码：{out['confirm']}（执行时带上同样的 --choice：--convert-layout --apply "
+              f"--confirm {out['confirm']}；确认码随选项变，改选项先重新预览）")
+    if not out["results"] or all(r["status"] == "unchanged" for r in out["results"]):
+        print("[module-init] 导航段无差异")
+    return code
+
+
 def main():
     _force_utf8_io()
     ap = argparse.ArgumentParser(
         description="modules/ 体系 basic/sub 两层骨架的确定性落盘 + 索引段重建")
     ap.add_argument("--project", required=True, help="目标项目目录")
     ap.add_argument("--params", help="模块树 JSON（建树模式）")
-    ap.add_argument("--refresh-index", action="store_true", help="仅重建索引段")
+    ap.add_argument("--refresh-index", action="store_true",
+                    help="刷新导航段：写有差异的段；旧版式段只报不写。退出码 0 完成 / 3 有冲突（其余已写）/ 2 参数或段问题")
+    ap.add_argument("--check", action="store_true",
+                    help="零写入比较导航段。退出码 0 无差异 / 1 有差异或旧版式 / 2 无法检查")
+    ap.add_argument("--convert-layout", action="store_true",
+                    help="旧版式导航段转新版式：默认零写入预览并给确认码；--apply --confirm <码> 才写。"
+                         "锁只挡同样走本命令的写入方，不配合锁的编辑器恰在比对与替换之间保存仍会被覆盖")
     ap.add_argument("--basic", help="配合 --refresh-index：只刷新指定 basic 的段")
+    ap.add_argument("--scope", nargs="*", metavar="PATH",
+                    help="配合导航三命令：限定到 <basic> / <basic>/<sub> / 需求目录 / projects/modules 下任一文件；"
+                         "空或非法即退出 2，不退化成全量")
+    ap.add_argument("--choice", action="append", metavar="PATH=OPTION",
+                    help="配合 --convert-layout（预览与 --apply 带同样的选项）：基础模块总览的示例图 "
+                         "replace-example / keep（缺省 keep）")
+    ap.add_argument("--doc-state", nargs="+", metavar="PATH",
+                    help="零写入：逐份输出 <state>\\t<path>（written / unwritten / unstamped / missing / error）")
+    ap.add_argument("--mark-unwritten", nargs="*", metavar="PATH",
+                    help="把 unwritten: true 换成正文摘要；正文已不是骨架则拒绝。配 --scan 做存量盘点")
+    ap.add_argument("--unstamp", nargs="+", metavar="PATH", help="删掉 unwritten 字段（正文写入成功之后调）")
+    ap.add_argument("--scan", action="store_true", help="配合 --mark-unwritten：存量盘点，默认只预览")
+    ap.add_argument("--extra-skeleton", action="append", metavar="[KIND=]FILE",
+                    help="配合 --scan：额外认得的骨架样本（全文会显示在预览里）")
+    ap.add_argument("--apply", action="store_true", help="配合 --scan / --convert-layout：按确认码执行")
+    ap.add_argument("--confirm", help="配合 --apply：预览给出的确认码")
+    ap.add_argument("--json", action="store_true", help="机器可读输出")
     args = ap.parse_args()
+
+    modes = [name for name, on in (("--doc-state", args.doc_state), ("--unstamp", args.unstamp),
+                                   ("--mark-unwritten", args.mark_unwritten is not None),
+                                   ("--refresh-index", args.refresh_index), ("--check", args.check),
+                                   ("--convert-layout", args.convert_layout), ("--params", args.params)) if on]
+    nav = NAV_MODES
+    nav_json = args.json and bool(modes) and modes[0] in nav
+    command = modes[0].lstrip("-") if nav_json else None
+    if len(modes) > 1:
+        msg = f"{' 与 '.join(modes)} 不能同时用，一次只做一件事"
+        return _nav_error(command, msg, True) if nav_json else _nav_error(None, msg, False)
+    owners = {"--scan": (args.scan, ("--mark-unwritten",)),
+              "--apply": (args.apply, ("--mark-unwritten", "--convert-layout")),
+              "--confirm": (args.confirm, ("--mark-unwritten", "--convert-layout")),
+              "--extra-skeleton": (args.extra_skeleton, ("--mark-unwritten",)),
+              "--basic": (args.basic, ("--refresh-index",)),
+              "--scope": (args.scope is not None, nav),
+              "--choice": (args.choice, ("--convert-layout",))}
+    stray = [flag for flag, (on, allowed) in owners.items() if on and not (modes and modes[0] in allowed)]
+    if args.json and modes and modes[0] not in ("--doc-state", "--unstamp", "--mark-unwritten") + nav:
+        stray.append("--json")
+    if stray:
+        return _nav_error(command, f"{' / '.join(stray)} 不属于 {modes[0] if modes else '当前模式'}", nav_json)
 
     project_dir = Path(args.project).resolve()
     if not project_dir.is_dir():
-        print(f"[module-init] project not found: {project_dir}", file=sys.stderr)
-        return 2
+        return _nav_error(command, f"project not found: {project_dir}", nav_json)
 
     try:
-        if args.refresh_index:
-            for line in refresh_index(project_dir, only_basic=args.basic):
-                print(f"[module-init] {line}")
+        if args.doc_state:
+            items = doc_states(project_dir, args.doc_state)
+            if args.json:
+                print(json.dumps(items, ensure_ascii=False))
+            else:
+                for it in items:
+                    print(f"{it['state']}\t{it['path']}")
             return 0
+        if args.unstamp:
+            items = unstamp_docs(project_dir, args.unstamp)
+            if args.json:
+                print(json.dumps(items, ensure_ascii=False))
+            else:
+                for it in items:
+                    print(f"[module-init] {it['status']}\t{it['path']}" + (f"\t{it['reason']}" if it.get("reason") else ""))
+            return 1 if any(it["status"] in ("missing", "refused", "error") for it in items) else 0
+        if args.mark_unwritten is not None:
+            if args.scan:
+                if args.mark_unwritten:
+                    raise ParamError("--scan 扫全项目，不接受文件参数")
+                extras = load_extra_skeletons(project_dir, args.extra_skeleton)
+                files = scan_unwritten(project_dir, extras)
+                code = scan_confirm_code(project_dir, files, extras)
+                if not args.apply:
+                    if args.json:
+                        print(json.dumps({"schema": "workframe.doc-state-scan.v1", "files": files,
+                                          "extras": [{"kind": k, "id": sid, "body": body,
+                                                      "text": EXTRA_TEXTS.get(sid)}
+                                                     for k, items in sorted(extras.items()) for sid, body in items],
+                                          "confirm": code}, ensure_ascii=False))
+                    else:
+                        _print_scan(files, extras, code)
+                    return 0
+                if args.confirm != code:
+                    raise ParamError("确认码不符（预览之后有文件或骨架样本变了，或码抄错）——整批拒绝、零写入；重新预览")
+                results = apply_scan(project_dir, files, extras)
+                if args.json:
+                    print(json.dumps({"schema": "workframe.doc-state-scan.v1", "applied": results}, ensure_ascii=False))
+                else:
+                    for r in results:
+                        print(f"[module-init] {r['status']}\t{r['path']}" + (f"\t{r['reason']}" if r.get("reason") else ""))
+                return 1 if any(r["status"] != "stamped" for r in results) else 0
+            if args.apply or args.confirm or args.extra_skeleton:
+                raise ParamError("--apply / --confirm / --extra-skeleton 只配合 --scan 使用")
+            if not args.mark_unwritten:
+                raise ParamError("--mark-unwritten 需要文件参数，或配 --scan")
+            items = mark_unwritten(project_dir, args.mark_unwritten)
+            if args.json:
+                print(json.dumps(items, ensure_ascii=False))
+            else:
+                for it in items:
+                    print(f"[module-init] {it['status']}\t{it['path']}" + (f"\t{it['reason']}" if it.get("reason") else ""))
+            return 1 if any(it["status"] in ("refused", "error") for it in items) else 0
+        if args.refresh_index or args.check or args.convert_layout:
+            return _nav_command(project_dir, args)
         if not args.params:
             print("[module-init] 需要 --params（建树）或 --refresh-index（刷索引）之一",
                   file=sys.stderr)

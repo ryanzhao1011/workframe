@@ -7,16 +7,13 @@ Setup Hook (matcher=maintenance) — 维护批处理工单聚合器（v0.4 G2#8�
 （内容判断）——分工见框架收口计划总原则。
 
 聚合来源（四路）：
-  1. notes 积压（count_notes_entries，与 memory-ask.py 逐字一致，validate.py 锁定）
+  1. notes 积压（count_notes_entries，判定见该函数；validate.py 以已知样本钉它的输入输出）
   2. promotion-candidates.md 未拍板候选（只计数提示，批处理会话不做 L2）
   3. 逾期提案验证（applied/*.yaml：verify_by 已过且 verified 非 true）
   4. pending_maintenance open 信号 + workframe-doctor 全量检查异常项
 
 产物：
   - <状态目录>/maintenance-workorder.md   工单（模型读取执行）
-  - <状态目录>/maintenance-run.flag       旗标（memory-ask.py 据此静默，
-    30 分钟有效期，无需显式清理——2026-08-06 实测 --maintenance 会话中 SessionStart
-    hook 照常触发，不静默会与工单重复询问）
 
 两阶段提交（judge → commit，2026-08-06 深测后定型）：
   模型会话只做内容判断与角色记忆写盘，把全部记账诉求写成 manifest
@@ -57,8 +54,9 @@ _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 from _harness import project_dir as _project_dir  # noqa: E402
+from _notes_entries import open_entries  # noqa: E402
 from _state_io import (  # noqa: E402
-    SPILL_SUFFIX, append_lines, atomic_write, event_lines, load_activity, memory_dir_of,
+    SPILL_SUFFIX, append_lines, atomic_write, event_lines, is_retired_pm, load_activity, memory_dir_of,
     probe_appendable,
     quarantine, state_dir_of, update_activity,
 )
@@ -73,7 +71,6 @@ MEMORY_REL = MEMORY_DIR.relative_to(PROJECT_DIR).as_posix()
 CANDIDATES_FILE = STATE_DIR / "promotion-candidates.md"
 PROPOSALS_APPLIED = PROJECT_DIR / "projects" / "proposals" / "applied"
 WORKORDER_FILE = STATE_DIR / "maintenance-workorder.md"
-MAINT_FLAG_FILE = STATE_DIR / "maintenance-run.flag"
 EVENTS_FILE = STATE_DIR / "events.jsonl"
 SIDECAR_FILE = STATE_DIR / "memory-index.json"
 MANIFEST_FILE = PROJECT_DIR / "logs" / "maintenance-commit.json"
@@ -81,14 +78,12 @@ MANIFEST_APPLIED = PROJECT_DIR / "logs" / "maintenance-commit.applied.json"
 
 
 def count_notes_entries(memory_dir):
-    """数各角色 notes.md 的积压条目数——`### ` 章节头与顶层日期列表条目两种口径取 max。
+    """数各角色 notes.md 里还没处置的条目。
 
-    真实写入存在两种条目形态（必载纪律只认这两种）：`### ` 章节式与
-    `- YYYY-MM-DD：` 顶层列表式（含 `- [纠正] …` 变体）。二者取 max：
-    漏计 = 积压对真实数据失明（高危）；过计只是提早询问（fail-safe 方向）。
-    返回 {scope: count}（仅收录 count>0）。纯前缀统计，无语义判断——
-    条目够不够提升、是不是同主题，交给 librarian skill 判断。
-    本函数在 memory-ask.py 与 maintenance_workorder.py 各有一份，validate.py 锁定逐字一致。
+    什么算一条、哪些算已处置，只由 `_notes_entries` 定义（后台采证与积压提醒用同一份）。
+    返回 {scope: count}（仅收录 count>0）。无语义判断——条目够不够提升、是不是同主题，
+    交给 librarian skill 判断。
+    validate.py 以覆盖两种形态与非条目行的固定样本钉它的返回值。
     """
     out = {}
     if not memory_dir.exists():
@@ -98,13 +93,7 @@ def count_notes_entries(memory_dir):
             text = notes.read_text(encoding="utf-8")
         except Exception:
             continue
-        n_hash = n_list = 0
-        for ln in text.splitlines():
-            if ln.startswith("### "):
-                n_hash += 1
-            elif re.match(r"^- (?:\[[^\]]+\] )?\d{4}-\d{2}-\d{2}", ln):
-                n_list += 1
-        n = max(n_hash, n_list)
+        n = len(open_entries(text))
         if n > 0:
             out[notes.parent.name] = n
     return out
@@ -182,7 +171,7 @@ def build_workorder():
     overdue = find_overdue_proposals()
     activity = load_activity(STATE_DIR)  # 走统一层：损坏时隔离留档 + 字段补齐
     pending = [it for it in (activity.get("pending_maintenance") or [])
-               if isinstance(it, dict) and it.get("status") == "open"]
+               if isinstance(it, dict) and it.get("status") == "open" and not is_retired_pm(it)]
     doctor_findings = run_doctor()
 
     lines = [
@@ -239,9 +228,7 @@ def build_workorder():
     if pending:
         lines.append("close_pm 判据（仅此一条，勿自行扩展）：**本次工单已执行的动作实质消解了该信号的语义**"
                      "（例：memory_backlog 信号 + 本次已清完对应 notes 积压）→ ID 记入 manifest `close_pm`；"
-                     "cadence_timeout / problem_threshold / activity_threshold 等自迭代节奏信号**不由批处理关闭**"
-                     "（它们等的是自迭代评审，不是维护动作）——保留并在摘要提示用户。"
-                     "close_check_due 同样不关：它等的是跑一次 module-close-check + 刷新模块文档，"
+                     "close_check_due **不由批处理关闭**，保留并在摘要提示用户：它等的是跑一次 module-close-check + 刷新模块文档，"
                      "而本会话既不能用 Bash、也不该改 modules/ 下的文档。")
         for it in pending:
             lines.append(f"- [ ] {it.get('id', '?')}（{it.get('kind', '?')}, {it.get('severity', '?')}）"
@@ -568,7 +555,8 @@ def commit_manifest():
         def _close_pm(s):
             closed.clear()
             for it in s.get("pending_maintenance") or []:
-                if isinstance(it, dict) and it.get("id") in ids and it.get("status") == "open":
+                if (isinstance(it, dict) and it.get("id") in ids and it.get("status") == "open"
+                        and not is_retired_pm(it)):  # 旧版那扇门会把它读成驳回
                     it["status"] = "closed"
                     it["closed_at"] = now
                     closed.append(it["id"])
@@ -727,14 +715,14 @@ def _events_writable():
 
 
 def set_activity_flags(**flags):
-    """幂等赋值型字段的代码通道（当前用于 dormant / wake_up_pending / dormant_profile）。
+    """幂等赋值型字段的代码通道（当前用于 dormant / wake_up_pending；活动档位只在 `.workframe-config.json` 改）。
 
     为什么连"幂等赋值"也要走代码：模型手上只有 Edit/Write，改一个布尔字段等于
     **整份 JSON 重写**——它会把自己读到的那一份全部写回去，期间别的 hook 写进来的
     session_counter / pending_maintenance / drift 历史统统被盖掉。字段本身幂等，
     写入方式并不幂等。update_activity 只改指定键、其余键保持磁盘现值。
     """
-    allowed = {"dormant", "wake_up_pending", "dormant_profile"}
+    allowed = {"dormant", "wake_up_pending"}
     bad = [k for k in flags if k not in allowed]
     if bad:
         print(f"[maintenance --set-activity] 不支持的字段: {bad}（仅允许 {sorted(allowed)}）",
@@ -778,7 +766,8 @@ def close_pending(ids, reason=None):
     def _close(s):
         closed.clear()
         for it in s.get("pending_maintenance") or []:
-            if isinstance(it, dict) and it.get("id") in ids and it.get("status") == "open":
+            if (isinstance(it, dict) and it.get("id") in ids and it.get("status") == "open"
+                    and not is_retired_pm(it)):  # 旧版那扇门会把它读成驳回
                 it["status"] = "closed"
                 it["closed_at"] = now
                 closed.append(it["id"])
@@ -808,7 +797,7 @@ def close_pending(ids, reason=None):
     print(f"[maintenance --close-pm] 已关闭 {len(closed)} 条：{'、'.join(closed) or '无'}")
     missed = [i for i in ids if i not in closed]
     if missed:
-        print(f"[maintenance --close-pm] 未命中（不存在 / 已是 closed）：{'、'.join(missed)}")
+        print(f"[maintenance --close-pm] 未命中（不存在 / 已是 closed / 已退役）：{'、'.join(missed)}")
     return 0
 
 
@@ -840,7 +829,6 @@ def main():
         pass
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    MAINT_FLAG_FILE.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8", newline="")
     WORKORDER_FILE.write_text(build_workorder(), encoding="utf-8", newline="")
     print(f"[maintenance] 工单已生成: {WORKORDER_FILE}")
     return 0

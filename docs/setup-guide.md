@@ -2,7 +2,7 @@
 
 ## 后台自迭代
 
-启用框架后，有新的有效问题证据或未处理记忆积压时，后台可使用当前门已登录的 CLI 分析。默认 apply：仅对角色记忆和模块提醒做有限新增或局部融合；不会自动修改插件、shared 权威记忆、skills、项目指令、配置和权限。模型的语义检查可能漏判，不以结构检查通过宣称内容正确。
+启用框架后，有没人处理过的纠正、笔记攒够或等久了、自动改动复测失败时，后台可使用当前门已登录的 CLI 分析。后台只出建议：按主题给出「该写、已覆盖、该修工具、该交框架、该进文档、已过时、有冲突、证据不足」的结论和理由，不改项目文件，采纳哪条由你决定。模型会误判，引文核对只证明原文里有那句话。
 
 两门共用每项目滚动七天一次、全机 UTC 每日一次的限制，单次默认十五分钟超时，不设费用限额。使用你的 CLI 配额；用量只用于报告，不保证某个美元金额。执行器隔离/登录能力未确立、配置损坏或额度已用时延期，下一次真实会话触发点再检查，不装系统定时任务。后台需要 Python 3.11+。
 
@@ -12,23 +12,23 @@
 {"version":1,"self_iteration":{"mode":"off"}}
 ```
 
-`mode` 可为 off（停止后台模型作业）、propose（仅建议）、apply（有限自动融合）。缺文件使用默认值，文件存在但损坏时关闭；项目 `.workframe-config.json` 的同名配置只能更严格。运行时间和次数上限可在 `limits` 收紧，项目间隔天数取更大值。共享配置不依赖某扇门的 settings，模型不代用户写配置。
+`mode` 可为 off（停止后台模型作业）、propose（仅建议）、apply（允许自动写入的上限；目前后台作业一律只出建议）。缺文件使用默认值，文件存在但损坏时关闭。用户配置是上限：项目 `.workframe-config.json` 没有自己写 `apply` 的按 propose，其余同名配置只能更严格。运行时间和次数上限可在 `limits` 收紧，项目间隔天数取更大值。共享配置不依赖某扇门的 settings，模型不代用户写配置。
 
 临时关闭可在启动 CLI 的进程环境设置 `WORKFRAME_SELFITER_OFF=1`；它只禁止后台作业，不绕过注入或签发保护。框架校验命令也设置该开关，避免测试项目消耗真实 CLI 配额。
 
 目录源插件的代码仍有未提交修改时，控制器延期自动作业；这只检查源代码是否稳定，不据此识别开发者身份或授予改框架权限。
 
-后续对话只在有新自动改动或需处理的失败报告时提示一次，换会话不重播；不改、自检延期报告可在 status 查看，不另发报告提示。待批、转人工和当前延期仍按会话提醒，选择稍后不等于驳回；已驳回问题只有新证据才重评。`workframe-selfiter status --project <项目根>` 查看详情，查看时展示改前改后、原因和影响。日志和恢复材料在项目状态目录的 `selfiter/` 中；复测缺少相关使用机会时结论为“证据不足”，有限延期后停止自动复测并保留材料。
+后续对话只在有需要你看的主题或需处理的失败报告时提示一次，换会话不重播；其余报告可在 status 查看。旧待批、转人工和当前延期仍按会话提醒，选择稍后不等于驳回；已驳回的证据不再提出。`workframe-selfiter status --project <项目根>` 查看详情：每条建议的证据、原因、目标，以及为什么现在没有证据可分析。日志和恢复材料在项目状态目录的 `selfiter/` 中；复测缺少相关使用机会时结论为“证据不足”，有限延期后停止自动复测并保留材料。
 
-大项目在输入上限内合并能容纳的完整主题，每个主题保留目标全文和相关现行规则，放不下的主题留待下次；整份看板及历史归档不占用模型输入。单个主题必要上下文仍放不下时转人工，`status` 显示原因、证据、所需上下文、manual_id 和 review_hash。同主题新证据更新原记录。按现有流程实际处理内容后，可明确确认 `workframe-selfiter manual-decide --project <项目根> --manual-id <id> --decision handled --review-hash <所看版本hash>`；决定忽略当前证据则用 `--decision ignore`。两个动作只消费所确认的证据并关闭提示，不自动改正文；记录保留为历史，新证据须重新查看确认。限流不创建作业快照；重复 worker 输出追加到 `worker.log`，既有日志不自动删除。延期提示说明原因，频率限制附下次可运行时刻；解除后保留历史但不继续告警；后台关闭后不再提示延期。作业期间目标或来源被改动时不写入，生成冲突报告并提示一次，报告保留模型原拟改动，证据留到下次额度窗口重评。
+输入上限八万字，没看过的、复测失败的、重复强调的先装，其余从老到新，放不下的留待下次；整份看板及历史归档不占用模型输入。单条证据连必要上下文都放不下时转人工，`status` 显示原因、证据、所需文件、manual_id 和 review_hash。按现有流程实际处理内容后，可明确确认 `workframe-selfiter manual-decide --project <项目根> --manual-id <id> --decision handled --review-hash <所看版本hash>`；决定忽略当前证据则用 `--decision ignore`。两个动作只消费所确认的证据并关闭提示，不自动改正文；记录保留为历史，新证据须重新查看确认。限流不创建作业快照；重复 worker 输出追加到 `worker.log`，既有日志不自动删除。延期提示说明原因，频率限制附下次可运行时刻；解除后保留历史但不继续告警；后台关闭后不再提示延期。作业期间涉及的文件被改动，依赖它的结论不算数，证据留到下次额度窗口重评。一条证据连续三次没有结论会暂停，文件变了或 `resume` 后再试。
 
 CLI 更新后先做隔离能力自检，通过后缓存，程序、平台或适配器变化时重新验证；自检失败继续延期。自检和正式分析共享一次作业额度与十五分钟总时长，首次验证可能使正式分析推迟。AUTO 提案批准后写入与预览的完整 `after` 字节一致；缺少完整预览时先用 `workframe-selfiter preview --project <项目根> --proposal-id <AUTO-id>` 刷新，重新查看并确认。
 
 当前认证与记录限制：CC 门依赖 `.credentials.json` 中的令牌；只用 macOS 钥匙串或 `apiKeyHelper` 的用户会自检失败，并占用当周作业额度。Codex 隔离自检会在用户 `~/.codex/sessions` 留下一条原生会话记录。
 
-回退先执行 `workframe-selfiter rollback --project <项目根> --job-id <id>` 取得预览，确认该版内容后带 `--review-hash` 执行；后续编辑冲突会拒绝覆盖，删除或改回旧口径仍需用户明确确认。中断作业按 journal 用 `recover --job-id <id>` 恢复，不用新作业重复写入。
+下面两条只对写过正文的作业（1.3.0 的自动写入，或你批准的写入）有用；只出建议的作业没有可回退的内容，从 `status` 查看，中断的由下次运行补齐。回退先执行 `workframe-selfiter rollback --project <项目根> --job-id <id>` 取得预览，确认该版内容后带 `--review-hash` 执行；后续编辑冲突会拒绝覆盖，删除或改回旧口径仍需用户明确确认。中断作业按 journal 用 `recover --job-id <id>` 恢复，不用新作业重复写入。
 
-连续作业失败或复测失败触发熔断后，后台只生成待批建议，成功生成建议不会自行恢复自动写入。查看日志、处理原因并决定恢复后，运行 `workframe-selfiter resume --project <项目根>`；已配置的 off / propose 仍然有效。
+连续作业失败触发熔断后不会自行恢复；复测失败只冻结那一条，下一轮重新分析。查看日志、处理原因并决定恢复后，运行 `workframe-selfiter resume --project <项目根>`；已配置的 off / propose 仍然有效。
 
 通用扩展点 `post_job_command` 是用户显式配置的 argv 数组。控制器在作业结果持久保存后，以原数组追加 `--job-result <结果路径>` 调用，不经过 shell，最多六十秒；外部命令失败不改变作业结论。它具有用户程序本身的权限，只配置你信任的本机程序。未配置时不调用外部程序。
 
@@ -41,7 +41,7 @@ CLI 更新后先做隔离能力自检，通过后缓存，程序、平台或适�
 | 插件 | 级别 | 职责 |
 |---|---|---|
 | `workframe-launcher` | 用户级（每台机器装一次） | 「怎么开局」：目录判定、对话采集、确认页、执行初始化 |
-| `core` | 项目级（launcher 自动订阅进项目） | 「项目里怎么干活」：4 角色、37 skills、hooks、会话启动时注入的必载纪律 |
+| `core` | 项目级（launcher 自动订阅进项目） | 「项目里怎么干活」：4 角色、35 skills、hooks、会话启动时注入的必载纪律 |
 
 launcher 通过 marketplace 注册信息定位 core，**两扇门各有自己的注册面，所以它按序试两个定位器、谁解析得到用谁**：Claude Code 门读 `~/.claude/plugins/known_marketplaces.json` 的 `installLocation`，Codex 门读 `codex plugin marketplace list --json` 的 `root`（市场**来源**另从 `<CODEX_HOME>/config.toml` 取）。它**不去探测「我现在跑在哪扇门里」**——按结果判，某个定位器跑不通就是「这扇门没有」，不是错误。你同时注册了多个 workframe 市场（如开发目录源 + GitHub 源）时，它会问你用哪个，不会自己挑。
 
@@ -113,7 +113,7 @@ launcher 先判断当前目录是什么（按顺序，前面命中就不往下�
 
 **会创建**（已存在则跳过）：
 
-- `projects/` — board.yaml（任务看板）/ modules/overview.md（模块树总图）/ specs/overview.md / specs/_meta/taxonomy.md（tag 受控词表）/ issues/TEMPLATES.md / changelog.md / dev-log.md（开发账本，自带一条以装机日为期的首条；收口检查 `[ledger]` 项读它）/ evals / proposals / archive 骨架
+- `projects/` — board.yaml（任务看板）/ modules/overview.md（模块树总图）/ specs/overview.md / specs/_meta/taxonomy.md（tag 受控词表）/ issues/TEMPLATES.md / changelog.md / dev-log.md（开发账本，自带一条以装机日为期的首条；收口检查 `[ledger]` 项读它）/ proposals / archive 骨架
 - `logs/` — hook 输出与报告目录（gitignore）
 - `.workframe/state/` — 运行时状态（gitignore）
 - `.workframe/agent-memory/` — shared + 4 个 baseline 角色的记忆骨架（**默认进 git**：记忆是跨会话资产，丢了不可重建。记忆正文常年积累业务细节，若项目含客户名 / 未公开数据，自行在 `.gitignore` 加回 `.workframe/agent-memory/`——框架不替你判断）
@@ -125,7 +125,7 @@ launcher 先判断当前目录是什么（按顺序，前面命中就不往下�
 - `CLAUDE.md` — 整合覆盖（见上文 §B 路径，落备份）；目标已有自己的 `AGENTS.md` 时同样走整合（四个契约段与项目段并进去）
 - `.gitignore` — 末尾追加 managed 标记块，含 5 个必需条目：`.claude/settings.local.json` / `.workframe/state/*` / `logs/` / `tmp/` / `.tmp/`，外加一行例外 `!.workframe/state/memory-index.json`（记忆 sidecar 必须进 git，理由见 core `reference/project-architecture.md` §Git 策略）；已全齐则不动
   - `/*` 与例外行是**成对硬契约**：改成 `.workframe/state/` 会让 git 静默无视例外行，sidecar 无声失踪。多人协作时 sidecar 若冲突，删本地重建，不手工 merge JSON
-- `.workframe-config.json` — merge 模式：只刷新框架字段（`framework_version` 等），用户字段完整保留
+- `.workframe-config.json` — merge 模式：只刷新框架字段（`project_name` 等；`framework_version` 是创建史，已有就保留），用户字段完整保留
 - `.claude/settings.json` — 写入两项订阅声明（`enabledPlugins` + `extraKnownMarketplaces`）。由装机脚本 merge 写入：先落一份 `logs/settings.json.bak-<时间戳>`（`logs/` 在 gitignore 内），你原有的**键与值**（`permissions` / `hooks` / `env` …）一个不动，写完回读校验，写不成就按备份还原并给手动补丁。**已是目标状态时一个字节都不写**（重复补跑零改动，也不堆备份）
   - **真要改的时候，保住的是键与值、不是文件排版**：产物恒为 无 BOM / LF 换行 / 两空格缩进。你原来的文件若是别的形态（记事本存的 BOM + CRLF、四空格缩进…），键一个不少，但 `git diff` 会显示整份文件变了（`settings.json` 进 git，所以接入已有仓时会看到这一个整文件 diff）。**只在真的需要改键值时才会发生**——两项声明已经对了的话，哪怕你的文件是 BOM + CRLF，它也一个字节不动
 - `AGENTS.md` — 缺失时按出厂模板渲染（**已存在一律不覆盖**，已有内容走上面的整合）
@@ -158,7 +158,7 @@ launcher 先判断当前目录是什么（按顺序，前面命中就不往下�
 <project>/
 ├── CLAUDE.md                        ← 头部信息 + `@AGENTS.md` 导入 + 订阅声明 / 快速入门 / 框架指路
 ├── AGENTS.md                        ← 项目是什么 + 项目自有判据 + 项目级角色 + 路由偏好 + 业务目录 + 委派授权（两扇门共用；缺失时自动补建）
-├── .workframe-config.json           ← project_name + project_type / dormant_profile / role_profile / close_check
+├── .workframe-config.json           ← project_name + dormant_profile / role_profile / close_check（project_type 可缺）
 ├── .agents/
 │   └── skills/prd-style/            ← 项目 skills 的真实源（两扇门共读）；PRD 框架出厂默认实例化在这里，随项目自由改
 ├── .codex/                          ← 装了 Codex 门才有：config.toml 的 managed 段注册 4 个角色 + roles/<role>.toml
@@ -177,7 +177,7 @@ launcher 先判断当前目录是什么（按顺序，前面命中就不往下�
 │   ├── issues/TEMPLATES.md          ← Issue 模板（SEC / BUG）
 │   ├── changelog.md
 │   ├── dev-log.md                   ← 开发账本（每轮收口手写一条；收口检查 `[ledger]` 项读它）
-│   └── evals/ proposals/ archive/   ← 骨架占位
+│   └── proposals/ archive/          ← 骨架占位
 ├── company-context/README.md        ← 公司资料的起步目录（README 带敏感内容提示）
 ├── my-workspace/README.md           ← 个人产出的起步目录（同上）
 ├── logs/                            ← hook 输出 + 报告（gitignore）
@@ -230,7 +230,7 @@ workframe-door --codex            # 默认市场源 owner/repo；本地目录 / 
 
 ### 装完之后
 
-- **`workframe-door --check`**：只读对账——用户层 `enabled` 是否是 `false`（是 `true` 算问题：最常见成因是裸敲过 `codex plugin add`，重跑 `--codex` 即可；用户层整张表都没有算正常）、hook 是否全 `trusted`、项目 trust、角色注册是否被 Codex 读到、历史审计记录仅作信息展示（不参与实时信任判定）、Codex 侧装上的插件与本命令是不是同一版本（不同或任何一侧读不出都算问题）、它的 hook 冻结清单是否完好（缺失或坏了算一项问题，其余各项照查）、Codex 实际加载的那一份（从 hook 的来源路径反推）是不是同样对得上（反推不出也算问题，不拿门自己的那份顶上）、`multi_agent` 特性是否开着；本项目的门已被你关闭时报一句「已关闭」、不算问题；同项目若有多于一个会话标记文件会提示一句（上一个会话没跑到 SessionEnd 时会留下，7 天后自清）。过滤后 0 条时按读得到的状态说成因（用户层未启用且项目未 trust / 段内没有启用表 / 已关闭），分不出时把 `hooks/list` 的 `warnings` 原文打出来——那时最常见的成因是清单里某条缺 `command` 键、整份被静默丢弃。
+- **`workframe-door --check`**：只读对账——用户层 `enabled` 是否是 `false`（是 `true` 算问题：最常见成因是裸敲过 `codex plugin add`，重跑 `--codex` 即可；用户层整张表都没有算正常）、hook 是否全 `trusted`、项目 trust、角色注册是否被 Codex 读到、历史审计记录仅作信息展示（不参与实时信任判定）、Codex 侧装上的插件与本命令是不是同一版本（不同或任何一侧读不出都算问题）、它的 hook 冻结清单是否完好（缺失或坏了算一项问题，其余各项照查）、Codex 实际加载的那一份（从 hook 的来源路径反推）是不是同样对得上（反推不出也算问题，不拿门自己的那份顶上）、`multi_agent` 特性是否开着；本项目的门已被你关闭时报一句「已关闭」、不算问题；同项目若有多于一个会话标记文件会提示一句（上一个会话没跑到 SessionEnd 时会留下，满 7 天后由下一次 Codex 开场清掉）。过滤后 0 条时按读得到的状态说成因（用户层未启用且项目未 trust / 段内没有启用表 / 已关闭），分不出时把 `hooks/list` 的 `warnings` 原文打出来——那时最常见的成因是清单里某条缺 `command` 键、整份被静默丢弃。
 - **门的成功出口会说 `AGENTS.md` 的状态**（`--codex` / `--upgrade` / 缺省 / `--check` 成功时，`--backfill` 结束时 Codex 门在项目侧接着时——本次装上的或原本就接着的；不改退出码）：Codex 读 `AGENTS.md`、不读 `CLAUDE.md` 与 `.claude/rules/`，门装好不等于 Codex 看得到项目内容。「这个项目是什么」还是框架占位、或项目根没有 `AGENTS.md` 时打一行 `!`；`CLAUDE.md` 有模板之外的二级段、或 `.claude/rules/` 下有 md 时打一行 `i`，列出这些只有 Claude Code 读得到的内容面。归位按 core 插件 `reference/claude-md-merge-guide.md`。
 - **`workframe-door --check --live`**：再真跑一次零凭据的 `codex exec` 验活（用本机回环上一个立即回 400 的桩当模型，模型请求不出本机，几秒内结束；验活会话仍会加载你 Codex 配置里的其余外连能力——实测见过一次向外的 MCP 传输连接，来源未查明）。Codex 仍会把它记成一次失败的会话——知情项。静态对账有问题时走不到验活。
 - **`workframe-door --backfill`（已装项目回填）**：装机链路只在**装 / 接入项目那一刻**把两扇门都接上（新建与接入都走，见 launcher `setup` §6 收尾），此前装的项目不会自己长出第二扇。这条命令先看两扇门此刻各是什么状态，**只补缺的那扇**：
@@ -255,7 +255,7 @@ workframe-door --codex            # 默认市场源 owner/repo；本地目录 / 
 
 ### 角色与项目配置
 
-- 4 个角色由插件 `agents/*.md` 生成到 `.codex/roles/<role>.toml`，并在 `.codex/config.toml` 的 managed 段（两行 marker 之间；段首是本插件的项目级启用表）注册。**定制角色写 `.codex/roles/<role>.local.toml`**（`developer_instructions = "…"`），生成时追加在正文之后；直接改生成的 `<role>.toml` 会被下次装机 / 对账当成「被手改」跳过并报出来。
+- 4 个角色由插件 `agents/*.md` 生成到 `.codex/roles/<role>.toml`，并在 `.codex/config.toml` 的 managed 段（两行 marker 之间；段首是本插件的项目级启用表）注册。**定制角色写 `.codex/roles/<role>.local.toml`**（`developer_instructions = "…"`），生成时追加在正文之后；直接改生成的 `<role>.toml`（或放一份同名而账本没登记的），下次装机 / 升级会点名并整批停下，什么都不写。把定制移进 `.local.toml`、处理掉点名的文件后重跑。
 - **你自己已有 `.codex/config.toml`**：无 marker 时门只在末尾追加 managed 段、段外一个字节不动；有 marker 但产物账本里没登记它（例如账本被删）时门拒绝写任何文件，文案给两条出路（恢复账本 / 把两处 marker 连同段一起删掉后重跑）。
 - 产物账本 `.workframe/managed-files.json` 记录门写过的每个文件与 sha，**有意进 git**——它是「哪些文件是生成的」的唯一记录，将来卸载只删账本内且未被改过的文件。
 
@@ -268,14 +268,15 @@ workframe-door --codex            # 默认市场源 owner/repo；本地目录 / 
 - **装后核对只比版本串，`--codex`（及缺省模式、launcher 装机）在注册市场之前也不读已有登记**（`--backfill` 没给 `--marketplace` 时会先读已有注册面，不在此列）：本机已经以本地目录登记过同名市场、这次不带 `--marketplace` 跑时，只要 Codex 的克隆目录 `<CODEX_HOME>/.tmp/marketplaces/<名>/` 不在，Codex 对「已登记本地源、这次加 git 源」就不拒绝，直接把登记换成默认公开源，随后插件被装成公开那一份（克隆目录残留着时这一组合同样被拒；其余先后组合在已登记的那一份仍然有效时会被拒；本地目录被挪走、或 git 源的克隆目录被删之后，其余组合也会被直接换掉）。公开那一份与门的版本不同、且读得出版本时，装前核对在 `codex plugin add` 之前停下——此时登记已换，插件缓存与用户层还没动。**这一态下，本机其他已装过本插件的项目里 `workframe-door --check` 照样全绿**（它不核市场登记；停下的那个项目本身还没装完，在它里面跑 `--check` 会报问题），**而此后在本机任何项目里跑一次 `--upgrade`，都会按这条公开源登记把全机共用的插件缓存换成公开那一版**（git 源那一路不经过装前核对，换完才由装后核对停下）——所以停下之后先照文案 remove 再带 `--marketplace` 重跑，别先跑 `--upgrade`。**版本相同时（例如某版发布之后、下一次 bump 之前，框架开发版与公开版的版本串相同）装前、装后核对都分辨不出，会静默装成公开那一份并报就绪**。要装本地那一份，就显式给 `--marketplace <本地仓路径>`；登记已经被换掉的，先自己跑 `codex plugin marketplace remove workframe`（会删掉你 Codex 用户配置里的那条市场登记），再带 `--marketplace <本地仓路径>` 重跑。
 - **Codex 读 `AGENTS.md` 的两处边界**：项目根有 `AGENTS.override.md` 时 Codex 只读它、不读 `AGENTS.md`；`AGENTS.md` 超过约 32 KiB 的部分会被 Codex 静默截掉（实测读数，官方文档未核），排在末尾的段先丢。doctor 看不见这两种情形，照样报四段齐全。
 - **两扇门各自升级**：一边升了一边没升时会各自执行不同版本的脚本；doctor 的「环境与 hook 活性」项读两份 `plugin-root.<门>.txt` 对账版本，不等报 error。
-- **`disable-model-invocation` 在 Codex 门下不生效**：它是 Claude Code 的 skill frontmatter 字段，Codex 的 skill 规范不认它（Codex 侧的对应物是各 skill 目录下的 `agents/openai.yaml`，本框架没有写）。于是本插件里带这个字段、只该由你显式触发的那几个 skill（`rollback`、`onboard`、`audit`、`maintenance-review`、`memory-log`）在 Codex 门下对模型可见；按 Codex 的 skill 规范推断它们可被隐式调用，**未实测**（`disable-model-invocation` 是 Claude Code 语义，Codex 侧没见到对等字段生效的记录）。当前决定是先忽略、不做门差补偿；要不要补是产品决策。
+- **`disable-model-invocation` 在 Codex 门下不生效**：它是 Claude Code 的 skill frontmatter 字段，Codex 的 skill 规范不认它（Codex 侧的对应物是各 skill 目录下的 `agents/openai.yaml`，本框架没有写）。于是本插件里带这个字段、只该由你显式触发的那几个 skill（`rollback`、`audit`、`maintenance-review`、`memory-log`）在 Codex 门下对模型可见；按 Codex 的 skill 规范推断它们可被隐式调用，**未实测**（`disable-model-invocation` 是 Claude Code 语义，Codex 侧没见到对等字段生效的记录）。当前决定是先忽略、不做门差补偿；要不要补是产品决策。
 - **launcher 装成 Codex 插件这个形态没验过**：本文讲的 Codex 门全部围绕 core——`workframe-door` 是 core 插件带的命令。launcher（装机入口）在 Codex 下能不能被发现、装上之后它的 skill 正文与 `reference/` 相对引用能不能被读到、`allowed-tools` 这类 Claude Code frontmatter 在 Codex 的语义是什么，**都没有真机结论**。所以本文没有「在 Codex 里装 launcher」的步骤，**对话式的建项目 / 接入目前需要 Claude Code**。装机脚本本身不依赖 `claude` 命令（见 §确认后执行什么 步骤 4）：没有 Claude Code 的机器，可以照根 README「无人值守 / CI 初始化」一段手工跑同一批脚本——那条路没有确认页，也没在只装 Codex 的机器上完整走过一遍。
 - **`PostToolUse` 四条 Claude Code matcher 在 Codex 的实测命中面**（Windows、codex-cli 0.153.4 首测，0.166.0 用真实会话复测）：
   - `Bash` → `signoff-guard`：**命中**，行为与 Claude Code 相同（经 shell 改看板时只提示、不拦）；命令读到某个 skill 的 `SKILL.md` 时顺带投该 skill 所属角色的记忆（Codex 门的 skill 入口，见本节下面「两门不共享的」里主会话记忆那一条）
   - `Edit|Write|NotebookEdit` → `check-stale-modules`、`signoff-guard`：**matcher 命中 `apply_patch`**，载荷里 `tool_name` 是 `apply_patch`、`tool_input.command` 是补丁文本、没有 `file_path`。`check-stale-modules` 从补丁头取路径（新增、修改、删除，移动取前后两个），改到模块 `code_paths` 覆盖的文件时当场标 stale、投 dev 记忆；`signoff-guard` 用同一份补丁头解析认出看板，改到看板就按签注规则判、违规 exit 2（exit 2 在 Codex 下的效果未实测，见上面「签发把关」）
   - `Skill` → `log-skill-invoked`：**不命中**——Codex 没有 Skill 工具（模型用 shell 读 `SKILL.md`），`skill_invoked` 事件在 Codex 门下不产生
 - **派发起名闸只挂 Claude Code 门**：`PreToolUse`（matcher `Agent`）上那道「主会话派发 `core:*` 角色带 `name` 即拦」的 hook 不派生进 Codex 清单——Codex 没有 Agent 工具与 agent teams，`spawn_agent` 也不带 `name`
-- **`codex exec` 退出时 `SessionEnd` 偶发没跑完**（Windows、codex-cli 0.153.4 实测：同一项目 5 次 `codex exec` 会话里有 1 次 `session-end-flush` 进程起了却零事件，`current-session-codex-*.json` 会话标记残留；根因未查）。后果：那一次会话的收尾事件缺失；残留标记让下一次同门会话时出现两个标记，`workframe-event` 分不清是哪个会话，`skill_used` 就不带 `session_id`。所以「每次会话必然产出的事件集」在 Codex 门下不必然——双门对等探针的事件集合比对碰上这一次会假红，重跑一次即可分辨
+- **Codex 只给 `SessionEnd` 最多 3 秒**（官方文档：缺省 1 秒、上限 3 秒；codex-cli 0.169.0 实测到点连进程树一起杀）。框架声明了 3 秒，并把收尾事件与会话标记清理排在最前。机器很忙、3 秒仍不够时，后面的看板汇总与 skill 统计那一次会缺：看板汇总由之后开会话时的漂移检查补上（休眠与唤醒会话不做），skill 统计由下一次会话结束时整份重算；缺的也可能只是那条事件、文件已经更新。连标记都没来得及清的那次，残留标记会让下一个同门会话出现两个候选，`workframe-event` 分不清是哪个会话，`skill_used` 就不带 `session_id`；残留标记满 7 天后，由下一次 Codex 开场清掉
+- **交互式 Codex 会话 `/exit` 不一定等于会话结束**：较新的 Codex 默认让交互会话连常驻的后台进程（连不上时退回进程内），连着时 `/exit` 只是断开（按官方文档与本机所见推断，没有逐步实测）；官方文档写明空闲且没有客户端打开满 30 分钟、归档 / 删除会话、或 Codex 正常关闭时才跑 `SessionEnd`。所以这种情况下退出后马上看不到收尾事件是正常的。这段时间里同项目再开一个 Codex 会话，同样会出现两个会话标记
 - 需要凭据才能验的：`spawn_agent` 子线程上 `agent_type` 是否等于角色名（角色记忆按它命中）、TUI 启动审查页与 `SessionStart` 的先后。
 
 ### 安全删法：`.claude/` 里的 `skills` 是链接

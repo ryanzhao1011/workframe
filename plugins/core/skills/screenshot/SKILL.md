@@ -114,16 +114,16 @@ tmp/screenshots/<task_id>/
 }
 ```
 
-任务日志摘要写入 `.workframe/state/logs/screenshot/<task_id>.json`（schema: `workframe.task-log.v1`）。
+本次结果只记在输出目录的 `_manifest.json`（每张图的状态、路径与错误），不在状态目录另存日志。一张图都没生成（含 `captures` 为空或字段写错）时脚本以非零退出、不报成功。
 
 ## 3. 调用方式
 
 ### 3.1 直接命令行
 
-本 skill 随 core plugin 分发，脚本在插件目录内（项目 `.claude/skills/` 下没有副本）；插件根从 `plugin-root.txt` 取：
+本 skill 随 core plugin 分发，脚本在插件目录内（项目 `.claude/skills/` 下没有副本）；插件根取 `$WF_PLUGIN_ROOT`，即会话开场注入的「本会话插件根」，不依赖 PATH：
 
 ```bash
-node "$(cat .workframe/state/plugin-root.txt)/skills/screenshot/scripts/screenshot.js" --config <path/to/config.json>
+node "$WF_PLUGIN_ROOT/skills/screenshot/scripts/screenshot.js" --config <path/to/config.json>
 
 # 可选参数：
 #   --output-dir <path>    覆盖默认 tmp/screenshots/<task_id>/
@@ -139,7 +139,7 @@ node "$(cat .workframe/state/plugin-root.txt)/skills/screenshot/scripts/screensh
 
 1. 准备 `index.html`（prd-writer 已生成到 `<iteration-dir>/prototypes/index.html`）或 Mermaid HTML
 2. 写 config JSON（含 `setup_js` 业务交互逻辑）
-3. 按 §3.1 的命令执行 `screenshot.js`（插件根从 `plugin-root.txt` 取）
+3. 按 §3.1 的命令执行 `screenshot.js`（插件根取 `$WF_PLUGIN_ROOT`）
 4. 读 manifest 获取 PNG 路径
 5. 后续动作（移到 assets / 上传外部文档系统）由调用方完成
 6. 任务结束清理 `tmp/screenshots/<task_id>/`（清理责任在调用方；SessionEnd hook 存在但**不清理截图**，调用方必须自己清。详见 §9 临时产物管理）
@@ -186,9 +186,9 @@ node "$(cat .workframe/state/plugin-root.txt)/skills/screenshot/scripts/screensh
    `source` 可省略；只有一张图时也可把 `source` 提到顶层、capture 里不写。
 
    > ⚠️ **顶层数组字段名是 `captures`，不是 `items`/`shots`/`list`。**
-   > `screenshot.js` 读的是 `config.captures || []`——**写错字段名不会报错**，
-   > 它安安静静地产出 0 张图、返回一个 `captures: []` 的 manifest，
-   > 你要到「PNG 怎么没生成」时才回头查。实测踩过一次。
+   > `screenshot.js` 读的是 `config.captures || []`——写错字段名时它产出 0 张图、
+   > 写一个 `captures: []` 的 manifest，并以非零退出报「没有生成任何截图」；
+   > 看到这条先查字段名。
 3. 执行 `screenshot.js` → PNG 移入目标 `assets/`（文件名由调用方约定，如 `流程图-{req_slug}-{图名}.png`）→ 清理 tmp 渲染件与 `tmp/screenshots/<task_id>/`
 4. 失败降级：报告原因一次，提示用户手工截图（同 §7）
 
@@ -249,7 +249,7 @@ skill 失败时（环境问题 / 浏览器找不到 / 选择器不匹配 / setup
 
 **反例**：
 
-- ❌ 不要假设 SessionEnd hook 会兜底清理（该 hook 存在、做 events flush / digest / GC，但**不清理 `tmp/screenshots/`**——口径同 document-norms §6.2）
+- ❌ 不要假设 SessionEnd hook 会兜底清理（该 hook 存在、做 events flush / 重算 / GC，但**不清理 `tmp/screenshots/`**——口径同 document-norms §6.2）
 - ❌ 不要在 screenshot.js 内 process.exit 之前 `rm -rf` 输出目录（破坏调用方拿走 PNG 的语义）
 - ✅ 调用方典型清理片段（任务收尾时执行）：
   ```bash
@@ -262,7 +262,7 @@ skill 失败时（环境问题 / 浏览器找不到 / 选择器不匹配 / setup
 
 - [ ] 调用方准备 source（HTML 文件 / URL）
 - [ ] 调用方写 config JSON（含 captures 和必要的 setup_js / wait_selector）
-- [ ] 按 §3.1 的命令执行 `screenshot.js`（插件根从 `plugin-root.txt` 取）
+- [ ] 按 §3.1 的命令执行 `screenshot.js`（插件根取 `$WF_PLUGIN_ROOT`）
 - [ ] 检查 manifest 与退出码
 - [ ] 调用方按需把 PNG 移到 `assets/` 长期保留 / 上传到外部文档系统
 - [ ] 任务结束清理 `tmp/screenshots/<task_id>/`

@@ -131,10 +131,10 @@ S2 已确认页面骨架（区域布局 + 核心元素），S3 已写出交互�
 
 ## S5.3 执行截图（调用 screenshot skill）
 
-screenshot skill 随 core plugin 分发，脚本位于插件目录内（项目 `.claude/skills/` 下没有副本）；插件根从 `plugin-root.txt` 取：
+screenshot skill 随 core plugin 分发，脚本位于插件目录内（项目 `.claude/skills/` 下没有副本）；插件根取 `$WF_PLUGIN_ROOT`，即会话开场注入的「本会话插件根」，不依赖 PATH：
 
 ```bash
-node "$(cat .workframe/state/plugin-root.txt)/skills/screenshot/scripts/screenshot.js" \
+node "$WF_PLUGIN_ROOT/skills/screenshot/scripts/screenshot.js" \
   --config "<iteration-dir>/prototypes/screenshot-config.json"
 ```
 
@@ -142,7 +142,7 @@ node "$(cat .workframe/state/plugin-root.txt)/skills/screenshot/scripts/screensh
 
 - PNG 文件 → `tmp/screenshots/<task_id>/section-{功能A}.png` 等
 - manifest → `tmp/screenshots/<task_id>/_manifest.json`
-- 任务日志 → `.workframe/state/logs/screenshot/<task_id>.json`
+- 结果清单 → 输出目录下的 `_manifest.json`
 
 > screenshot skill 自动处理：浏览器探测、puppeteer-core 自动安装到 `tmp/screenshot-deps/`、截图后清理控制由调用方决定。
 

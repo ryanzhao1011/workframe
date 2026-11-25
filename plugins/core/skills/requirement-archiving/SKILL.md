@@ -62,7 +62,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 
 ### Phase 3 骨架与 shared
 
-- 走 `module-init` 建 basic / sub / 需求资产包（批量时可自写简单循环调用——框架不提供现成批量脚本；占位符替换与 meta 状态必须逐一落实）
+- 走 `module-init` 建 basic / sub / 需求资产包（批量时可自写简单循环调用——框架不提供现成批量脚本；占位符替换、meta 状态与每份 `prd.md` 的未编写盖戳（`module-init` Step 2b）必须逐一落实）
 - **shared 事实源先行**：编码字典 / 全局认知 / 需求台账（含 TAPD ID × 上线版本 × 归档落点的溯源表）——PRD 引用它们，不重复枚举
 - 填各层 overview 人写段与 frontmatter `description`，调 `module-index-refresh`
 - 门禁：占位符零残留；索引连跑两次幂等；description ≤200 字
@@ -70,6 +70,8 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 ### Phase 4 PRD 回填
 
 - 分批（按 sub，体量大的先），每批落盘后跑 `scripts/check_archive.py <模块路径>` 自查
+- 每份 PRD **回填写入成功之后**删掉它的未编写字段：`python "$WF_PLUGIN_ROOT/scripts/module_init.py" --project . --unstamp <prd.md…>`；写入失败的不调。自查只跳过「正文仍是盖过戳的骨架」的 PRD，留着哪句模板提示语都照样深检
+- 回填并删掉字段之后刷新导航：`python "$WF_PLUGIN_ROOT/scripts/module_init.py" --project . --refresh-index --scope <刚回填的 prd.md…>`——Phase 3 建包时刷出的是「已立项、未开写」，回填后不刷就一直停在那里
 - 图片按质量分级归位进各需求包 `assets/`，**图中规格必须转写进正文**（图是证据，不是正文的替代）
 - 拍板结论直接写为需求事实；被覆盖的旧口径进「变更与决策记录」表
 - 门禁：自查零异常（frontmatter / tags 词表 / 禁用标签 / 断链断图 / AI 病灶）
@@ -116,10 +118,10 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 
 ## 脚本
 
-| 脚本 | 用法（插件根从 `plugin-root.txt` 取，不依赖 PATH） | 产出 |
+| 脚本 | 用法（插件根取 `$WF_PLUGIN_ROOT`，即会话开场注入的「本会话插件根」，不依赖 PATH） | 产出 |
 |---|---|---|
-| `scripts/extract_assets.py` | `python "$(cat .workframe/state/plugin-root.txt)/skills/requirement-archiving/scripts/extract_assets.py" <源目录> <工作目录>` | `inventory.md` 模态矩阵 / `text/` 逐文件正文 / `images/` 无损图片 / `links.md` 外链清单 |
-| `scripts/check_archive.py` | `python "$(cat .workframe/state/plugin-root.txt)/skills/requirement-archiving/scripts/check_archive.py" <projects/modules/<basic>>` | 终端报告：frontmatter、tags 词表（无 taxonomy 自动跳过）、禁用标签、AI 病灶、wikilink 与图片断链、孤儿图、AUTO-INDEX 配对 |
+| `scripts/extract_assets.py` | `python "$WF_PLUGIN_ROOT/skills/requirement-archiving/scripts/extract_assets.py" <源目录> <工作目录>` | `inventory.md` 模态矩阵 / `text/` 逐文件正文 / `images/` 无损图片 / `links.md` 外链清单 |
+| `scripts/check_archive.py` | `python "$WF_PLUGIN_ROOT/skills/requirement-archiving/scripts/check_archive.py" <projects/modules/<basic>>` | 终端报告：frontmatter、tags 词表（无 taxonomy 自动跳过；词表里有节还没配置时，不在已配置词表里的 tag 只打「提示」行，不计入异常）、禁用标签、AI 病灶、wikilink 与图片断链、孤儿图、AUTO-INDEX 配对 |
 
 索引刷新**不在**本 skill 脚本内——调 core `module-index-refresh`，避免双实现。
 

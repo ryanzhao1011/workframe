@@ -156,8 +156,7 @@ def _compose(project, payload, modules, record, budget, mark=True):
     parts, used = [], 0
     for module in modules:
         if module in record['delivered']:
-            _event(project, payload, module, record['cycle'], 'skipped_dedup')
-            continue
+            continue  # 已投过、去重跳过：不写回执（只记「没发生什么」，没有读者）；其余结果照记
         path = project / 'projects/modules' / module / 'module-memory.md'
         rel = path.relative_to(project).as_posix()
         try:

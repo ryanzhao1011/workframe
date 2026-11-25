@@ -56,7 +56,7 @@ _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 from _harness import project_dir as _project_dir  # noqa: E402
-from _state_io import append_line, event_json, state_dir_of  # noqa: E402
+from _state_io import append_line, atomic_write, event_json, state_dir_of  # noqa: E402
 import _yaml_probe  # noqa: E402  共用解析入口（libyaml 优先）；import 无副作用、不 import PyYAML
 
 PROJECT_DIR = _project_dir()
@@ -105,7 +105,7 @@ def _count_via_yaml(text):
     返回签名与 _count_task_statuses_by_line 一致，便于两条路径互换。
 
     解析走 `_yaml_probe.safe_load`（装了 libyaml 用 C 实现；纯 Python 读得进的它都读得进，另有少数
-    纯 Python 拒绝的形态它也读得进，见该函数）：SessionEnd 整体预算只有 1.5 秒，纯 Python 解析
+    纯 Python 拒绝的形态它也读得进，见该函数）：SessionEnd 的时限很短（CC 整体 1.5 秒、Codex 单条最多 3 秒），纯 Python 解析
     MB 级看板就要吃掉近一半。
     """
     data = _yaml_probe.safe_load(text)
@@ -426,7 +426,22 @@ def recompute_board_summary(known=None):
         return result
 
     if new_text != text:
-        BOARD_FILE.write_text(new_text, encoding="utf-8", newline="")
+        # 整份替换会盖掉本次读之后别人写的内容：替换前再读一遍，变了就不写，漂移由下次开场补。
+        # 比完到替换之间仍有极短的窗口，没有锁——别的写看板的一方（模型的编辑工具、编辑器）不参与加锁
+        if BOARD_FILE.read_text(encoding="utf-8-sig") != text:
+            result = {"status": "skipped", "reason": "board_changed_meanwhile"}
+            append_event(**result)
+            return result
+        # 会话结束时本进程可能到点被杀（两门的 SessionEnd 都有时限），直写会留下半截看板；
+        # 写到真实路径上，看板是符号链接时链接本身保留
+        try:
+            atomic_write(BOARD_FILE.resolve(), new_text, attempts=1)
+        except PermissionError as e:
+            if e.filename2 is None:          # 临时文件就没写成，不是换的时候被占用
+                raise
+            result = {"status": "skipped", "reason": "board_busy"}
+            append_event(**result)
+            return result
 
     result = {"status": "ok", "total": total, "counts": counts}
     append_event(**result)

@@ -9,9 +9,9 @@ supersedes:
 
 # 子 agent 协议
 
-## 记忆已经注入，不要再 Read
+## 记忆已经注入的那份，不要再 Read
 
-必读的两份记忆（`shared/MEMORY.md` + 本角色 `<role>/MEMORY.md`）由子 agent 启动 hook 自动注入，**代码保证**。上下文中已有「角色记忆注入」标记段 → 记忆已送达，**不要再显式 Read 这两份文件**；无该标记段（hook 未生效，如 Python 缺失）→ 按上列清单显式 Read 兜底，文件不存在则跳过。`notes.md` 不注入（缓冲区，未达准入）。
+必读的两份记忆（`shared/MEMORY.md` + 本角色 `<role>/MEMORY.md`）由子 agent 启动 hook 自动注入，**代码保证**。两份可能合在一段，也可能一份一段。「角色记忆注入」「共享记忆注入」标记段给了全文的那份 → 已送达，**不要再显式 Read**；某一份没有出现（hook 未生效，如 Python 缺失）或标「未完整加载」→ 显式 Read 那一份，文件不存在则跳过。`notes.md` 不注入（缓冲区，未达准入）。
 
 ## 动看板之前先调 `core:task-management`
 
@@ -35,4 +35,4 @@ supersedes:
 
 ## 事件不要重复记
 
-收尾时为每个实际用到的 skill 记 `skill_used`，`role` 填自己的角色名。**skill 正文里已经 append 过的事件不要在收尾再补一遍**——最典型的是 `test-case-design` 失败路径已写的 `task_blocked`，重复记会让问题加权分双倍计入。
+收尾时为每个实际用到的 skill 记 `skill_used`，`role` 填自己的角色名。**skill 正文里已经 append 过的事件不要在收尾再补一遍**——最典型的是 `test-case-design` 失败路径已写的 `task_blocked`，重复记会让同一次阻塞算两遍。

@@ -2,12 +2,12 @@
  "__schema_version__": "workframe.event-schema.v3",
  "__doc__": "Event registry for .workframe/state/events.jsonl. Single source of truth for event type names, reliability tiers, producers, and consumers. Workframe-private — not a Claude Code official file. TS FORMAT (binding on every producer): UTC with second precision — datetime.now(timezone.utc).isoformat(timespec='seconds'), e.g. 2026-08-16T07:24:04+00:00. Consumers sort and window-filter events by raw string comparison, so a single file must not mix timezones or precisions; on 2026-08-16 four variants coexisted (local/UTC x sec/microsec) with the same event type appearing in three of them, which silently mis-orders anything compared as text.",
  "reliability_tiers": {
-  "hook_deterministic": "Produced by Python hook scripts (SessionStart / Stop / SubagentStop / SessionEnd). Capture is guaranteed by the Claude Code runtime as long as the hook is registered and not externally killed. Safe to use as core triggering logic and state transitions.",
+  "hook_deterministic": "Produced by Python hook scripts (SessionStart / Stop / SessionEnd and the other mounted events). Capture is guaranteed by the Claude Code runtime as long as the hook is registered and not externally killed. Safe to use as core triggering logic and state transitions.",
   "protocol_expected": "Produced by an explicit agent-facing protocol instruction in an injected discipline shard — for example the event-stream step of the common protocol shard, or the correction handling in the main-session signal-intake shard. Useful signal but NOT guaranteed: the model may skip the write (under context pressure), duplicate it (re-running the protocol), or misattribute it. Use as corroborating signal, not single-source-of-truth.",
   "model_mediated": "Produced by a skill body or an agent reasoning step (no protocol-level enforcement). Capture depends entirely on Claude following the relevant SKILL.md instruction. Use only for audit / corroboration; do NOT base core triggering logic on these counts.",
   "removed_v0_2_1": "Event name was defined in v0.2.0 but cannot be reliably captured (e.g., rules have no trigger callback). Removed from producers and triggering logic; schema stub retained only for historical compatibility."
  },
- "harness_field": "OPTIONAL field on every event line: harness = cc | codex | unknown, i.e. which door produced the line. ABSENT means a legacy line written before v3; consumers read it as cc. The value unknown is written EXPLICITLY when the producer was not told which door it runs in — never omit the field to mean that, because omission already means cc. Hook producers get the value from the --harness <door> argument that the hook table puts on every command (each door has its own table, and each table writes its own door): a command-line argument, NOT environment detection — CLAUDE_* leaks into a nested `codex exec` and would make detection confidently wrong. Model-hand-written events get it from the workframe-event bin command. Single stamping point in code: _state_io.event_json(). PARTITION (binding from v3, and the reason bin entries do NOT guess `cc`): every line written BY CODE carries the field — held by routing every event-line serialization through _state_io.event_json(), which the event_line_serialization_single_source check pins at the call sites. THE BOUNDARY ON THAT WORD 'every', stated so consumers can size the claim: that check reads the append_line/append_lines call site, so a JSON string built into a variable first and only then passed in would slip past it (today zero such sites; the check's >=9 floor on event_json call sites would still catch the single-source path being abandoned wholesale, but not one producer sneaking around it). The spill / merge-back path is NOT a second channel: _spill() and merge_spills() move already-serialized whole lines and construct none of their own — verified as the general property, NOT as a list of shapes: neither function BUILDS ANY MAPPING (no dict literal, dict() call, or dict comprehension), CALLS json AT ALL (so nothing is dumped, and nothing is loaded-then-rewritten), or EMITS ANY JSON TEXT (no string literal or f-string carrying braces; their f-strings build filenames, a glob, a timestamp format and two [warn] lines). Re-check it as that property. Checking only for json.dumps and event-shaped dict literals would still report zero the day someone adds a dict(...) — the criterion has to outlive the conclusion — hook producers get cc/codex from their command line; bin entries (workframe-event, workframe-recompute-board-summary, workframe-recompute-skill-metrics; they all accept --harness, pass it when you know the door) — and that parenthesis is THE list: anything that tells a model to pass --harness must point here rather than retype the names, because a second copy silently misses the fourth event-writing entry the day one appears. Passing it to a bin entry that is NOT on this list is not harmless: workframe-doctor and workframe-module-close-check parse args and exit 2 on an unknown one, and BOTH already use a non-zero exit to mean 'I found problems', so the argument error and a real finding look identical in the terminal — the reader goes looking at the project instead of at the argument. Those three listed entries write `unknown` when the caller did not say. So an ABSENT field means the line was not written by v3+ code: it either predates v3, or the model hand-wrote it (the instruction to use workframe-event travels in the injected discipline shards; on Codex the SessionStart main shard additionally carries a `本会话 harness=codex session_id=…` line and the bin command falls back to the per-session marker file, so the instruction is DELIVERED to the Codex MAIN thread — observed by a zero-credential probe reading the rollout's context items. Narrower than it sounds: for sub-agent threads only the channel is verified (a review-type sub thread received the sub shard); full-shard arrival in `spawn_agent`-type sub threads has NOT been verified, and whether the model ACTS on the instruction on either thread type has not been observed — see __delivery_established__ for why the flag stays false). Consumers MUST keep the two apart — _harness.harness_breakdown() reports them as `unknown` vs `unstamped` — and MUST NOT re-default a v3-era `unknown` back to `cc`. Re-defaulting would silently misattribute a bin entry run from the Codex door, which is the exact failure this field exists to prevent; the cost of NOT re-defaulting is only that a CC-only project sees a small `unknown` bucket for manually run commands, which is a true statement rather than a lucky guess.",
+ "harness_field": "OPTIONAL field on every event line: harness = cc | codex | unknown, i.e. which door produced the line. ABSENT means a legacy line written before v3; consumers read it as cc. The value unknown is written EXPLICITLY when the producer was not told which door it runs in — never omit the field to mean that, because omission already means cc. Hook producers get the value from the --harness <door> argument that the hook table puts on every command (each door has its own table, and each table writes its own door): a command-line argument, NOT environment detection — CLAUDE_* leaks into a nested `codex exec` and would make detection confidently wrong. Model-hand-written events get it from the workframe-event bin command. Single stamping point in code: _state_io.event_json(). PARTITION (binding from v3, and the reason bin entries do NOT guess `cc`): every line written BY CODE carries the field — held by routing every event-line serialization through _state_io.event_json(), which the event_line_serialization_single_source check pins at the call sites. THE BOUNDARY ON THAT WORD 'every', stated so consumers can size the claim: that check reads the append_line/append_lines call site, so a JSON string built into a variable first and only then passed in would slip past it (today zero such sites; the check's >=9 floor on event_json call sites would still catch the single-source path being abandoned wholesale, but not one producer sneaking around it). The spill / merge-back path is NOT a second channel: _spill() and merge_spills() move already-serialized whole lines and construct none of their own — verified as the general property, NOT as a list of shapes: neither function BUILDS ANY MAPPING (no dict literal, dict() call, or dict comprehension), CALLS json AT ALL (so nothing is dumped, and nothing is loaded-then-rewritten), or EMITS ANY JSON TEXT (no string literal or f-string carrying braces; their f-strings build filenames, a glob, a timestamp format and two [warn] lines). Re-check it as that property. Checking only for json.dumps and event-shaped dict literals would still report zero the day someone adds a dict(...) — the criterion has to outlive the conclusion — hook producers get cc/codex from their command line; bin entries (workframe-event, workframe-recompute-board-summary, workframe-recompute-skill-metrics; they all accept --harness, pass it when you know the door) — and that parenthesis is THE list: anything that tells a model to pass --harness must point here rather than retype the names, because a second copy silently misses the fourth event-writing entry the day one appears. Passing it to a bin entry that is NOT on this list is not harmless: workframe-doctor and workframe-module-close-check parse args and exit 2 on an unknown one, and BOTH already use a non-zero exit to mean 'I found problems', so the argument error and a real finding look identical in the terminal — the reader goes looking at the project instead of at the argument. When the caller did not say, the two recompute entries write `unknown`; workframe-event — meant to be run by the model inside a session; a script the session starts inherits the same variables and is attributed to that session's door — names the door only when exactly one door's session marker is in its environment (CLAUDE_CODE_SESSION_ID alone, or Codex's CODEX_THREAD_ID / CODEX_SESSION_ID alone) and writes `unknown` when both are there (nested start) or neither is: _harness.command_door(). That is an environment read, and it is confined to this entry on purpose: hooks and background processes can carry only the OUTER door's variables, so there the same read would be confidently wrong. So an ABSENT field means the line was not written by v3+ code: it either predates v3, or the model hand-wrote it (the instruction to use workframe-event travels in the injected discipline shards; on Codex the SessionStart main shard additionally carries a `本会话 harness=codex session_id=…` line and the bin command falls back to the per-session marker file, so the instruction is DELIVERED to the Codex MAIN thread — observed by a zero-credential probe reading the rollout's context items. Narrower than it sounds: for sub-agent threads only the channel is verified (a review-type sub thread received the sub shard); full-shard arrival in `spawn_agent`-type sub threads has NOT been verified, and whether the model ACTS on the instruction on either thread type has not been observed — see __delivery_established__ for why the flag stays false). Consumers MUST keep the two apart — _harness.harness_breakdown() reports them as `unknown` vs `unstamped` — and MUST NOT re-default a v3-era `unknown` back to `cc`. Re-defaulting would silently misattribute a bin entry run from the Codex door or from a nested start, which is the exact failure this field exists to prevent; the cost of NOT re-defaulting is only that a CC-only project sees a small `unknown` bucket for manually run commands, which is a true statement rather than a lucky guess.",
  "availability_values": {
   "__doc__": "Per-event, per-harness producibility. Consumers MUST print a data-source line derived from this map before any cross-harness count, otherwise a structural absence reads as a real signal (e.g. 'Codex sessions fail less' when in fact turn_failed cannot be captured there). Computed, never hand-copied: _harness.events_by_availability() / _harness.harness_breakdown().",
   "full": "Producer path exists on that harness with the same coverage as the other one.",
@@ -34,8 +34,7 @@
    "consumers": [
     "librarian (skill-metrics.yaml)",
     "audit",
-    "self-iteration",
-    "check-iteration-trigger.py (per-session activity cap)"
+    "self-iteration"
    ],
    "fields": {
     "ts": "ISO-8601 string, required",
@@ -43,13 +42,13 @@
     "skill": "skill name string, required",
     "role": "agent role string, required",
     "success": "boolean, required (true=delivered promised artifact / false=did not deliver, user rejected, blocked exit, voluntary abort)",
-    "session_id": "string, optional but strongly recommended — used by check-iteration-trigger.py to enforce per-session activity cap (3.0 per session). Source: $CLAUDE_CODE_SESSION_ID env var (injected into Bash subprocesses since CC 2.1.132, same value as hooks' stdin session_id) when available, else omit (script falls back to ts which silently disables the cap). Note: $CLAUDE_SESSION_ID (without CODE) was never a Bash env var — it is the SKILL.md content substitution syntax.",
+    "session_id": "string, optional. Source: $CLAUDE_CODE_SESSION_ID env var (injected into Bash subprocesses since CC 2.1.132, same value as hooks' stdin session_id) when available, else omit. Note: $CLAUDE_SESSION_ID (without CODE) was never a Bash env var — it is the SKILL.md content substitution syntax.",
     "source": "string, optional — obsidian-* skills: 'cli' | 'fallback'",
     "cli_available": "boolean, optional — obsidian-* skills: whether the Obsidian CLI was usable",
     "fallback_used": "boolean, optional — obsidian-* skills: whether it degraded to Read/rg",
     "operation": "string, optional — obsidian-* / doc-graph-health: sub-operation name"
    },
-   "caveats": "Counts may be slightly off if a subagent skips wrap-up. (The older 'preloaded but unused skill' caveat no longer applies: agent frontmatter preloading is retired, and a skill merely named in the SubagentStart point-name section produces no skill_used event unless it is actually invoked.) Corroborate with rollback_applied / proposal_applied for high-confidence skill activity. Without session_id, per-session cap silently devolves into per-event cap. The four optional extension fields are written by the obsidian-* skills and doc-graph-health; consumers must tolerate their absence and must not reject events that carry them."
+   "caveats": "Counts may be slightly off if a subagent skips wrap-up. (The older 'preloaded but unused skill' caveat no longer applies: agent frontmatter preloading is retired, and a skill merely named in the SubagentStart point-name section produces no skill_used event unless it is actually invoked.) Corroborate with rollback_applied / proposal_applied for high-confidence skill activity. The four optional extension fields are written by the obsidian-* skills and doc-graph-health; consumers must tolerate their absence and must not reject events that carry them."
   },
   "user_correction": {
    "reliability": "protocol_expected",
@@ -60,7 +59,7 @@
    },
    "producer": "the correction-detection flow (judgement half in the injected main shard, procedure half in skill signal-intake) writes immediately when it writes the [纠正] entry (role/shared MEMORY, or auto-memory when scope=main per the 记忆分工 contract), or updates authoritative module documents / module-memory.md when scope=module; agent wrap-up must not emit a duplicate user_correction for the same correction",
    "consumers": [
-    "check-iteration-trigger.py (problem weight 3.0)",
+    "background self-iteration (_selfiter_candidates.py: every correction nobody has dealt with; verify_due: the same problem after a change)",
     "librarian",
     "memory-log"
    ],
@@ -86,7 +85,6 @@
    },
    "producer": "Primary producer = test-case-design skill (QA-driven flow: test failure → SEC/BUG issue → status=blocked → skill appends event). Fallback producer = current agent wrap-up (the event-stream step of the injected common protocol shard), restricted to non-QA / manual blocked transitions that did NOT go through test-case-design; fallback MUST dedup-check the FULL events.jsonl for the same task_id before appending (task_id-only scope — this schema has no session_id field, so session-scoped dedup is not machine-executable; full-history is a conservative approximation that may skip a repeated manual re-block of the same task, accepted trade-off, see the task_blocked fallback dedup rule in the injected common protocol shard).",
    "consumers": [
-    "check-iteration-trigger.py (problem weight 2.0)",
     "audit",
     "skill-metrics.yaml (blocks_count)"
    ],
@@ -96,18 +94,17 @@
     "task_id": "string",
     "role": "agent role string"
    },
-   "caveats": "Producer policy is primary+fallback (NOT sole producer) — see the task_blocked producer policy in the injected common protocol shard (§Step 1 — 事件流). Without dedup, both test-case-design and wrap-up would append for the same QA-driven blocked transition, double-counting the 2.0 problem weight. Do NOT revert producer wording to 'qa agent wrap-up' alone (qa wrap-up alone misses skill-driven appends) nor to 'sole producer = test-case-design' (which contradicts the fallback path for non-QA / manual blocked transitions). Starvation record (2026-08 audit, G1#3): zero occurrences in 3+ months of consumer-project events — diagnosed as architectural starvation, NOT producer breakage (project QA loop idle; board history has zero blocked tasks). Mechanism and weight retained as-is; consumer pipeline verified by synthetic drill 2026-08-06. Doctor labels count==0 + producer-text-present as 'never-triggered (starved)', distinct from missing-producer 'broken promise'."
+   "caveats": "Producer policy is primary+fallback (NOT sole producer) — see the task_blocked producer policy in the injected common protocol shard (§Step 1 — 事件流). Without dedup, both test-case-design and wrap-up would append for the same QA-driven blocked transition, double-counting it. Do NOT revert producer wording to 'qa agent wrap-up' alone (qa wrap-up alone misses skill-driven appends) nor to 'sole producer = test-case-design' (which contradicts the fallback path for non-QA / manual blocked transitions). Starvation record (2026-08 audit, G1#3): zero occurrences in 3+ months of consumer-project events — diagnosed as architectural starvation, NOT producer breakage (project QA loop idle; board history has zero blocked tasks). Mechanism retained as-is; consumer pipeline verified by synthetic drill 2026-08-06. Doctor labels count==0 + producer-text-present as 'never-triggered (starved)', distinct from missing-producer 'broken promise'."
   },
   "session_ended": {
    "reliability": "hook_deterministic",
    "availability": {
     "cc": "full",
     "codex": "full",
-    "note": "唯一 producer 是 session-end-flush.py，只挂 `SessionEnd` 一处，**没有任何门无关的旁路**。`SessionEnd` 在 Codex 侧**已被观察到执行**：早期探针的 marker 计数（`codex exec` 一次 +1；review 型子线程上只在父线程触发一次）、装机器零凭据验活会话里本事件以 `harness: codex` 落盘（`workframe-door --check --live` 把它列为五条无条件侧效应之一）。无 matcher、无第二条路径 ⇒ `full`。**边界**：只在 `codex exec` 与 review 型两条路径上观察过；app-server 客户端直接杀线程（无 SessionEnd）时本事件缺席是客户端行为，不是本门的结构缺口。"
+    "note": "唯一 producer 是 session-end-flush.py，只挂 `SessionEnd` 一处，**没有任何门无关的旁路**。`SessionEnd` 在 Codex 侧**已被观察到执行**：早期探针的 marker 计数（`codex exec` 一次 +1；review 型子线程上只在父线程触发一次）、装机器零凭据验活会话里本事件以 `harness: codex` 落盘（`workframe-door --check --live` 把它列为四条无条件侧效应之一；它只验本事件，不验后面两条重算）。无 matcher、无第二条路径 ⇒ `full`。**边界**：只在 `codex exec` 与 review 型两条路径上观察过；app-server 客户端直接杀线程（无 SessionEnd）时本事件缺席是客户端行为，不是本门的结构缺口。"
    },
    "producer": "session-end-flush.py (SessionEnd hook)",
    "consumers": [
-    "session-digest",
     "audit"
    ],
    "fields": {
@@ -132,7 +129,7 @@
     "ts": "ISO-8601 string, required",
     "type": "literal 'summary_recomputed'",
     "status": "ok | skipped | error",
-    "reason": "string, only when status=skipped or status=error (board_not_found | summary_block_not_found | unknown_statuses_in_tasks | tasks_unparsed | parse_mismatch | board_yaml_unparsable | exception detail)",
+    "reason": "string, only when status=skipped or status=error (board_not_found | summary_block_not_found | unknown_statuses_in_tasks | tasks_unparsed | parse_mismatch | board_yaml_unparsable | board_changed_meanwhile | board_busy | exception detail)",
     "total": "integer, only when status=ok",
     "counts": "object mapping status name to count, only when status=ok"
    }
@@ -382,29 +379,29 @@
   "modules_index_rebuilt": {
    "reliability": "hook_deterministic",
    "availability": {
-    "cc": "full",
-    "codex": "full",
-    "note": "rebuild_full_index() 有三个调用点：scan_git_diff_for_stale()（SessionStart，两门可得）、main() 的 rebuild-index 子命令（CLI，两门可得）、lookup_submodules() 的损坏兜底（经 PostToolUse（codex-cli 0.166.0 真实会话实测：`Edit|Write|NotebookEdit` 这条 matcher 在 Codex 命中 `apply_patch`，check-stale-modules 从补丁头取路径））。三条都已确立，故 full。"
+    "cc": "none",
+    "codex": "none",
+    "note": "当前版本**不再写入**本事件（只记成功的流水没有读者）；两门都没有 producer，旧事件流里仍可能有存量行，读到时按历史数据解释。写入时的口径（留作读旧数据的依据）：两个发射点：ensure_fresh_index() 的过期重建——由 scan_git_diff_for_stale()（SessionStart，两门可得）、lookup_submodules()（经 PostToolUse（codex-cli 0.166.0 真实会话实测：`Edit|Write|NotebookEdit` 这条 matcher 在 Codex 命中 `apply_patch`，check-stale-modules 从补丁头取路径））与模块记忆投递调用；以及 main() 的 rebuild-index 子命令（CLI，两门可得，trigger=manual）。都已确立，故 full。init_index_for_submodule() 与 CLI init-submodule（module-init、migrate-to-modules 走这条）也全量重建但不发本事件（PostToolUse 路径另写 modules_index_segment_rebuilt）。"
    },
-   "producer": "check-stale-modules.py rebuild_full_index() — fallback 全量重建（损坏检测 / migrate-to-modules / 手动 `python check-stale-modules.py rebuild-index`）",
+   "producer": "none（已停写）— 旧数据的来源：check-stale-modules.py — ensure_fresh_index() 过期重建（缺 built_at / 形态坏 → fallback；source_stamp 与声明不符 → drift）/ 手动 `python check-stale-modules.py rebuild-index`（manual）；init-submodule（module-init / migrate-to-modules）不发本事件；有声明读不了时不重建、不发本事件",
    "consumers": [
     "audit (modules index health)"
    ],
    "fields": {
     "ts": "ISO-8601 string, required",
     "type": "literal 'modules_index_rebuilt'",
-    "trigger": "fallback | manual | migration",
+    "trigger": "fallback | manual | migration | drift",
     "buckets": "int, number of prefix buckets after rebuild"
    }
   },
   "modules_index_segment_rebuilt": {
    "reliability": "hook_deterministic",
    "availability": {
-    "cc": "full",
-    "codex": "full",
-    "note": "唯一发射点在 check-stale-modules.py 的 process_postool_use()，即挂 PostToolUse (matcher Edit|Write|NotebookEdit) 的那条，Codex 侧事件与 matcher 两层都已确立（codex-cli 0.166.0 真实会话实测：`Edit|Write|NotebookEdit` 这条 matcher 在 Codex 命中 `apply_patch`，check-stale-modules 从补丁头取路径），故 full。另已实证：Codex 的 PostToolUse 对**失败的**工具调用不触发，任何以它为输入的「尝试次数」类计数在 Codex 侧系统性偏低。"
+    "cc": "none",
+    "codex": "none",
+    "note": "当前版本**不再写入**本事件（只记成功的流水没有读者）；两门都没有 producer，旧事件流里仍可能有存量行，读到时按历史数据解释。写入时的口径（留作读旧数据的依据）：唯一发射点在 check-stale-modules.py 的 process_postool_use()，即挂 PostToolUse (matcher Edit|Write|NotebookEdit) 的那条，Codex 侧事件与 matcher 两层都已确立（codex-cli 0.166.0 真实会话实测：`Edit|Write|NotebookEdit` 这条 matcher 在 Codex 命中 `apply_patch`，check-stale-modules 从补丁头取路径），故 full。另已实证：Codex 的 PostToolUse 对**失败的**工具调用不触发，任何以它为输入的「尝试次数」类计数在 Codex 侧系统性偏低。"
    },
-   "producer": "check-stale-modules.py PostToolUse on **/submodule.yaml — 增量重建该子模块的索引段",
+   "producer": "none（已停写）— 旧数据的来源：check-stale-modules.py PostToolUse on **/submodule.yaml — 全量重建索引（事件名沿用；有声明读不了时不发）",
    "consumers": [
     "audit",
     "code-to-doc (downstream)"
@@ -475,9 +472,9 @@
    "availability": {
     "cc": "full",
     "codex": "full",
-    "note": "三条发射路径：_git_lines() 与 scan_git_diff_for_stale()（均在 SessionStart 链路上，两门可得）、main() 的 PostToolUse 顶层兜底（codex-cli 0.166.0 真实会话实测：`Edit|Write|NotebookEdit` 这条 matcher 在 Codex 命中 `apply_patch`，check-stale-modules 从补丁头取路径）。三条都已确立，故 full。"
+    "note": "三条发射路径：_git_lines() 与 scan_git_diff_for_stale()（均在 SessionStart 链路上，两门可得）、main() 的 PostToolUse 顶层兜底（codex-cli 0.166.0 真实会话实测：`Edit|Write|NotebookEdit` 这条 matcher 在 Codex 命中 `apply_patch`，check-stale-modules 从补丁头取路径），另有 _rebuild_unlocked() 在声明读不了时留痕（经上述两条链路与 CLI 子命令到达）。都已确立，故 full。"
    },
-   "producer": "check-stale-modules.py — 故障留痕汇集点：process_postool_use() 顶层异常捕获，以及 scan-git-diff 路径的 git 命令失败（error 前缀 scan_git_failed）/ 入口索引保障锁超时（scan_ensure_index_lock_timeout）/ 扫描未预期崩溃兜底（scan_git_diff_crashed）",
+   "producer": "check-stale-modules.py — 故障留痕汇集点：process_postool_use() 顶层异常捕获，以及 scan-git-diff 路径的 git 命令失败（error 前缀 scan_git_failed）/ 入口索引保障锁超时（scan_ensure_index_lock_timeout）/ 扫描未预期崩溃兜底（scan_git_diff_crashed）/ 有声明读不了、索引未重建（index_rebuild_skipped_unreadable）",
    "consumers": [
     "audit (error trail)"
    ],
@@ -511,12 +508,11 @@
    "availability": {
     "cc": "full",
     "codex": "none",
-    "note": "唯一 producer 是 log-stop-failure.py，挂 StopFailure——Codex 侧**无对等 hook 事件**。连带后果：check-iteration-trigger.py 加权积分里 turn_failed 在 Codex 侧恒为 0，**问题信号被系统性低估**；这是已拍板的产品决策——只披露，不凭猜给某一扇门补分。"
+    "note": "唯一 producer 是 log-stop-failure.py，挂 StopFailure——Codex 侧**无对等 hook 事件**。连带后果：turn_failed 在 Codex 侧恒为 0，**问题信号被系统性低估**；这是已拍板的产品决策——只披露，不凭猜给某一扇门补分。"
    },
    "producer": "log-stop-failure.py (StopFailure hook, CC 2.1.78+) — turn 因 API 错误（rate limit / auth 等）终止时记录",
    "consumers": [
-    "audit (SessionEnd 链路可能缺状态的旁证)",
-    "session-digest (best-effort 参考)"
+    "audit (SessionEnd 链路可能缺状态的旁证)"
    ],
    "fields": {
     "ts": "ISO-8601 string, required",
@@ -524,7 +520,7 @@
     "session_id": "string, optional (hook stdin 提供时写入)",
     "detail": "string, optional, error message truncated to 200 chars"
    },
-   "caveats": "CC 对 StopFailure stdin 的错误字段名未硬承诺，detail 缺失属正常；事件仅作审计旁证，不参与 check-iteration-trigger 加权。"
+   "caveats": "CC 对 StopFailure stdin 的错误字段名未硬承诺，detail 缺失属正常；事件仅作审计旁证。"
   },
   "config_changed": {
    "reliability": "hook_deterministic",
@@ -619,7 +615,7 @@
     "module": "string, required — normalized module identifier basic or basic/sub",
     "tool": "string, required — triggering tool name",
     "chars": "integer, required — actual emitted block length in UTF-16 code units, including its allocated header / separator; zero when nothing is emitted. Capacity is separately measured with Python len()",
-    "outcome": "injected | skipped_dedup | missing | read_failed | over_budget | lock_timeout | error — only injected marks the module delivered; over_budget emits a path reminder and retries on the next touch",
+    "outcome": "injected | skipped_dedup | missing | read_failed | over_budget | lock_timeout | error — skipped_dedup appears only in historical data (already-delivered skips are no longer recorded); only injected marks the module delivered; over_budget emits a path reminder and retries on the next touch",
     "error": "string, optional — short unexpected exception cause when outcome=error",
     "diagnostic": "string, optional — short read / lock / delivery failure cause"
    },
@@ -635,7 +631,7 @@
    "producer": "scripts/log-skill-invoked.py, wired to two entries: UserPromptExpansion (user types /skill-name; the command expands into a prompt WITHOUT going through the Skill tool) and PostToolUse matcher:Skill (model invokes the Skill tool). The first entry is the important one — direct slash-command typing is the most common way skills get used. Field extraction is multi-candidate by design (command / command_name / prompt / user_prompt / expanded_prompt): CC makes no hard promise about the UserPromptExpansion stdin schema, and betting on a single key means this entry fails 100% silently if the key is named differently — no events at all, while every consumer concludes 'nobody uses skills'.",
    "consumers": [
     "workframe_doctor.py check_events_parse (近 30 天调起数，与 skill_used 并列展示、不相加)",
-    "audit (可读；当前 SKILL 输出模板未单列该行，展示与否由该 skill 自行决定)"
+    "audit (报告的事件统计里与 skill_used 分两行展示，不相加)"
    ],
    "relationship_to_skill_used": "COEXIST, NEVER SUM. skill_invoked answers 'was it invoked' (code-guaranteed); skill_used answers 'was it used and did it deliver' (model-written, carries the success self-assessment). One invocation produces both — adding them double-counts.",
    "fields": {
@@ -664,7 +660,7 @@
     "ts": "ISO-8601 string, required（UTC ＋ 秒级）",
     "type": "literal 'role_memory_injected'",
     "role": "string or null — the role whose MEMORY.md was considered (`shared` for the opening); null when outcome=unmapped (or skipped_subthread on an unmapped skill)",
-    "outcome": "injected | skipped_dedup | skipped_subthread | unmapped | read_failed | over_budget — over_budget means a shortened form (entry directory + path, visibly marked 未完整加载) was delivered instead of the full text",
+    "outcome": "injected | skipped_dedup | skipped_subthread | unmapped | read_failed | over_budget — skipped_dedup appears only in historical data (already-delivered skips are no longer recorded); over_budget means a shortened form (entry directory + path, visibly marked 未完整加载) was delivered instead of the full text",
     "trigger": "session_start | skill_tool | command_expansion | skill_read | skill_mention | code_path | compact",
     "skill": "optional — FULL skill name with plugin prefix (e.g. core:test-case-design), the key used against role-memory-map.json. Unlike skill_invoked.skill it is NOT stripped, because it records the mapping lookup, not a usage count",
     "file": "optional — project-relative path of the edit that fired a code_path trigger",
@@ -677,14 +673,14 @@
   "self_signoff": {
    "reliability": "hook_deterministic",
    "availability": {
-    "cc": "full",
-    "codex": "full",
-    "note": "由 signoff-guard.py 在看板签注**本次新出现或改过且通过校验**时写，不再要求模型手写。CC 门经 Edit/Write 与 Bash 写看板都会写；Codex 门经 shell 与 `apply_patch` 写看板都会写（`apply_patch` 载荷无文件路径，hook 从补丁头取被改路径；两条 matcher 在 Codex 的命中 codex-cli 0.166.0 实测）。首次建快照那一轮不写（只建基线）。**写进事件不等于拦住了**：exit 2 在 Codex 下的处置未经真实会话验证。"
+    "cc": "none",
+    "codex": "none",
+    "note": "当前版本**不再写入**本事件（只记成功的流水没有读者）；两门都没有 producer，旧事件流里仍可能有存量行，读到时按历史数据解释。写入时的口径（留作读旧数据的依据）：由 signoff-guard.py 在看板签注**本次新出现或改过且通过校验**时写，不再要求模型手写。CC 门经 Edit/Write 与 Bash 写看板都会写；Codex 门经 shell 与 `apply_patch` 写看板都会写（`apply_patch` 载荷无文件路径，hook 从补丁头取被改路径；两条 matcher 在 Codex 的命中 codex-cli 0.166.0 实测）。首次建快照那一轮不写（只建基线）。**写进事件不等于拦住了**：exit 2 在 Codex 下的处置未经真实会话验证。"
    },
-   "producer": "signoff-guard.py（PostToolUse：Edit|Write|NotebookEdit 与 Bash），签注通过校验且相对快照是新出现或改过的那一条",
+   "producer": "none（已停写）— 旧数据的来源：signoff-guard.py（PostToolUse：Edit|Write|NotebookEdit 与 Bash），签注通过校验且相对快照是新出现或改过的那一条",
    "consumers": [
-    "audit (分开统计「自理」与「独立验证」两种签发的事后问题率——自理那批是否更容易返工)",
-    "self-iteration (自理占比与事后问题率是签发分类是否过松的唯一反馈回路)"
+    "audit (只读旧数据：分开统计「自理」与「独立验证」两种签发的事后问题率)",
+    "self-iteration (只读旧数据：自理占比与事后问题率；当前版本不再产生新记录，这条反馈回路只剩存量)"
    ],
    "fields": {
     "ts": "ISO-8601 string, required（UTC ＋ 秒级）",
@@ -722,9 +718,9 @@
   "selfiter_job_finished": {
    "reliability": "hook_deterministic",
    "availability": {"cc": "partial", "codex": "partial", "note": "Controller records completed result handling; this does not claim semantic effectiveness."},
-   "producer": "selfiter_controller.Controller.apply_result after durable job result",
+   "producer": "selfiter_controller.Controller.run and _finish after a durable job result",
    "consumers": ["audit", "self-iteration job history"],
-   "fields": {"ts": "UTC second precision", "type": "literal selfiter_job_finished", "job_id": "string, required", "status": "completed"}
+   "fields": {"ts": "UTC second precision", "type": "literal selfiter_job_finished", "job_id": "string, required", "status": "completed | deferred"}
   },
   "selfiter_job_failed": {
    "reliability": "hook_deterministic",

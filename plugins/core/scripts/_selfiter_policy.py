@@ -17,7 +17,7 @@ DEFAULTS = {
     'mode': 'apply', 'doors': ['cc', 'codex'],
     'model': {'cc': None, 'codex': None},
     'limits': {'per_project_days': 7, 'global_per_day': 1,
-               'timeout_seconds': 900, 'max_evidence_chars': 40000},
+               'timeout_seconds': 900, 'max_evidence_chars': 80000},
 }
 MODES = ('off', 'propose', 'apply')
 
@@ -76,8 +76,9 @@ def _validate_section(section):
 def merge_config(user, project):
     """Missing user file uses defaults; present invalid data never does.
 
-    Project settings can only tighten user policy. Longer intervals are tighter;
-    smaller maxima are tighter. Unknown keys are inert, never executable options.
+    The user mode is a ceiling. Writing also needs the project itself to say `apply`:
+    a project that says nothing only gets suggestions. Other project settings can only
+    tighten user policy. Longer intervals are tighter; smaller maxima are tighter. Unknown keys are inert, never executable options.
     """
     if user is not None and (not isinstance(user, dict)
                              or type(user.get('version')) is not int or user['version'] != 1):
@@ -96,7 +97,7 @@ def merge_config(user, project):
     # User policy also cannot silently exceed the published frequency ceilings.
     result['limits']['per_project_days'] = max(7, result['limits']['per_project_days'])
     result['limits']['global_per_day'] = min(1, result['limits']['global_per_day'])
-    result['mode'] = MODES[min(MODES.index(result['mode']), MODES.index(p.get('mode', 'apply')))]
+    result['mode'] = MODES[min(MODES.index(result['mode']), MODES.index(p.get('mode', 'propose')))]
     result['doors'] = [x for x in result['doors'] if x in p.get('doors', result['doors'])]
     for key, value in p.get('limits', {}).items():
         if key in result['limits']:

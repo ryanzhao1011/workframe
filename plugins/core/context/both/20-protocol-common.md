@@ -38,7 +38,7 @@ shared 与 role 不一致时以 shared 为准；两者都未记录的话题沿�
 - **`role` 取值**：subagent 填自己的角色名（`pm` / `dev` / `qa` / `prompt-eng` 或项目自定义角色）；**主会话直做时填 `main`**。
 - **`success` 取值**：产出了承诺的交付物填 `true`；未产出（内部错误 / 工具失败 / 信息不足放弃 / 阻塞退出）或用户当场否定产出填 `false`。该字段是自评，**不作质量信号**，但消费方仍在读，勿删。真实失败信号看 `turn_failed` 与 `user_correction`。
 - 无 skill 使用时跳过事件写入。
-- **`session_id`**：由 `workframe-event` 自己取（三级兜底），手写时不必也不该自拼。它只对 `skill_used` 有消费方（自迭代触发的 per-session cap）；取不到时该字段**省略**，消费方回退到按 ts 分桶、per-session cap 在那一门下失效。
+- **`session_id`**：由 `workframe-event` 自己取（三级兜底），手写时不必也不该自拼。只随 `skill_used` 记；取不到时该字段**省略**。
 - 用户纠正事件在按分流写入目标资产时**当场**写一条 `user_correction`；收尾时不要为同一条纠正再补一条。
 
 **`task_blocked` 的 producer 策略**（防重复计数）：主 producer = `test-case-design` skill（QA 测试失败创建 Issue → 任务转 blocked → skill 内部已 append）。走了它就**不要**在收尾再补。fallback producer = 当前角色的收尾，仅限「非 QA 角色直接把任务标 blocked」与「用户／主会话手动改 blocked」两种。**fallback 前必须先扫事件流确认没有同 `task_id` 的 `task_blocked`**（文件不存在视为无命中；schema 不含 session_id，dedup 只以 `task_id` 为准）——`workframe-event` 已内建这条检查。

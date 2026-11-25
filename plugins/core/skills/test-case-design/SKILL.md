@@ -55,7 +55,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 - **打回重做要三版并列**（原始基线 / 被打回版 / 返工版）——只比两版，会把「返工新引入的」和「首轮就在的」糊成一片
 - **方向错阻断，尺度严登记**——假绿（该拦没拦）阻断，假红（多拦了、方向 fail-safe）登记不阻断；完整判据见 skill: `code-review` 第 3 步
 
-> 各档判据详解、反例与非代码场景对照，见 `reference/test-scoping.md`——**Read 按会话工作目录解析相对路径，不按 skill 目录**，实际要读的是 `"$(cat .workframe/state/plugin-root.txt)/skills/test-case-design/reference/test-scoping.md"`。插件目录在项目外，读不到时上面的三问与四档表已够定档。
+> 各档判据详解、反例与非代码场景对照，见 `reference/test-scoping.md`——**Read 按会话工作目录解析相对路径，不按 skill 目录**，实际要读的是 `"$WF_PLUGIN_ROOT/skills/test-case-design/reference/test-scoping.md"`。插件目录在项目外，读不到时上面的三问与四档表已够定档。
 
 ### 第 1 步：解析验收标准
 
@@ -73,6 +73,8 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 基于 AC 和代码变更，**按第 0 步选出的档位**生成用例：档 1 只出主路径用例，档 2 起补 Sad / Boundary，档 3 起补边界矩阵。下面三类是**档位选中时**各自的写法，不是无条件全做。
 
 **落盘路径**：`projects/modules/<basic>/<sub>/requirements/<req_slug>/<sub_req_slug>/test-cases/<TC-ID>.yaml`
+
+**落盘成功后刷新导航**：`python "$WF_PLUGIN_ROOT/scripts/module_init.py" --project . --refresh-index --scope <刚写的用例文件>`——需求页「用例」列逐个链接 `test-cases/` 下的文件，不刷则新用例在导航里看不到。
 
 > **YAML 顶层字段**（不是 markdown frontmatter——test-case 文件本身就是 .yaml）：需含 `type: test-case`（document-norms §2.3 文档类型枚举）+ `case_type: happy_path|sad_path|boundary`（用例细分类）+ `module: <basic>/<sub>` + `req_slug: <req_slug>` + `sub_req_slug: <sub_req_slug>` + `case_id` + `ac_ref` + `preconditions` + `steps` + `expected` 等业务字段（三类用例的字段 schema 见本 skill 下文，不在 document-norms）。`version` 字段已废除。
 >
@@ -172,11 +174,11 @@ Issue 字段定义的**唯一权威来源**：`projects/issues/TEMPLATES.md`
 - `board.yaml` 对应任务状态从 `pending_qa` 改为 `blocked`
 - 任务 `notes` 字段引用新创建的 Issue ID
 - 响应中明确告知用户 Issue ID 和 severity，以便后续跟踪
-- **必须** append `.workframe/state/events.jsonl`（这是 self-iteration `problem` 加权分权重 2.0 的唯一可靠来源）：
+- **必须** append `.workframe/state/events.jsonl`（skill-metrics 的阻塞证据取自它）：
   ```json
   {"ts":"<ISO-8601>","type":"task_blocked","task_id":"<TASK-ID>","role":"qa"}
   ```
-  缺这条事件会导致 task_blocked 在 skill-metrics / self-iteration 触发器中永远是 0。
+  缺这条事件会导致 task_blocked 在 skill-metrics 中永远是 0。
 
 ### 第 5 步：签发结单
 

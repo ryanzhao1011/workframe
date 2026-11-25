@@ -22,13 +22,13 @@ auto_sections:
 ## current-state 摘要
 
 <!-- WORKFRAME:AUTO-INDEX:START:current-state-summary -->
-> ⚙️ 此段由 `module-index-refresh` 自动维护，请勿手动编辑。基于 `current-state/` 4 个文件提炼摘要。
+> ⚙️ 此段由 `module-index-refresh` 自动维护。每行「：」之后到第一个「；」由脚本按 `current-state/` 取数，「；」之后的文字由人写、刷新时原样保留。
 
-- **架构**：_（待 code-to-doc 生成 architecture.md 后摘要）_
-- **API**：_（待 code-to-doc 生成 api-surface.md 后摘要）_
-- **数据模型**：_（待 code-to-doc 生成 data-model.md 后摘要）_
-- **代码索引**：_（待 code-to-doc 生成 code-map.md 后摘要）_
-- **最近同步**：_（last_synced_at；已同步后在日期后附「基准 commit <last_synced_ref>」括注）_
+- **架构**：_（未编写）_
+- **API**：_（未编写）_
+- **数据模型**：_（未编写）_
+- **代码索引**：_（未编写）_
+- **最近同步**：_（未同步）_
 
 <!-- WORKFRAME:AUTO-INDEX:END:current-state-summary -->
 
@@ -37,11 +37,11 @@ auto_sections:
 ## 需求清单
 
 <!-- WORKFRAME:AUTO-INDEX:START:requirements-index -->
-> ⚙️ 此段由 `module-index-refresh` 自动维护，请勿手动编辑。基于 `requirements/<req_slug>/meta.yaml` 提炼。
+> ⚙️ 此段由 `module-index-refresh` 自动维护，请勿手动编辑。基于 `requirements/<req_slug>/meta.yaml` 计数。
 
-| req_slug | status | 子需求数 | owner | 摘要 |
-|---|---|---|---|---|
-| _（暂无需求。运行 `/core:module-init` 创建）_ | - | - | - | - |
+进行中 0 · 规划 0 · 已完成 0 · 已放弃 0 · 状态未知 0
+
+完整清单见 [requirements/overview.md](<./requirements/overview.md>)。
 
 <!-- WORKFRAME:AUTO-INDEX:END:requirements-index -->
 

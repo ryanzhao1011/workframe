@@ -21,7 +21,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
    读到同一份文件；链接在而目标目录暂缺时也按 `.agents/skills/` 算），否则是 `.claude/skills/`（已装项目的真目录）。
    **缺失时 fallback**：读框架默认模板
    `<插件根>/templates/project-skills/prd-style/SKILL.md`（插件根 =
-   `cat .workframe/state/plugin-root.txt`）照用，并提示用户
+   `$WF_PLUGIN_ROOT`）照用，并提示用户
    「本项目未配置 PRD 框架，本次按框架默认执行；正常装机会自动放入，可跑 doctor 检查，
    或从上述模板复制到 `<项目 skills 目录>/prd-style/` 后按需修改」。
 3. `writing-guide.md`（S3 填充前读）：core 通用写作纪律。与项目框架冲突时**以项目为准**
@@ -85,6 +85,15 @@ projects/modules/<basic>/<sub>/current-state/api-surface.md
 projects/modules/<basic>/<sub>/requirements/overview.md               ← 需求清单
 projects/modules/<basic>/<sub>/requirements/<req_slug>/*/prd.md       ← 同需求下其他子需求（拆子需求时必读，避免重复设计）
 ```
+
+**读现状四件与兄弟 PRD 之前先判它们写没写**（骨架会被当成实现现状读）：
+
+```bash
+python "$WF_PLUGIN_ROOT/scripts/module_init.py" --project . --doc-state <路径…>
+```
+
+每行 `<状态>\t<路径>`。只读 `written` 与 `unstamped` 的；`unwritten` 的不读，在需求理解里写明「哪几篇未编写」。
+不要自己解释 frontmatter 里的 `unwritten` 字段——它的值是正文摘要，是否仍有效只有这条命令判得了。
 
 若 Obsidian CLI 可用，可先调 `obsidian-doc-structure` 读候选文档的 outline 与 properties
 判断精读范围；修改或新建正式文档前后可调 `obsidian-link-audit` 做断链检查。
@@ -163,10 +172,12 @@ projects/modules/<basic>/<sub>/requirements/<req_slug>/*/prd.md       ← 同需
      子需求 `main/` 与 `prd.md` 占位骨架）；落盘时覆盖占位骨架
    - **新增子需求**（已有 `<req_slug>/main/` 想拆新子需求）：从
      `<插件根>/templates/modules-template/requirement/main/`（插件根 =
-     `cat .workframe/state/plugin-root.txt`）复制整个子需求
+     `$WF_PLUGIN_ROOT`）复制整个子需求
      骨架到 `<req_slug>/<sub_req_slug>/`，逐文件替换 `{{SUB_REQ_SLUG}}` / `{{REQ_SLUG}}` /
      `{{MODULE_PATH}}` / `{{REQ_TITLE}}` / `{{NOW_ISO}}` / `{{TODAY}}`（子需求骨架共 6 个占位符；`{{OWNER_ROLE}}` 只在 req 级 meta.yaml/overview.md 与模块级 yaml 里，不在本流程的复制范围）
-     占位符；不挪已有子需求内容
+     占位符；不挪已有子需求内容。替换完立刻给新 `prd.md` 盖未编写戳：
+     `python "$WF_PLUGIN_ROOT/scripts/module_init.py" --project . --mark-unwritten <新 prd.md>`
+     （漏了这一步它停在 `unstamped`：按已编写展示，收口闸报 warn）
    - **改既有 prd.md vs 新建 `<sub_req_slug>/`**（详见 `module-architecture.md` §4.3
      决策树）：微调 / 文案 / 字段补充 / 小 AC 修正 → 改既有 `prd.md` + 变更记录一行；
      新用户故事 / 新主流程 / 范围显著变化 / 测试矩阵独立 → 新建 `<sub_req_slug>/`；
@@ -174,8 +185,11 @@ projects/modules/<basic>/<sub>/requirements/<req_slug>/*/prd.md       ← 同需
    - **格式跟随（硬纪律）**：迭代的既有 PRD 若是接入前的用户自有格式（章节与项目框架
      不一致），**格式跟随原文档，只动内容**——不经用户同意不做格式规范化；可弱提醒一次
      「要把这份迁移到项目 PRD 框架 / 把你的风格固化进框架吗」，用户不接就照原样写
-   - **覆盖占位骨架检测**：写盘前先 Read 目标 `prd.md`；仍是模板占位（含 `{{REQ_TITLE}}`
-     等未替换占位符或空骨架章节）→ 直接覆盖；已有用户实质内容 → 警示确认，避免静默覆盖
+   - **覆盖占位骨架检测**：写盘前对目标 `prd.md` 跑 `--doc-state`（命令见「主动读取」）——
+     `unwritten` → 直接覆盖；`written` / `unstamped` → 先 Read，有用户实质内容就警示确认，避免静默覆盖。
+     正文仍含 `{{REQ_TITLE}}` 等未替换占位符不构成直接覆盖的理由，照上一句判
+   - **写入成功之后**再删掉未编写字段：`--unstamp <prd.md>`（同一条命令换参数）；写入失败不调。
+     不调也不影响判定（正文一改字段即失效），只为整洁
    - `req_slug` / `sub_req_slug` 命名约束：允许英文 / 数字 / 短横线 / 下划线 / 中文，
      3 条 OS 硬约束（不含 `/` `\`、不含 Windows 禁字符 `< > : " | ? *`、**不含空格**）
 2. frontmatter 必填字段（按 skill: `document-norms` §2.3 type=prd）：
@@ -197,8 +211,9 @@ projects/modules/<basic>/<sub>/requirements/<req_slug>/*/prd.md       ← 同需
    可改表格式，不能没有这章）。外部发布相关字段由项目发布 skill 自管，本 skill 不写入。
 3. **流程图内嵌**（框架启用图件时）：落点、PNG+Mermaid 双格式、渲染与同步纪律
    见 `diagram-guide.md`（单一实现，此处不复写）
-4. 同步上级 overview：调 `module-index-refresh` 限定路径
-   `<basic>/<sub>/requirements/<req_slug>` 刷新索引段
+4. 同步上级 overview：写入成功后跑 `python "$WF_PLUGIN_ROOT/scripts/module_init.py"
+   --project . --refresh-index --scope <刚写的 prd.md>`（等同调 `module-index-refresh` 限定到该需求；PRD 的
+   `status` / `description` 是子需求表与需求清单的取数源，不刷则上级仍显示旧状态）
 5. 写入完成提示路径，进入 S5（有启用的附属产物）或 S6；附一句弱提醒：「评审通过后记得把
    frontmatter `status` 改为 `approved`（影响上级 overview 索引状态列）」，本 skill 不自动改
 

@@ -9,15 +9,19 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 
 ## 后台作业与待批处理
 
-默认后台路径由控制器执行：冻结证据 → 模型只输出结构化建议 → 校验与有限融合写入 → 作业日志 → 到期观察。每项目滚动七天最多一次、全机 UTC 每日最多一次（两门合计），默认单次超时十五分钟；不设费用限额。用户级 `self_iteration.mode` 为 off / propose / apply，项目只能收紧。缺省 apply 只授权非冲突的角色记忆与模块提醒，不授权修改框架、shared 权威记忆、项目指令、skills、配置、权限或代码。
+后台路径由控制器执行：采证 → 冻结 → 模型按主题给结论 → 控制器核对 → 作业日志。**后台作业只出建议**：任何档位下都不改项目文件、不建提案文件，结果在 `status`。每项目滚动七天最多一次、全机 UTC 每日最多一次（两门合计），默认单次超时十五分钟；不设费用限额。用户级 `self_iteration.mode` 为 off / propose / apply，是上限；项目没有自己写 `apply` 的一律按 propose。
 
-模型作业说明见 `reference/job-instructions.md`。记忆内容按 librarian 第 2.5 步融合，不以新增数量衡量效果；已有覆盖不写、同主题局部并进、新主题才新增。冲突、判断不清、受保护纠正、删除、迁移、章节重组、容量不足均待批。控制器的结构与容量检查不能证明语义正确。
+采证：每条没人处理过的纠正、每条没处置的笔记、每个复测失败各算一条候选，不要求两条字面相同。满足任一就排队——单个 scope 待处理笔记 ≥3,000 字、待处理纠正 ≥3 条、有标明重复强调的、有复测失败的、最早一条等了 ≥14 天（没有日期的从首次见到算）。落点在主会话记忆的纠正不入选；归属对不上真实角色目录或模块的只诊断。没入选的原因、笔记里不成条目的字数由 `status` 与 doctor 给出。
 
-证据在输入上限内合并能容纳的完整主题，未选主题留到后续额度窗口，主题不截断。模型输入保留目标全文与相关现行权威；整份看板、历史事件和归档原文留作本地审计，已选任务与事件直接放入证据。单主题必要上下文仍超限时，在状态目录 `selfiter/manual-review/` 保存原因与完整必要上下文并转人工，不反复以输入超限延期；`status` 可查看。同主题有新证据时更新原记录，旧版进入 review_history，不另建一份。
+模型作业说明见 `reference/job-instructions.md`。结论八种：该写、已覆盖、该修工具、该交框架、该进文档、已过时、有冲突、证据不足。每条证据至少要落到一个主题；判「已覆盖」须逐条给出规则原文，控制器在冻结的文件里找得到连续一致的文字才算；写操作各自列出所用证据，控制器核目标、章节、来源、限定词与容量，给出不能自动写的原因。引文与字面检查不能证明语义正确。
+
+有结论的证据记为「看过」，不再单独触发；同 scope 有新候选或它涉及的文件变了才随包再看，最多再看两次。没有结论的（漏答、引文找不到、作业期间文件被改、操作不可用）算未处理，连续三次暂停，材料变了或 `resume` 后再试。没有任何结论会永久消费一条证据，后台从不移走、删除或改写原笔记。
+
+输入上限内按等待时间从老到新装，复测失败与重复强调优先；放不下的留到下次并记数，不截断。单条连必要上下文都超总上限时，在状态目录 `selfiter/manual-review/` 保存原因、证据与所需文件全文转人工，跳过它继续装后面的；`status` 可查看。
 
 新 CLI 程序先在隔离夹具中做实际能力自检，验证项目 hook、外部工具与文件写入的隔离；版本号本身不授予运行权。通过记录绑定平台、可执行程序与适配器指纹，任一变化重新验证；失败继续延期。自检与分析共享一次作业额度和总超时，自检用量单独记录。
 
-用户在后续对话收到摘要后，选择查看或稍后；稍后不算驳回。新自动改动或需处理的失败报告跨会话只提示一次；不改和自检延期报告只在 status 留存，不另发报告提示。待批、转人工和当前延期仍在新会话提示，同会话相同状态不重复。每个作业的 report-notice.json 保存报告提示回执，notices.json 只保留最近六十四个会话的待办提示指纹；已有历史报告不重播。用 `workframe-selfiter status --project <项目根>` 读取完整作业结果和 AUTO 提案，逐项展示改前、改后、理由、影响、恢复依据与 `review_hash` 后请用户确认；不得只展示数量就执行。
+用户在后续对话收到摘要后，选择查看或稍后；稍后不算驳回。有需要人看的主题（该写、该修工具、该交框架、该进文档、有冲突）或需处理的失败报告跨会话只提示一次；其余报告与自检延期只在 status 留存。旧待批、转人工和当前延期仍在新会话提示，同会话相同状态不重复。每个作业的 report-notice.json 保存报告提示回执，notices.json 只保留最近六十四个会话的待办提示指纹；已有历史报告不重播。用 `workframe-selfiter status --project <项目根>` 读取完整作业结果：建议逐条展示证据、原因、目标、拟写内容与不能自动写的原因，采纳后由主会话按各资产现有流程写，后台不代写。`projects/proposals/pending/` 下的旧 AUTO 提案仍可查看与决定，后台只读它们、用来不重提已驳回的证据；决定前逐项展示改前、改后、理由、影响、恢复依据与 `review_hash`，不得只展示数量就执行。
 
 用户明确决定后，对仍在白名单中的局部变更调用 `workframe-selfiter decide --project <项目根> --proposal-id <AUTO-id> --decision accept --review-hash <用户所看版本的hash>`；驳回用 `--decision reject`。草稿有变化须重新展示，不复用旧批准。受保护资产、重组、删除等提案仍走各资产现有 owner/审批流程，此命令不新增越权入口。有新有效证据才重评驳回事项；相同待批问题补证据，不重复建单。
 
@@ -27,9 +31,9 @@ AUTO 预览的完整 `after` 是批准后将落盘的 UTF-8 字节，包含来�
 
 作业目录内的 evidence、transport、journal、result 与 `selfiter/history.md` 分别记录输入、真实执行器输出、逐操作恢复进度、结果及人类可读摘要；路径由状态目录配置推导。不得用模型的“完成”声明代替实际落盘结果。先用 `workframe-selfiter rollback --project <项目根> --job-id <id>` 展示精确回退预览；用户确认该版后加 `--review-hash` 才执行。后续编辑冲突时停止，不覆盖。未完成的 journal 用 `recover` 恢复，不能换新 job 重复追加。
 
-复测分 pass / fail / inconclusive。缺少可归因的相关使用机会不能判 pass；最多延长两次十四天观察窗后保持 inconclusive 结案，保留恢复材料。普通自动记忆变更由作业台账跟踪，不逐份新建 QA 任务；仍需独立验证的资产照既有规则执行。控制器不可用或隔离能力未确立时延期并报告，不放宽权限重试。作业期间目标或来源被改动时不写入，冲突报告保留模型原拟改动并提示一次，证据不消费、下个额度窗口重评。
+复测分 pass / fail / inconclusive。缺少可归因的相关使用机会不能判 pass；最多延长两次十四天观察窗后保持 inconclusive 结案，保留恢复材料。普通自动记忆变更由作业台账跟踪，不逐份新建 QA 任务；仍需独立验证的资产照既有规则执行。控制器不可用或隔离能力未确立时延期并报告，不放宽权限重试。作业期间冻结的文件被改动或笔记被撤回，依赖它的结论不算数，涉及的证据下个额度窗口重评，报告提示一次。报告已存、记账没写完就中断的，下次运行先补账，不再调模型。
 
-连续三次作业失败或两次尚未人工处理的复测失败会将自动写入熔断为待批；成功生成一份待批建议不会自行解除熔断。用户查看日志、解决原因并明确恢复后运行 `workframe-selfiter resume --project <项目根>`；该命令保留历史记录，配置中的 off / propose 仍然生效。只读 doctor 报出熔断和未补齐的记账尾部。
+连续三次作业失败（含一条证据都没答上的作业）会熔断；复测失败只冻结那一条，下一轮作为修正项重新分析，不停整个项目。成功生成建议不会自行解除熔断。用户查看日志、解决原因并明确恢复后运行 `workframe-selfiter resume --project <项目根>`；该命令保留历史记录，也解除暂停的证据，不替你确认复测失败；配置中的 off / propose 仍然生效。只读 doctor 报出采证漏斗、熔断和未补齐的记账尾部。
 
 以下五阶段保留作手动分析与既有提案处理参考；评分不赋予后台自动写入权。后台 AUTO 提案的状态、复测、记账以控制器为准，不重复执行旧阶段的建 QA 单、移动文件或关闭信号步骤。
 
@@ -40,7 +44,7 @@ AUTO 预览的完整 `after` 是批准后将落盘的 UTF-8 字节，包含来�
 **(a) 数据源收集**（主要在 `.workframe/state/`（另含 `.workframe/agent-memory/` 与 `projects/` 下若干路径，见下表） 下，由 hook / deterministic scripts / system skills 维护）：
 - `.workframe/state/skill-metrics.yaml` — 技能/规则使用汇总（由 `recompute_skill_metrics.py` 从 events.jsonl 重算）
 - `.workframe/state/events.jsonl` — 原始事件流（审计/追因时读，日常决策读 metrics 即可）
-- `.workframe/state/activity-state.json` — 活跃度 + dormant 状态 + **`pending_maintenance`（status=open）**；若 `dormant=true` 或 `wake_up_pending=true` 则本次自迭代直接退出（除非由 `/core:maintenance-review` 显式触发）。`pending_maintenance` 里的 kind/details 是本次识别模式的重要线索，应与 notes/events 证据一起纳入阶段 2 分析。
+- `.workframe/state/activity-state.json` — 活跃度 + dormant 状态 + **`pending_maintenance`（status=open）**；若 `dormant=true` 或 `wake_up_pending=true` 则本次自迭代直接退出。`pending_maintenance` 里的 kind/details 是本次识别模式的重要线索，应与 notes/events 证据一起纳入阶段 2 分析。
 - `.workframe/agent-memory/*/notes.md` — 各角色微反思
 - `.workframe/agent-memory/shared/MEMORY.md` 和 `shared/notes.md` — 跨角色共识
 - `projects/changelog.md` — 历史操作日志
@@ -51,7 +55,7 @@ AUTO 预览的完整 `after` 是批准后将落盘的 UTF-8 字节，包含来�
 - 若今天 ≥ `verify_by`：
   - 读取 skill-metrics.yaml / events.jsonl，判断 `verify_signal` 是否已达成
   - `signal_met=true` → append events.jsonl：`{"ts":"<ISO-8601>","type":"proposal_verified","proposal_id":"<id>","signal_met":true}`；将提案文件中 `verified: true`
-  - `signal_met=false` → append events.jsonl：`{"ts":"<ISO-8601>","type":"proposal_verified","proposal_id":"<id>","signal_met":false}`，再 append `{"ts":"<ISO-8601>","type":"proposal_failed","proposal_id":"<id>"}`（供 audit / 下一轮 self-iteration 反思用；**`proposal_failed` 不计入 `check-iteration-trigger.py` 的 problem 加权分**；`recompute_skill_metrics.py` 实际统计的是 `proposal_verified.signal_met=false` 累加到 `proposal_failures_count`，不直接读 `proposal_failed`）；将提案文件中 `verified: false`
+  - `signal_met=false` → append events.jsonl：`{"ts":"<ISO-8601>","type":"proposal_verified","proposal_id":"<id>","signal_met":false}`，再 append `{"ts":"<ISO-8601>","type":"proposal_failed","proposal_id":"<id>"}`（供 audit / 下一轮 self-iteration 反思用；`recompute_skill_metrics.py` 实际统计的是 `proposal_verified.signal_met=false` 累加到 `proposal_failures_count`，不直接读 `proposal_failed`）；将提案文件中 `verified: false`
 
 ### 阶段 2：模式识别 + 置信度评分
 
@@ -59,11 +63,11 @@ AUTO 预览的完整 `after` 是批准后将落盘的 UTF-8 字节，包含来�
 - **重复问题**：notes / changelog / events 中有明确证据显示同类问题重复出现。`occurrences` 是置信度计算的证据输入，**不是硬门槛**；低于 3 次仍可计算 confidence，但通常低于提案阈值。
 - **低效流程**：仅当 notes / changelog / issues 中存在明确的耗时或阻塞记录时方可使用；系统无耗时事件，**不得凭感觉声称"平均耗时高于预期"**。
 - **未覆盖场景**：仅当 notes / changelog 中有明确的"用户重复手工处理"记录时方可使用；**不得无证据臆造"手工处理"场景**。
-- **技能低成功率**：近 30 天某 skill `success/invocations < 0.6`（来自 skill-metrics.yaml）。**仅供人工判读，不作自动触发信号**（`success` 为 agent 自评，实测从未产出 false，作触发条件永不满足）——用它时须结合 notes / user_correction 等独立证据，不得仅凭该比值提案。
+- **技能低成功率**：近 30 天某 skill `success/invocations < 0.6`（来自 skill-metrics.yaml）。**仅供人工判读，不作自动触发信号**（`success` 为 agent 自评，实测从未产出 false，作触发条件永不满足）——用它时须结合 notes / user_correction 等独立证据，不得仅凭该比值提案。`invocations: 0`（只有 hook 记的 `invoked`、没有自报）的行是「无自报样本」，不进这一比值。
 - **提案失败回路**：有 `proposal_failed` 事件的旧提案 → 反思当初假设，识别失败原因。
 
 > **跨门计数前必须先说数据来源**（v3 起）：读 `skill-metrics.yaml` 的 `harness_breakdown` 段，在任何按事件计数的判断之前写一行「cc N 条 / codex M 条 / unknown K 条 / unstamped L 条；跨门缺口 <cross_door_gaps.codex>；两侧皆无 <neither_door>（**后者不算跨门缺口**，混进去会把缺口数读大）；判 full 但投递未确立 <full_but_delivery_unverified.codex>（这类的零计数同样可能是结构性的——先怀疑投递、再怀疑模型）」。**照抄那一段，别在这里另记一份缺口清单**——清单一变，副本立刻成为假话。
-> 为什么这条压着模式识别：本阶段的四类信号全是**按事件计数**得出的，而一类事件为零可能是「真的没发生」，也可能是「那扇门根本产不出它」。`turn_failed` 在 Codex 侧恒为 0（无 `StopFailure` 对等 hook）⇒ `check-iteration-trigger.py` 的加权积分里**问题信号被系统性低估**；Codex 的 `PostToolUse` 对失败的工具调用不触发，两者同向叠加。这是已知的产品决策，**本 skill 只披露、不替代信号**——不得因为 codex 侧数小就断言「那边问题少」。
+> 为什么这条压着模式识别：本阶段的四类信号全是**按事件计数**得出的，而一类事件为零可能是「真的没发生」，也可能是「那扇门根本产不出它」。`turn_failed` 在 Codex 侧恒为 0（无 `StopFailure` 对等 hook）⇒ **问题信号被系统性低估**；Codex 的 `PostToolUse` 对失败的工具调用不触发，两者同向叠加。这是已知的产品决策，**本 skill 只披露、不替代信号**——不得因为 codex 侧数小就断言「那边问题少」。
 
 > "规则盲区"不作信号：CC 没有 rule 触发回调，`rule_triggered` 事件不可 deterministic 捕获（见 `.workframe-meta/event-schema.json`）。如怀疑某条 rule 定义不当，改由人工 review / `/core:audit` 主观判断，不作为自迭代自动信号。
 
@@ -168,17 +172,14 @@ proposal:
    「它当时为什么关的」）：
 
    ```bash
-   python "$(cat .workframe/state/plugin-root.txt)/scripts/maintenance_workorder.py" \
+   python "$WF_PLUGIN_ROOT/scripts/maintenance_workorder.py" \
        --close-pm <PM-ID> [<PM-ID> ...] --reason self_iteration_no_proposal
    ```
 
-   待关闭条目的 kind 为 `cadence_timeout` / `problem_threshold` / `activity_threshold` /
-   `memory_backlog` / `completed_delta` / `close_check_due` 之一——与
+   待关闭条目的 kind 为 `memory_backlog` / `close_check_due` 之一——与
    `check-iteration-trigger.py` 实际写入的 kind 集合一致；`skill_low_success` 已移除，
    存量条目一并关闭。
-3. 退出，不进入阶段 4。**让这批信号安静下来的是第 2 步，不是迭代日期**：无提案时
-   proposals 派生的日期本来就不前移（`derive_last_iteration_date()` 只读 `applied_at` /
-   `rejected_at`），真正生效的是第 2 步给每个 kind 装上的驳回基线。反过来说，
+3. 退出，不进入阶段 4。让这批信号安静下来的是第 2 步给每个 kind 装上的驳回基线：
    **第 2 步漏关的条目会原样重开**——dedup upsert 只对 `status=open` 的条目去重，
    closed 条目不参与，同一个 kind 会以新 ID 再冒出来。
 
@@ -253,20 +254,17 @@ Verify by: 2026-05-08 | Signal: 同主题 user_correction = 0 且 memory_promote
    session_counter / drift 历史等攒出来的状态，整份重写漏字段不报错只丢历史）：
 
    ```bash
-   python "$(cat .workframe/state/plugin-root.txt)/scripts/maintenance_workorder.py" \
+   python "$WF_PLUGIN_ROOT/scripts/maintenance_workorder.py" \
        --close-pm <PM-ID> [<PM-ID> ...]
    ```
 
    该命令一并写 `pending_maintenance_dismissed` 事件，无需再手写事件行。
 
-   > 这一步不只是清提醒：关掉一条会把**该 kind** 的计分起点推进到本次 `closed_at`，
-   > 此后只算更晚发生的证据（`problem` / `activity` 只认更晚的事件，`close_check_due`
-   > 只认驳回之后新打上的 stale 标记，`cadence` 从驳回那天重新计时**或从更晚的那次迭代
-   > 起算**，`completed_delta` 只数驳回之后完成的任务；`memory_backlog` 没有可比的
-   > 证据时间点，改为静默一个保留期后重报）。
-   > 按 kind 各管各的，关一条不影响其余。
+   > 这一步不只是清提醒：关掉一条会把**该 kind** 的起点推进到本次 `closed_at`
+   > （`close_check_due` 只认驳回之后新打上的 stale 标记；`memory_backlog` 没有可比的
+   > 证据时间点，改为静默一个保留期后重报）。按 kind 各管各的，关一条不影响另一条。
    > 所以只关**本次自迭代真的覆盖到**的那些条目——把没处理的信号一并关掉，等于宣称
-   > 它们对应的证据也已闭环，那批证据会就此从计分里消失。
+   > 它们也已处理，就此静音。
 
 **若所有候选均被拒绝**：
 
@@ -278,5 +276,4 @@ Verify by: 2026-05-08 | Signal: 同主题 user_correction = 0 且 memory_promote
 ## 与其他 skill 的协作
 
 - **librarian**：本 skill 消费 `recompute_skill_metrics.py` 维护的 skill-metrics.yaml；若模式涉及记忆层，非冲突 L1 提升可由 librarian 执行，降级/容量候选需 `/core:maintenance-review` 确认
-- **session-digest**：SessionEnd hook 只写 session-digest-latest.md 的**骨架**（时间 / 计数 / exit_reason）；本 skill 的变更摘要由 `session-digest` skill 从 events.jsonl 重建后填入，通常发生在下一个会话
 - **/core:rollback**：用户不满意本 skill 生成的变更时，通过 rollback skill 回退；阶段 5 第 7 步写入 rollback-index entry，`/core:rollback` 优先读该索引

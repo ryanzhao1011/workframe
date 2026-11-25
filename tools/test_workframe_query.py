@@ -75,7 +75,11 @@ class QueryFixture(unittest.TestCase):
                         CLAUDE_CONFIG_DIR=str(self.claude_home),
                         CODEX_HOME=str(self.codex_home), PYTHONUTF8="1",
                         PYTHONIOENCODING="utf-8", GIT_CONFIG_GLOBAL=os.devnull,
-                        GIT_CONFIG_NOSYSTEM="1")
+                        GIT_CONFIG_NOSYSTEM="1",
+                        # A commit may start detached maintenance, whose lock file comes and
+                        # goes under .git while a test snapshots the tree.
+                        GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="maintenance.auto",
+                        GIT_CONFIG_VALUE_0="false")
         # Test the entry point's own bytecode suppression, not the test runner's.
         self.env.pop("PYTHONDONTWRITEBYTECODE", None)
 
@@ -376,11 +380,33 @@ runpy.run_path(sys.argv[0], run_name="__main__")
         self.assertEqual(code, 0)
         self.assertEqual(value["data"]["marketplace_source"], {"kind": "directory", "source": source})
 
+    def test_codex_git_marketplace_snapshot_is_attributed_to_its_registration(self):
+        # An upgrade queries through the snapshot Codex keeps of a git marketplace.
+        snapshots = self.codex_home / ".tmp" / "marketplaces"
+        for name in ("sample", "unregistered"):
+            shutil.copytree(CORE, snapshots / name / "plugins" / "core",
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        raw = "https://example.invalid/sample.git"
+        unknown = {"kind": "unknown", "source": None}
+        for market, source_type, expected in (
+                ("sample", "git", {"kind": "git", "source": raw}),
+                ("sample", "local", unknown),
+                ("unregistered", "git", unknown)):
+            put(self.codex_home / "config.toml", '[marketplaces.sample]\nsource_type = "' + source_type
+                + '"\nsource = "' + raw + '"\n')
+            code, value, _ = self.query(
+                script=snapshots / market / "plugins" / "core" / "scripts" / QUERY.name)
+            self.assertEqual(code, 0)
+            self.assertEqual(value["data"]["marketplace_source"], expected, (market, source_type))
+
     def test_capabilities_only_advertises_implemented_topics(self):
         code, value, stderr = self.cli("--capabilities")
         self.assertEqual((code, stderr), (0, ""))
         self.assertEqual(value["data"], {"schemas": ["workframe.query.v1"],
-                                        "topics": ["project-status", "gates", "codex-trust", "board", "modules", "stats"],
+                                        "topics": ["project-status", "gates", "codex-trust", "board", "modules", "stats", "project-connection"],
+                                        "stats_stream": "workframe.stats-stream.v1",
+                                        "nav_refresh": {"schema": "workframe.nav.v1", "command": "module_init.py",
+                                                        "operations": ["refresh-index", "check", "convert-layout"]},
                                         "codex_trust": {"states": ["ready", "needs_trust", "disabled_by_user", "not_installed", "version_unsupported", "unverified"],
                                             "recovery": {"schema": "workframe.codex-trust-restore.v1", "command": "workframe-codex-trust",
                                                          "operations": ["restore"], "automatic_write_supported": True,
@@ -412,6 +438,76 @@ runpy.run_path(sys.argv[0], run_name="__main__")
         for path in (".workframe-config.json", ".claude/settings.json", ".codex/config.toml",
                      state_dir_of(self.project).relative_to(self.project).as_posix() + "/setup-state.json"):
             self.assertIn(path, value["depends_on"], "missing files must still be watched")
+
+    def test_connection_shares_setup_and_support_without_aggregate_reads(self):
+        import workframe_query as query
+
+        self.connect()
+        put(self.project / ".workframe" / "state" / "setup-state.json", "{")
+        put(self.project / ".claude" / "settings.json", {"enabledPlugins": {"core@sample": True}})
+        put(self.project / ".claude" / "settings.local.json", {"enabledPlugins": {"core@sample": False}})
+        put(self.project / ".codex" / "config.toml", '[plugins."core@sample"]\nenabled = true\n')
+        stdout = io.StringIO()
+        with (patch.object(query, "git_status", side_effect=AssertionError("Git read")),
+              patch.object(query, "classify_directory", side_effect=AssertionError("Directory scan")),
+              patch.object(query, "marketplace_source", side_effect=AssertionError("Marketplace read")),
+              redirect_stdout(stdout)):
+            code = query.main(["project-connection", "--project", str(self.project)])
+        value = json.loads(stdout.getvalue())
+        self.assertEqual((code, value["topic"]), (0, "project-connection"), value)
+        self.assertEqual(value["data"], {
+            "connected": True, "layout": "current", "project_name": "sample",
+            "ancestor_project": None, "support": {"claude": False, "codex": True},
+            "setup": {"state": "unknown", "steps": [], "completed_count": 0, "last_acceptance": None},
+        })
+        self.assertEqual(len(value["warnings"]), 1)
+        self.assertIn(".workframe/state/setup-state.json", value["warnings"][0])
+        self.assertEqual(set(value["depends_on"]), {
+            ".workframe-config.json", ".workframe/state/setup-state.json", "AGENTS.md",
+            ".claude/settings.json", ".claude/settings.local.json", ".codex/config.toml",
+            legacy_rel("state") + "/", legacy_rel("memory") + "/", legacy_rel("archive") + "/",
+        })
+
+    def test_connection_watches_markers_through_the_nearest_connected_ancestor(self):
+        self.connect()
+        child = self.project / "child" / "nested"
+        child.mkdir(parents=True)
+        code, value, stderr = self.cli("project-connection", "--project", child)
+        self.assertEqual((code, stderr), (0, ""), value)
+        self.assertEqual(value["data"], {
+            "connected": False, "layout": None, "project_name": None, "setup": None,
+            "support": {"claude": False, "codex": False},
+            "ancestor_project": self.project.resolve().as_posix(),
+        })
+        self.assertEqual([path for path in value["depends_on"] if path.startswith("../")],
+                         ["../.workframe-config.json", "../../.workframe-config.json"])
+        self.assertNotIn("./", value["depends_on"])
+        self.assertNotIn(".git/", value["depends_on"])
+
+    def test_connection_reports_legacy_without_changing_feature_topic_errors(self):
+        self.connect()
+        (self.project / legacy_rel("state")).mkdir(parents=True)
+        code, value, _ = self.cli("project-connection", "--project", self.project)
+        self.assertEqual((code, value.get("data", {}).get("layout")), (0, "legacy"), value)
+        self.assertIn(legacy_rel("state") + "/", value["depends_on"])
+        code, value, _ = self.cli("board", "--project", self.project)
+        self.assertEqual((code, value["error"]["code"]), (1, "legacy_layout"))
+
+    def test_connection_failure_keeps_the_configuration_dependencies(self):
+        for path, malformed in ((".workframe-config.json", '{\n"project_name": ]}'),
+                                (".claude/settings.json", '{\n"enabledPlugins": ]}'),
+                                (".claude/settings.local.json", '{\n"enabledPlugins": ]}'),
+                                (".codex/config.toml", "# header\nbroken = [")):
+            with self.subTest(path=path):
+                put(self.project / path, malformed)
+                code, value, _ = self.cli("project-connection", "--project", self.project)
+                put(self.project / path, "{}" if path.endswith(".json") else "")
+                self.assertEqual((code, value["error"]["code"]), (1, "parse_error"), value)
+                self.assertEqual(value["error"]["detail"], {"file": path, "line": 2})
+                self.assertIn(path, value["depends_on"])
+                self.assertIn(".workframe-config.json", value["depends_on"])
+                self.assertNotIn("./", value["depends_on"])
+                self.assertNotIn(".git/", value["depends_on"])
 
     def test_connected_unicode_and_no_setup_record(self):
         put(self.project / ".workframe-config.json", {"project_name": "示例项目"})
@@ -806,6 +902,15 @@ class ZeroWriteTests(QueryFixture):
             self.assertEqual((code, value["error"]["code"]), (1, "parse_error"))
             self.assert_unchanged(before)
 
+    def test_connection_success_and_failure_preserve_all_five_trees(self):
+        for claude_config, expected in (("{}", 0), ("{", 1)):
+            put(self.project / ".claude" / "settings.local.json", claude_config)
+            before = self.snapshots()
+            code, value, stderr = self.cli("project-connection", "--project", self.project, script=self.script)
+            self.assertEqual((code, stderr), (expected, ""), value)
+            self.assertNotIn("side_effects", value)
+            self.assert_unchanged(before)
+
     def test_codex_home_inside_project_has_no_side_effect_exemption(self):
         inside = self.project / "codex-home"
         put(inside / "config.toml", "# isolated\n")
@@ -851,7 +956,7 @@ class ZeroWriteTests(QueryFixture):
                    self.claude_home / "settings.json", self.codex_home / "config.toml")
         for newline in ("\n", "\r\n"):
             text = lf_text.replace("\n", newline)
-            anchor = "def main(argv=None):" + newline
+            anchor = "def main(argv=None, *, event_cache=None, emit=None):" + newline
             self.assertEqual(text.count(anchor), 1)
             for target in targets:
                 with self.subTest(newline=repr(newline), target=target.relative_to(self.root).as_posix()):
@@ -1067,7 +1172,7 @@ class QueryCapabilitiesTests(unittest.TestCase):
         self.assertEqual((result.returncode, result.stderr), (0, b""))
         value = json.loads(result.stdout.decode("utf-8"))
         self.assertEqual(value["schema"], "workframe.query.v1")
-        self.assertEqual(value["data"]["topics"], ["project-status", "gates", "codex-trust", "board", "modules", "stats"])
+        self.assertEqual(value["data"]["topics"], ["project-status", "gates", "codex-trust", "board", "modules", "stats", "project-connection"])
         recovery = value["data"]["codex_trust"]["recovery"]
         self.assertTrue(recovery["automatic_write_supported"])
         self.assertEqual(recovery["supported_codex_versions"], ["0.167.2"])
@@ -1194,7 +1299,7 @@ class TrustBoundaryTests(unittest.TestCase):
         # The version-only probe now selects a certified adapter. An unknown
         # version must still never reach the app-server, even if native.
         with patch.object(subprocess, "Popen", side_effect=AssertionError("external process started")), patch.object(
-                trust, "_read_version", return_value="0.167.3"), patch("_query_codex_runtime.tree_snapshot", return_value={}):
+                trust, "_read_version", return_value="0.167.3"), patch("_query_codex_runtime.trust_input_snapshot", return_value={}):
             data, meta = trust.query(CORE, {"codex_home": str(ROOT / "docs"),
                                             "codex_exe": str(Path(sys.executable))})
         self.assertEqual(data["state"], "unverified")
@@ -1741,7 +1846,8 @@ class CertifiedRuntimeTests(unittest.TestCase):
         options = {"codex_home": str(isolated_context), "codex_exe": sys.executable,
                    "codex_profile": "review", "codex_config": ["x=1", "x=2"]}
         with patch.object(runtime, "runtime_paths_known", return_value=True), patch.object(
-                runtime, "tree_snapshot", side_effect=[{**self.WARM_HOME, **rows} for rows in snapshot_rows]), patch.object(
+                runtime, "trust_input_snapshot", side_effect=list(snapshot_rows)), patch.object(
+                runtime, "presence_rows", return_value=dict(self.WARM_HOME)), patch.object(
                 runtime, "config_bytes", side_effect=list(config_rows), create=True), patch.object(
                 self.trust, "_read_version", return_value="0.167.2"), patch.object(cas, "AppServer", return_value=owner) as factory:
             data, meta = self.trust.query(ROOT, options, operation=operation)
@@ -1761,8 +1867,9 @@ class CertifiedRuntimeTests(unittest.TestCase):
         self.assertEqual(meta["_operation_result"], "owned operation result")
         self.assertEqual(meta["side_effects"], ["codex_app_server_logs"])
 
-    def test_query_file_audit_cannot_report_ready_after_an_auth_write(self):
-        data, meta, _ = self.query_transport(snapshot_rows=({}, {"auth.json": ("file", "unexpected")}))
+    def test_query_file_audit_cannot_report_ready_after_a_trust_input_changes(self):
+        changed = {"plugins/cache/workframe/core/1.0.0/hooks/hooks.codex.json": ("file", "unexpected")}
+        data, meta, _ = self.query_transport(snapshot_rows=({}, changed))
         self.assertEqual(data["state"], "unverified")
         self.assertIsNone(data["snapshot_id"])
         self.assertIn("side_effect_scope_unknown", [problem["code"] for problem in data["problems"]])
@@ -1909,6 +2016,150 @@ class CertifiedRuntimeTests(unittest.TestCase):
         value = json.loads(stream.getvalue())["data"]
         self.assertEqual((code, value["result"], value["write_outcome"]), (1, "not_restored", "none"))
         self.assertTrue(value["attempted_keys"], "A request can be sent and definitively rejected")
+
+
+class TrustInputSnapshotTests(unittest.TestCase):
+    """The per-query audit covers what the trust observation reads, not the whole home.
+
+    Other Codex processes write sessions, databases and caches while a query runs;
+    those writes must not be charged to the query, while any change to a trust input
+    (user config, hook trust store, an installed `core` plugin) still fails it.
+    """
+
+    TRUST_INPUTS = ("config.toml", ".hook-trust/" + "a" * 64,
+                    "plugins/cache/workframe/core/1.3.0/hooks/hooks.codex.json",
+                    "plugins/cache/other-market/core/2.0.0/.codex-plugin/plugin.json")
+    OTHER = ("sessions/2026/11/17/rollout-x.jsonl", "state_5.sqlite", "state_5.sqlite-wal",
+             "thread_history_1.sqlite-wal", "models_cache.json", "auth.json",
+             "plugins/cache/openai-bundled/browser/1.0/plugin.json", ".tmp/plugins/x.json",
+             "thread-writer-locks/x.lock")
+
+    def runtime(self):
+        return importlib.import_module("_query_codex_runtime")
+
+    def home(self, raw):
+        home = Path(raw)
+        for name in self.TRUST_INPUTS + self.OTHER:
+            put(home / name, "before " + name)
+        return home
+
+    def test_rows_cover_trust_inputs_with_whole_home_names(self):
+        runtime = self.runtime()
+        with tempfile.TemporaryDirectory() as raw:
+            home = self.home(raw)
+            rows = runtime.trust_input_snapshot(home)
+            for name in self.TRUST_INPUTS:
+                self.assertEqual(rows[name], ("file", hashlib.sha256(("before " + name).encode()).hexdigest()), name)
+            self.assertEqual(rows[".hook-trust/"], ("directory",))
+            self.assertEqual(rows["plugins/cache/workframe/core/"], ("directory",))
+            for name in self.OTHER:
+                self.assertNotIn(name, rows)
+
+    def test_concurrent_writes_outside_the_trust_inputs_are_not_charged(self):
+        runtime = self.runtime()
+        with tempfile.TemporaryDirectory() as raw:
+            home = self.home(raw)
+            before = runtime.trust_input_snapshot(home)
+            for name in self.OTHER:
+                put(home / name, "after " + name)
+            put(home / "sessions/2026/11/17/rollout-new.jsonl", "new session")
+            after = runtime.trust_input_snapshot(home)
+            self.assertEqual(runtime.side_effect_violations(before, after), [])
+
+    def test_every_trust_input_change_creation_and_removal_fails(self):
+        runtime = self.runtime()
+        for name in self.TRUST_INPUTS:
+            for change in ("rewrite", "remove"):
+                with self.subTest(name=name, change=change), tempfile.TemporaryDirectory() as raw:
+                    home = self.home(raw)
+                    before = runtime.trust_input_snapshot(home)
+                    if change == "rewrite":
+                        put(home / name, "after " + name)
+                    else:
+                        (home / name).unlink()
+                    self.assertIn(name, runtime.side_effect_violations(before, runtime.trust_input_snapshot(home)))
+        for name in ("config.toml", ".hook-trust/" + "b" * 64, "plugins/cache/workframe/core/1.3.0/new.txt",
+                     "plugins/cache/new-market/core/1.0/plugin.json"):
+            with self.subTest(created=name), tempfile.TemporaryDirectory() as raw:
+                home = Path(raw)
+                put(home / "plugins/cache/workframe/core/1.3.0/hooks/hooks.codex.json", "x")
+                before = runtime.trust_input_snapshot(home)
+                put(home / name, "created")
+                self.assertIn(name, runtime.side_effect_violations(before, runtime.trust_input_snapshot(home)))
+
+    @staticmethod
+    def dir_link(target, link):
+        link.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.symlink(target, link, target_is_directory=True)
+        except OSError:
+            if os.name != "nt":
+                raise
+            import _winapi
+            _winapi.CreateJunction(str(target), str(link))
+
+    def test_a_linked_plugin_cache_or_market_is_recorded_and_retargeting_it_fails(self):
+        from pathlib import PurePosixPath
+        runtime = self.runtime()
+        for linked in ("plugins", "plugins/cache", "plugins/cache/workframe"):
+            with self.subTest(linked=linked), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                home = root / "home"
+                put(home / "config.toml", "x")
+                inside = PurePosixPath("plugins/cache/workframe/core/1.3.0/hooks/hooks.codex.json")
+                rest = inside.relative_to(linked)
+                for side in ("a", "b"):
+                    put(root / side / rest, "content " + side)
+                self.dir_link(root / "a", home / linked)
+                before = runtime.trust_input_snapshot(home)
+                self.assertEqual(before[linked][0], "link")
+                # A directory link (symlink or junction) is removed without touching its target.
+                if os.name == "nt":
+                    os.rmdir(home / linked)
+                else:
+                    os.unlink(home / linked)
+                self.dir_link(root / "b", home / linked)
+                self.assertIn(linked, runtime.side_effect_violations(before, runtime.trust_input_snapshot(home)))
+
+    def test_content_behind_a_link_is_compared_at_every_link_position(self):
+        from pathlib import PurePosixPath
+        runtime = self.runtime()
+        inside = PurePosixPath("plugins/cache/workframe/core/1.3.0/hooks/hooks.codex.json")
+        for linked in ("plugins", "plugins/cache", "plugins/cache/workframe", "plugins/cache/workframe/core",
+                       "plugins/cache/workframe/core/1.3.0", "plugins/cache/workframe/core/1.3.0/hooks", ".hook-trust"):
+            with self.subTest(linked=linked), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                home = root / "home"
+                put(home / "config.toml", "x")
+                target = inside if linked != ".hook-trust" else PurePosixPath(".hook-trust/" + "a" * 64)
+                put(root / "outside" / target.relative_to(linked), "before")
+                self.dir_link(root / "outside", home / linked)
+                before = runtime.trust_input_snapshot(home)
+                self.assertEqual(before[target.as_posix()][0], "file", linked)
+                put(root / "outside" / target.relative_to(linked), "after")
+                self.assertIn(target.as_posix(),
+                              runtime.side_effect_violations(before, runtime.trust_input_snapshot(home)))
+
+    def test_an_initialisation_file_reached_through_a_linked_parent_does_not_count(self):
+        runtime = self.runtime()
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            put(root / "outside/.codex-system-skills.marker", "marker")
+            self.dir_link(root / "outside", root / "home/skills/.system")
+            rows = runtime.presence_rows(root / "home", ("skills/.system/.codex-system-skills.marker",))
+            self.assertEqual(rows["skills/.system/.codex-system-skills.marker"][0], "link")
+            adapter = runtime.Codex01672()
+            self.assertIn("skills/.system/.codex-system-skills.marker", adapter.uninitialised(
+                rows, {"codex_home": "home", "cwd": "cwd", "profile": None}, {}, (), b"[features]\nplugins=false\n"))
+
+    def test_presence_rows_read_kind_without_content(self):
+        runtime = self.runtime()
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            put(home / "state_5.sqlite", "db")
+            (home / "skills/.system").mkdir(parents=True)
+            rows = runtime.presence_rows(home, ("state_5.sqlite", "skills/.system", "installation_id"))
+            self.assertEqual(rows, {"state_5.sqlite": ("file", "present"), "skills/.system": ("directory",)})
 
 
 class RuntimeSideEffectTests(unittest.TestCase):
@@ -2323,7 +2574,7 @@ class QueryPathAliasTests(unittest.TestCase):
             result = modules.run(project, {}, [], ["projects/History.md"], error=QueryError)
         self.assertEqual(result["ledgers"], [{"kind": "ledger", "title": "Alias ledger",
                                              "path": "projects/History.md", "type": None, "status": None,
-                                             "updated": None, "meta_error": None}])
+                                             "updated": None, "unwritten": False, "meta_error": None}])
 
     def test_board_still_rejects_paths_outside_project(self):
         import _query_board as board
@@ -2536,9 +2787,10 @@ class QueryReadRegressionTests(unittest.TestCase):
             for missing in (False, True):
                 with self.subTest(bom=bom, missing=missing):
                     project, text_patch, bytes_patch = self.configured_board(bom, missing=missing)
-                    with text_patch, bytes_patch, patch.object(stats, "read_events", return_value=([], 0)):
+                    with text_patch, bytes_patch, patch.object(stats, "read_events", return_value=([], 0)), \
+                            patch.object(stats, "_any_event_file", return_value=True):
                         deps = stats.dependencies(project)
-                        self.assertEqual(deps, [".workframe-config.json", "custom/actual.yaml", ".workframe/state/"])
+                        self.assertEqual(deps, [".workframe-config.json", "custom/actual.yaml", ".workframe/state/", ".agents/skills/", ".claude/skills/"])
                         value, _ = stats.run(project, [], deps, datetime(2026, 11, 12, tzinfo=timezone.utc),
                                              30, [], error=QueryError)
                         if missing:
@@ -2592,7 +2844,8 @@ class TopicModulesUnitTests(unittest.TestCase):
         doc = adapter.document_text("---\ntitle: Metadata\ntype: concept\nstatus: draft\nupdated: 2026-11-02\n---\n# Heading\n",
                                     "projects/modules/basic/shared/guide.md", "shared", warnings)
         self.assertEqual(doc, {"kind": "shared", "title": "Metadata", "path": "projects/modules/basic/shared/guide.md",
-                               "type": "concept", "status": "draft", "updated": "2026-11-02", "meta_error": None})
+                               "type": "concept", "status": "draft", "updated": "2026-11-02", "unwritten": False,
+                               "meta_error": None})
         doc = adapter.document_text("```md\n# Fake\n```\n# Real\n", "plain.md", "other", [])
         self.assertEqual(doc["title"], "Real")
 
@@ -2679,7 +2932,7 @@ class TopicModulesCliTests(QueryFixture):
         self.assertIsNotNone(broken["meta_error"])
         self.assertEqual(result["requirements"], [{"slug": "feature", "title": "Feature", "status": "active", "subs": [
             {"slug": "main", "prd_path": "projects/modules/basic/sub/requirements/feature/main/prd.md",
-             "status": "draft", "description": "Main requirement"}]}])
+             "status": "draft", "description": "Main requirement", "unwritten": False}]}])
         self.assertEqual(value["data"]["ledgers"][0]["kind"], "ledger")
         self.assertEqual(value["data"]["cross_module"][0]["kind"], "plan")
         self.assertIn("projects/modules/", value["depends_on"])
@@ -2833,7 +3086,7 @@ class TopicStatsCliTests(QueryFixture):
         self.assertEqual(value["data"]["completion"]["state"], "ok")
         self.assertEqual(value["data"]["events"]["state"], "error")
         self.assertNotIn("skill_usage", value["data"]["events"])
-        self.assertEqual(set(value["depends_on"]), {".workframe-config.json", "projects/board.yaml", ".workframe/state/",
+        self.assertEqual(set(value["depends_on"]), {".workframe-config.json", "projects/board.yaml", ".workframe/state/", ".agents/skills/", ".claude/skills/",
                                                      ".claude/workframe-state/", ".claude/agent-memory/", ".claude/memory-archive/"})
 
     def test_stats_usage_and_topic_specific_arguments(self):
@@ -2842,6 +3095,164 @@ class TopicStatsCliTests(QueryFixture):
                      ("board", "--weeks", "[]"), ("modules", "--days", "30")):
             code, value, _ = self.cli(*args, "--project", self.project)
             self.assertEqual((code, value["error"]["code"]), (2, "bad_usage"))
+
+
+class StatsStreamTests(QueryFixture):
+    def setUp(self):
+        super().setUp()
+        self.connect()
+        put(self.project / "projects/board.yaml", {"tasks": []})
+        self.state = state_dir_of(self.project)
+        self.events = self.state / "events.jsonl"
+
+    def test_private_stream_dispatches_stats_with_the_regular_envelope(self):
+        code, capabilities, _ = self.cli("--capabilities")
+        self.assertEqual(code, 0)
+        self.assertEqual(capabilities["data"].get("stats_stream"), "workframe.stats-stream.v1")
+        argv = ["stats", "--project", str(self.project), "--weeks", "[]"]
+        before = snapshot(self.root)
+        result = subprocess.run([sys.executable, str(QUERY), "--stats-stream"],
+                                input=(json.dumps(argv) + "\n" + json.dumps(argv) + "\n").encode(),
+                                env=self.env, cwd=self.root, capture_output=True, timeout=15)
+        self.assertEqual((result.returncode, result.stderr), (0, b""))
+        frames = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(len(frames), 2)
+        cold_code, cold, _ = self.cli(*argv)
+        for frame in frames:
+            value = frame["result"]
+            self.assertEqual(frame["exit_code"], cold_code)
+            self.assertEqual(value["topic"], "stats")
+            self.assertEqual(value["project"], cold["project"])
+            self.assertEqual(value["depends_on"], cold["depends_on"])
+            value["data"]["events"].pop("range", None)
+            cold["data"]["events"].pop("range", None)
+            self.assertEqual(value["data"], cold["data"])
+        self.assertEqual(snapshot(self.root), before)
+
+    def compare_cold(self, cache, now, days=7):
+        from _query_stats import run
+        from workframe_query import QueryError
+        arguments = (self.project, [], [], now, days, [])
+        warm = run(*arguments, error=QueryError, event_cache=cache)
+        cold = run(self.project, [], [], now, days, [], error=QueryError)
+        self.assertEqual(warm, cold)
+        return warm[0]["events"]
+
+    def test_append_reuses_complete_lines_and_replaces_partial_tail(self):
+        from datetime import datetime, timezone
+        import _query_stats as stats
+        from workframe_query import QueryError
+        cache = stats.EventStatsCache()
+        now = datetime(2026, 11, 12, tzinfo=timezone.utc)
+        first = '{"ts":"2026-11-12","type":"skill_used","skill":"first"}'
+        tail = '{"ts":"2026-11-12","type":"skill_used","skill":"tail'
+        put(self.events, first + "\n" + tail)
+        self.assertEqual(self.compare_cold(cache, now)["unparsed_lines"], 1)
+        with self.events.open("ab") as file:
+            file.write(b'"}\n')
+        offsets = []
+        read_file = stats._EventIndex._read_file
+
+        def observed_read(index, file, previous):
+            readline = file.readline
+
+            def observed_line(length):
+                offsets.append(file.tell())
+                return readline(length)
+
+            with patch.object(file, "readline", side_effect=observed_line):
+                return read_file(index, file, previous)
+
+        with patch.object(stats._EventIndex, "_read_file", observed_read):
+            warm, _ = stats.run(self.project, [], [], now, 7, [], error=QueryError, event_cache=cache)
+        self.assertEqual(offsets, [len(first.encode()) + 1])
+        self.assertEqual(warm["events"]["unparsed_lines"], 0)
+        self.assertEqual(warm["events"]["skill_usage"], [{"skill": "first", "count": 1}, {"skill": "tail", "count": 1}])
+        self.compare_cold(cache, now)
+
+    def test_window_replacement_truncation_spills_and_bad_encoding_match_cold(self):
+        from datetime import datetime, timedelta, timezone
+        from _query_stats import EventStatsCache
+        cache = EventStatsCache()
+        now = datetime(2026, 11, 12, tzinfo=timezone.utc)
+        line = '{"ts":"2026-11-05","type":"skill_used","skill":"first"}'
+        other = line.replace("first", "other")
+        future = line.replace("11-05", "11-13").replace("first", "later")
+        spill = self.state / "events.41.spill.jsonl"
+        merged = self.state / "events.41.spill.jsonl.merged.20261112"
+        put(self.events, line + "\n" + future + "\n")
+        put(spill, line + "\n" + other + "\n")
+        self.assertEqual(self.compare_cold(cache, now)["skill_usage"], [
+            {"skill": "first", "count": 1}, {"skill": "other", "count": 1},
+        ])
+        self.assertEqual(self.compare_cold(cache, now + timedelta(days=1))["skill_usage"],
+                         [{"skill": "later", "count": 1}])
+        self.assertEqual(len(self.compare_cold(cache, now + timedelta(days=1), 30)["skill_usage"]), 3)
+        spill.replace(merged)
+        with self.events.open("ab") as file:
+            file.write((other + "\n").encode())
+        self.compare_cold(cache, now)
+        put(self.events, future + "\n")
+        put(merged, other + "\n")
+        self.assertEqual(self.compare_cold(cache, now)["skill_usage"], [{"skill": "other", "count": 1}])
+        modified = other.replace("other", "third")
+        put(merged, modified + "\n")
+        self.touch_tracked(merged)
+        self.assertEqual(self.compare_cold(cache, now)["skill_usage"], [{"skill": "third", "count": 1}])
+        sibling = self.state / "rotation"
+        put(sibling, line.replace("first", "fresh") + "\n")
+        sibling.replace(self.events)
+        self.assertEqual(len(self.compare_cold(cache, now)["skill_usage"]), 2)
+        merged.replace(self.state / "retired")
+        self.assertEqual(self.compare_cold(cache, now)["skill_usage"], [{"skill": "fresh", "count": 1}])
+        with self.events.open("ab") as file:
+            file.write(b"\xff")
+        self.assertEqual(self.compare_cold(cache, now)["error"]["code"], "parse_error")
+        put(self.events, line + "\n")
+        self.compare_cold(cache, now)
+
+    def test_same_size_edit_and_new_file_identity_invalidate_unanchored_bytes(self):
+        from datetime import datetime, timezone
+        from _query_stats import EventStatsCache
+        cache = EventStatsCache()
+        now = datetime(2026, 11, 12, tzinfo=timezone.utc)
+        old = '{"ts":"2026-11-12","type":"skill_used","skill":"old"}\n'
+        padded = ("# padding words\n" * 200) + old + ("# padding words\n" * 800)
+        put(self.events, padded)
+        self.assertEqual(self.compare_cold(cache, now)["skill_usage"], [{"skill": "old", "count": 1}])
+        updated = padded.replace('"old"', '"new"')
+        put(self.events, updated)
+        self.touch_tracked(self.events)
+        self.assertEqual(self.compare_cold(cache, now)["skill_usage"], [{"skill": "new", "count": 1}])
+        replacement = self.events.with_suffix(".replacement")
+        put(replacement, padded + "# appendix\n")
+        replacement.replace(self.events)
+        self.assertEqual(self.compare_cold(cache, now)["skill_usage"], [{"skill": "old", "count": 1}])
+
+    def test_growing_rewrite_invalidates_changed_prefix_anchor(self):
+        from datetime import datetime, timezone
+        from _query_stats import EventStatsCache
+        cache = EventStatsCache()
+        now = datetime(2026, 11, 12, tzinfo=timezone.utc)
+        first = '{"ts":"2026-11-12","type":"skill_used","skill":"plain"}\n'
+        put(self.events, first)
+        self.compare_cold(cache, now)
+        put(self.events, first.replace("plain", "other") + "# addition\n")
+        self.assertEqual(self.compare_cold(cache, now)["skill_usage"], [{"skill": "other", "count": 1}])
+
+    def test_over_budget_log_uses_the_cold_reader_without_retaining_raw_lines(self):
+        from datetime import datetime, timezone
+        import _query_stats as stats
+        from workframe_query import QueryError
+        cache = stats.EventStatsCache()
+        now = datetime(2026, 11, 12, tzinfo=timezone.utc)
+        put(self.events, '{"ts":"2026-11-12","type":"skill_used","skill":"budget"}\n')
+        with patch.object(stats, "_CACHE_BYTES", 512):
+            expected = self.compare_cold(cache, now)
+            with patch.object(stats, "_entry_from_line", wraps=stats._entry_from_line) as parse:
+                warm, _ = stats.run(self.project, [], [], now, 7, [], error=QueryError, event_cache=cache)
+                self.assertEqual(warm["events"], expected)
+                parse.assert_not_called()
 
 
 class QueryMatrixCliTests(QueryFixture):
@@ -2860,7 +3271,7 @@ class QueryMatrixCliTests(QueryFixture):
         if topic == "board":
             return paths | {board}
         if topic == "stats":
-            return paths | {board, ".workframe/state/"}
+            return paths | {board, ".workframe/state/", ".agents/skills/", ".claude/skills/"}
         return paths | {"projects/modules/", "projects/specs/", ".workframe/state/stale-modules.yaml",
                         "projects/changelog.md"} | ({ledger} if ledger else set())
 
@@ -2968,6 +3379,12 @@ class QueryMatrixCliTests(QueryFixture):
                 if not empty:
                     at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
                     put(project / ".workframe/state/events.jsonl", json.dumps({"ts": at, "type": "skill_used", "skill": "fixture"}) + "\n")
+                else:
+                    # 「一份事件文件都没有」报 unrecorded，不是零：先在没有文件时钉这一格，再建零字节文件走「有文件、零条」
+                    code, value, stderr = self.cli("stats", "--project", project, "--weeks", json.dumps(weeks))
+                    self.assertEqual((code, stderr, value["data"]["events"]), (0, "", {"state": "unrecorded"}))
+                    (project / ".workframe/state").mkdir(parents=True, exist_ok=True)
+                    (project / ".workframe/state/events.jsonl").write_bytes(b"")
                 before = snapshot(self.root)
                 code, value, stderr = self.cli("stats", "--project", project, "--weeks", json.dumps(weeks))
                 self.assertEqual((code, stderr), (0, ""))
@@ -2981,7 +3398,8 @@ class QueryMatrixCliTests(QueryFixture):
                 until = datetime.fromisoformat(value["generated_at"])
                 self.assertEqual(data["events"], {"state": "ok", "range": {"days": 30,
                                  "since": (until - timedelta(days=30)).isoformat(timespec="seconds"), "until": value["generated_at"]},
-                                 "skill_usage": [] if empty else [{"skill": "fixture", "count": 1}], "unparsed_lines": 0,
+                                 "skill_usage": [] if empty else [{"skill": "fixture", "count": 1}], "skill_invoked": [],
+                                 "unparsed_lines": 0,
                                  "signals": {"user_correction": {"count": 0, "sources": ["claude", "codex"]},
                                              "turn_failed": {"count": 0, "sources": ["claude"]},
                                              "task_blocked": {"count": 0, "sources": ["claude", "codex"]}}})

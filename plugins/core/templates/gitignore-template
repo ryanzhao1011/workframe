@@ -48,7 +48,7 @@ $RECYCLE.BIN/
 .workframe/state/*
 !.workframe/state/memory-index.json
 
-# 日志（Librarian 快照、SubagentStop hook 输出）
+# 日志（Librarian 快照、维护提交记录等）
 logs/
 
 # 临时产物（screenshot skill 输出 / .tmp 等；不进 git）

@@ -31,7 +31,8 @@ if _SCRIPTS_DIR not in sys.path:
 from _harness import (  # noqa: E402
     add_harness_arg, harness_breakdown, project_dir as _project_dir,
 )
-from _state_io import append_line, event_json, state_dir_of  # noqa: E402
+from _state_io import append_line, atomic_write, event_json, state_dir_of  # noqa: E402
+import _skill_identity  # noqa: E402  技能身份归一的唯一实现
 
 PROJECT_DIR = _project_dir()
 STATE_DIR = state_dir_of(PROJECT_DIR)
@@ -102,6 +103,10 @@ def _render_metrics(metrics):
 
     skills = metrics["skills"]
     if skills:
+        # 键是规范身份（`_skill_identity`）。`invocations` / `successes` / `last_used` 只数自报的
+        # `skill_used`（口径不变）；`invoked` 是 hook 记的 `skill_invoked` 次数，**两列不相加**。
+        # 只有调起、没有自报的技能 `invocations: 0`，表示「无自报样本」，不是成功率为零。
+        # Codex 门不产 `skill_invoked`，那一门的技能这一列恒为 0 是结构性的。
         lines.append("skills:")
         for name in sorted(skills):
             data = skills[name]
@@ -111,6 +116,7 @@ def _render_metrics(metrics):
                     f"    invocations: {data['invocations']}",
                     f"    successes: {data['successes']}",
                     f"    last_used: {_yaml_quote(data['last_used']) if data['last_used'] else 'null'}",
+                    f"    invoked: {data['invoked']}",
                 ]
             )
     else:
@@ -198,12 +204,14 @@ def append_event(ev_type, **extra):
 
 
 def recompute_skill_metrics(window_days=30, write_event=True):
-    """Aggregate type=skill_used and related maintenance signals into YAML."""
+    """Aggregate skill_used (self-reported) and skill_invoked (hook-recorded) per normalized skill
+    identity, plus related maintenance signals, into YAML."""
     generated_at_dt = _now()
     events = _load_events(EVENTS_FILE)
     scoped_events = [ev for ev in events if _in_window(ev, generated_at_dt, window_days)]
 
-    skill_stats = defaultdict(lambda: {"invocations": 0, "successes": 0, "last_used_ts": None})
+    skill_stats = defaultdict(lambda: {"invocations": 0, "successes": 0, "last_used_ts": None, "invoked": 0})
+    resolve = _skill_identity.resolver(PROJECT_DIR)
     # main-led 观测（2026-08-16 增）：此前 role 字段被完全忽略，无法回答「主 Claude 直做
     # 占多大比例」。缺失 role 的历史事件归 unspecified，不臆测归属。
     role_stats = defaultdict(int)
@@ -213,9 +221,13 @@ def recompute_skill_metrics(window_days=30, write_event=True):
 
     for ev in scoped_events:
         ev_type = ev.get("type")
-        if ev_type == "skill_used":
-            skill = ev.get("skill")
-            if isinstance(skill, str) and skill:
+        if ev_type == "skill_invoked":
+            skill = resolve(ev.get("skill"), ev.get("plugin"))
+            if skill:
+                skill_stats[skill]["invoked"] += 1
+        elif ev_type == "skill_used":
+            skill = resolve(ev.get("skill"), ev.get("plugin"))
+            if skill:
                 stats = skill_stats[skill]
                 stats["invocations"] += 1
                 if ev.get("success") is True:
@@ -239,6 +251,7 @@ def recompute_skill_metrics(window_days=30, write_event=True):
             "invocations": stats["invocations"],
             "successes": stats["successes"],
             "last_used": last_used_ts.date().isoformat() if last_used_ts else None,
+            "invoked": stats["invoked"],
         }
 
     metrics = {
@@ -256,7 +269,7 @@ def recompute_skill_metrics(window_days=30, write_event=True):
     }
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    METRICS_FILE.write_text(_render_metrics(metrics), encoding="utf-8", newline="")
+    atomic_write(METRICS_FILE, _render_metrics(metrics))
 
     if write_event:
         append_event(

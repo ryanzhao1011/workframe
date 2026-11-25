@@ -60,18 +60,6 @@
       "async": null
     },
     {
-      "key": "hooks/hooks.codex.json:session_start:0:4",
-      "event": "SessionStart",
-      "matcher": "",
-      "type": "command",
-      "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/memory-ask.py\" --harness codex",
-      "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/memory-ask.py\" --harness codex",
-      "timeout": null,
-      "statusMessage": null,
-      "additionalContextLimit": 0,
-      "async": null
-    },
-    {
       "key": "hooks/hooks.codex.json:session_start:1:0",
       "event": "SessionStart",
       "matcher": "compact",
@@ -216,25 +204,13 @@
       "async": null
     },
     {
-      "key": "hooks/hooks.codex.json:subagent_stop:0:0",
-      "event": "SubagentStop",
-      "matcher": "",
-      "type": "command",
-      "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-subagent-activity.py\" --harness codex",
-      "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-subagent-activity.py\" --harness codex",
-      "timeout": null,
-      "statusMessage": null,
-      "additionalContextLimit": null,
-      "async": null
-    },
-    {
       "key": "hooks/hooks.codex.json:session_end:0:0",
       "event": "SessionEnd",
       "matcher": "",
       "type": "command",
       "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end-flush.py\" --harness codex",
       "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end-flush.py\" --harness codex",
-      "timeout": null,
+      "timeout": 3,
       "statusMessage": null,
       "additionalContextLimit": null,
       "async": null

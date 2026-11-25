@@ -2,7 +2,7 @@
 
 本文档定义如何在项目内扩展或定制 skill。
 
-## 37 通用 skill（来自 core plugin）
+## 35 通用 skill（来自 core plugin）
 
 订阅 core plugin 后自动可用，无需项目本地重复定义。分四类：
 
@@ -15,21 +15,19 @@
 | 研发支持 | `technical-design`, `systematic-debugging`, `test-case-design`, `code-review` |
 | Prompt 工程 | `prompt-design`, `prompt-evaluation` |
 
-### Maintenance/system skills（9 个，内部 / 命令触发，不绑任何角色）
+### Maintenance/system skills（7 个，内部 / 命令触发，不绑任何角色）
 
 | Skill | 触发方式 | 用途 |
 |---|---|---|
-| `librarian` | **SessionStart 询问式开场卡**（主通道）/ `workframe-maintenance` 批处理工单 / `/core:maintenance-review` | 记忆整理；skill-metrics.yaml 由 `recompute_skill_metrics.py` 重算 |
-| `self-iteration` | 内部调用（hook 触发 pending_maintenance → /core:maintenance-review 执行） | 模式识别 + 多候选提案 |
-| `session-digest` | **下次 SessionStart** 见骨架简陋时二次填充 | 会话摘要（SessionEnd hook 只写骨架且**无条件覆盖**，会话末尾预写必被盖掉——详见该 skill §执行模型说明） |
+| `librarian` | 用户要求整理记忆（主通道；首问维护提醒的 `memory_backlog` 是提示入口）/ `workframe-maintenance` 批处理工单 / `/core:maintenance-review` | 记忆整理；skill-metrics.yaml 由 `recompute_skill_metrics.py` 重算 |
+| `self-iteration` | 后台自迭代作业（两扇门由 hook 排队）；手动分析与旧提案处理由 Claude best-effort 调用 | 模式识别 + 多候选提案 |
 | `audit` | 用户 `/core:audit` | 维护活动审计 + pending_maintenance 展示 + 纪律抽查（默认只读；带 `--record` 时追加一条抽查事件） |
 | `rollback` | 用户 `/core:rollback` | 回滚 L1/L2 自动变更 |
 | `memory-log` | 用户 `/core:memory-log` | 记忆层活动流水 |
 | `maintenance-review` | 用户 `/core:maintenance-review` | Dormant 唤醒 / 手动维护入口 |
-| `onboard` | 用户 `/core:onboard`（未 onboarded 的项目 SessionStart 提示一行） | 一次性可选配置引导（默认 skip；详见 `onboard/SKILL.md`） |
 | `signal-intake` | 主会话按必载纪律判定「要落盘」之后调用 | 信号入账的落盘工序：Issue 模板与编号、记忆条目写入格式与 supersede、memory-index sidecar 字段（判据在必载纪律里，本 skill 只管怎么写） |
 
-写入型维护操作由 `maintenance-review` 承担，例如 `/core:maintenance-review --dismiss <PM-ID>` 关闭 pending_maintenance 条目；`audit` 默认只读（带 `--record` 时只追加一条抽查事件，不改任何状态）。`onboard` 是受保护资产 `.claude/settings*.json` 的两个豁免写入入口之一——另一个是装机链路（只写订阅声明那几个键；两个面的授权形态不同——**经 launcher setup 走**时由确认页逐个点名要改的文件，**直接敲命令**时没有确认页、授权就是用户亲手敲了命令，`workframe-door --backfill` 与脱离 launcher 直接跑的 `project_scaffold.py --write-subscription` 都属后者）（详见 [`40-protected-assets.md`](../context/both/40-protected-assets.md) 的受保护资产例外段）。
+写入型维护操作由 `maintenance-review` 承担，例如 `/core:maintenance-review --dismiss <PM-ID>` 关闭 pending_maintenance 条目；`audit` 默认只读（带 `--record` 时只追加一条抽查事件，不改任何状态）。受保护资产 `.claude/settings*.json` 的豁免写入入口只有装机链路（只写订阅声明那几个键；两个面的授权形态不同——**经 launcher setup 走**时由确认页逐个点名要改的文件，**直接敲命令**时没有确认页、授权就是用户亲手敲了命令，`workframe-door --backfill` 与脱离 launcher 直接跑的 `project_scaffold.py --write-subscription` 都属后者）（详见 [`settings-write-boundary.md`](./settings-write-boundary.md)）。
 
 ### 文档/发布工具（8 个）
 
@@ -60,7 +58,7 @@
 
 modules/ 体系随项目骨架恒启用（`projects/modules/` 总是存在），7 个 skill 开箱即用。详见 `module-architecture.md`。
 
-**合计：13 domain + 9 system/maintenance + 8 docs/publishing + 7 modules-system = 37 skills**。
+**合计：13 domain + 7 system/maintenance + 8 docs/publishing + 7 modules-system = 35 skills**。
 
 ## 何时写 skill vs rule vs agent
 

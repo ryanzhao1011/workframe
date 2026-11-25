@@ -8,7 +8,7 @@ description: '本项目的 PRD 框架与写作风格——工序形态 / 章节�
 > **这份文件属于你的项目**：装机时由框架放入（出厂默认版），之后框架**不再覆盖**。
 > 想让 PRD 长成你习惯的样子——章节怎么排、要不要流程图、用不用原型——直接改这份文件，
 > 下一次写需求即生效。改坏了想回默认：从框架模板重新复制一份即可——
-> `$(cat .workframe/state/plugin-root.txt)/templates/project-skills/prd-style/SKILL.md`。
+> `$WF_PLUGIN_ROOT/templates/project-skills/prd-style/SKILL.md`。
 >
 > 与 core 的分工：core `prd-writer` 管**工作流骨架与通用写作纪律**（怎么协作、怎么写得清楚），
 > 本文件管**本项目的框架与风格**（写成什么样）。两边冲突时**以本文件为准**，但下方

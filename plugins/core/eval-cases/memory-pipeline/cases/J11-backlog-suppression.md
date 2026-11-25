@@ -22,8 +22,8 @@
      这与「notes 变了就重开」的 mtime 方案是**有意的不同选择**（mtime 跨机同步 /
      git checkout 会重置，且 librarian 把条目提升到 MEMORY 时 notes 也会变）
   6. `closed_at` 超过 `PM_CLOSED_RETENTION_DAYS` 后，SessionStart 的 GC **删除该条目**
-  7. 载体消失 → 下一轮 trigger **重开**。这不是缺陷：其余四个 kind 的底层条件会随
-     产出提案 / 跑迭代 / 事件滑出窗口自然归零，而 **notes 积压只有 librarian 会清**
+  7. 载体消失 → 下一轮 trigger **重开**。这不是缺陷：**notes 积压只有 librarian 会清**，
+     没有滚动窗口把它推出视野
      ——本 kind 的实际形态是「**每个保留期提醒一次，永远**」，不是「驳回一次就永远安静」
 - **可脚本化的边界**：断言 1-7 全部可脚本直调，不需要真实 librarian 会话
   （关闭动作用代码通道模拟）。「librarian 是否**该**关这条」属内容判断，归 J4；

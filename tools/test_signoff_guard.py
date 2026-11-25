@@ -666,7 +666,7 @@ def test_enable_switch_non_mapping(tmp):
 
 
 def test_main_paths(root, h):
-    print("[main] Edit 拦 / Bash 只报 / 通过写事件 / 非看板放行")
+    print("[main] Edit 拦 / Bash 只报 / 通过不写事件 / 非看板放行")
     board = write_board(root, [])
     edit = json.dumps({"tool_name": "Edit", "tool_input": {"file_path": str(board)}})
     bash = json.dumps({"tool_name": "Bash", "tool_input": {"command": "python x.py"}})
@@ -714,11 +714,14 @@ def test_main_paths(root, h):
     rc, err = _main_with_stdin(edit, root)
     check("Edit 侧：改成合规 → exit 0", rc, 0)
     after = ev.read_text(encoding="utf-8") if ev.exists() else ""
-    check("通过时 hook 自己写一行 self_signoff（钉计数）", after.count('"self_signoff"') - before, 1)
-    rec = [json.loads(l) for l in after.splitlines() if '"self_signoff"' in l][-1:] or [{}]
-    check("事件带类别与验证方", (rec[0].get("mode"), rec[0].get("verifier")), ("独立验证", "@qa"))
+    check("通过时不写 self_signoff 事件（只记成功的流水已停写）", after.count('"self_signoff"') - before, 0)
+    # 正向对照：同一份签注换一个类别再写，守卫确实判了「通过」（而不是根本没判）——passed 里有它
+    write_board(root, mk_task(mk_signoff(h["base"], h["clean"], mode="你拍板")))
+    problems, _notes, passed = sg.guard(root, board)
+    check("同形签注改过一次 → guard 判通过并在 passed 里点名", ([p[1] for p in passed], problems), (["你拍板"], []))
     rc, _ = _main_with_stdin(edit, root)
-    check("原样未动再写一次 → 不再写事件", ev.read_text(encoding="utf-8").count('"self_signoff"') - before, 1)
+    check("原样未动再写一次 → 仍不写事件",
+          (ev.read_text(encoding="utf-8") if ev.exists() else "").count('"self_signoff"') - before, 0)
 
     other = json.dumps({"tool_name": "Edit", "tool_input": {"file_path": str(root / "docs/plain.md")}})
     check("写入对象不是看板 → 放行", _main_with_stdin(other, root)[0], 0)

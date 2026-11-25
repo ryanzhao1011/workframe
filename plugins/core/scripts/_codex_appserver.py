@@ -53,6 +53,10 @@ class AppServerRpcError(AppServerError):
     都不是这一种——那几种下请求可能已经生效，只是答复没回来。要对用户说「没写成」的调用方只能认这一种。"""
 
 
+class AppServerCloseError(AppServerError):
+    """The observation or write returned, but the owned server did not cleanly stop."""
+
+
 def find_codex_exe(env=None):
     """定位 codex 可执行文件：`WF_CODEX_EXE` > PATH 上的 `codex`（若是 npm 包装则改指包内 exe）。
 
@@ -78,25 +82,29 @@ def find_codex_exe(env=None):
     return str(p)
 
 
-def kill_tree(proc):
-    """按进程树杀掉 app-server；任何异常都吞掉（调用方在收尾路径上，不能再抛）。"""
+def kill_tree(proc, timeout=15):
+    """Request tree termination, falling back to the owned process if necessary."""
     if proc is None or proc.poll() is not None:
         return
     try:
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                           capture_output=True, timeout=15)
+            result = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                                    capture_output=True, timeout=timeout)
+            if result.returncode == 0:
+                return
         else:
             proc.terminate()
             try:
-                proc.wait(timeout=5)
-            except Exception:
+                proc.wait(timeout=min(5, timeout))
+            except subprocess.TimeoutExpired:
                 proc.kill()
+            return
     except Exception:
-        try:
-            proc.kill()
-        except Exception:
-            pass
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
 
 
 class AppServer:
@@ -131,7 +139,11 @@ class AppServer:
         return self
 
     def __exit__(self, *exc):
-        self.close()
+        try:
+            self.close()
+        except AppServerCloseError:
+            if not exc or exc[0] is None:
+                raise
         return False
 
     def start(self):
@@ -153,18 +165,32 @@ class AppServer:
                 "initialize", {"clientInfo": {"name": CLIENT_NAME, "version": CLIENT_VERSION}})
             self.notify("initialized", {})
         except BaseException:
-            self.close()
+            try:
+                self.close()
+            except AppServerCloseError:
+                pass
             raise
         return self
 
     def close(self):
-        kill_tree(self.proc)
-        self._dead.set()
-        if self.proc is not None:
-            try:
-                self.proc.wait(timeout=1)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+        if self.proc is None:
+            self._dead.set()
+            return
+
+        def remaining(limit):
+            return limit if self.deadline is None else min(limit, max(0, self.deadline - time.monotonic()))
+
+        try:
+            kill_tree(self.proc, timeout=max(0.001, remaining(15)))
+            # taskkill can race natural exit or be unavailable. Reaping the
+            # owned process provides the observation boundary in either case.
+            self.proc.wait(timeout=remaining(1))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise AppServerCloseError("Codex app-server did not exit before the deadline") from exc
+        finally:
+            self._dead.set()
+        if remaining(1) == 0:
+            raise AppServerCloseError("Codex app-server shutdown could not be confirmed before the deadline")
 
     # ---- 收发 ----
     def _read_stdout(self):

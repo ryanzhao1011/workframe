@@ -144,8 +144,8 @@ managed 段的状态与段首启用表——**只看项目侧**：hook 信任、
 内容面时打一行 `i`；在哪些出口说、为什么只在成功时说，见 `agents_md_notes`。
 
 **`--cc`**：只读核 `.claude/settings.json` 的 `enabledPlugins` 有 `core@…`——**这个子命令不写 settings**。
-写 settings 的入口有两个：`/core:onboard`（可选环境配置）与装机链路（只写订阅声明那几个键），
-两者都走 `_settings_io` 的备份 ＋ merge ＋ 回读。读路径也用它，与 doctor 同一个 BOM 口径。
+写 settings 的入口只有装机链路（只写订阅声明那几个键），
+走 `_settings_io` 的备份 ＋ merge ＋ 回读。读路径也用它，与 doctor 同一个 BOM 口径。
 **装机链路自己又分两个面，授权形态不同**：**经 launcher setup 走**时由确认页对「会被修改的已存在
 文件」逐个点名；**直接敲命令**时没有确认页、授权就是用户亲手敲了命令——本脚本的 `--backfill`
 与脱离 launcher 直接跑的 `project_scaffold.py --write-subscription` 都属后者。
@@ -361,7 +361,12 @@ def parse_version(text):
 
 
 def step_version(exe):
-    rc, out, err = run_codex(exe, ["--version"], timeout=30)
+    try:
+        rc, out, err = run_codex(exe, ["--version"], timeout=30)
+    except subprocess.TimeoutExpired:
+        # 只读查询、在一切写入之前：单独说清，不落进 `do_codex` 那句「改没改用户配置无法确认」
+        raise DoorError(EXIT_ENV, "`codex --version` 30 秒没有返回，已终止——还没有跑任何会改 Codex 用户配置的命令；"
+                                  "确认终端里 `codex --version` 能正常返回后重跑")
     v = parse_version(out) or parse_version(err)
     if rc != 0 or v is None:
         raise DoorError(EXIT_ENV, f"`codex --version` 失败（rc={rc}）: {(out or err)[:120]}")
@@ -520,11 +525,18 @@ def marketplace_source_type(exe, mkt_name, cwd):
     本地登记的那一行只有 `{name, root}`（实测 codex-cli 0.153.4）——要认出的恰是本地源，拿它判会把本地源判成
     「判不出」，而「判不出」会被当成「不是本地源」。
 
-    拿不到就返回 `None`——命令失败、JSON 解析不了、本市场此刻一个已装插件都没有，三种都是
+    **必须带 `-m <市场>`**：不带时 Codex 还会联网列它的远程市场，那边不响应就一直挂着（实测 codex-cli 0.169.0：
+    不带 `-m` 45 秒零输出，带上 0.1 秒返回）——要的只是本市场那一行，不该等无关的网络。
+
+    拿不到就返回 `None`——命令起不来 / 超时、命令失败、JSON 解析不了、本市场此刻一个已装插件都没有，都是
     「分辨不出」，由调用方按「先试 git 那条、撞见拒绝再改走 `plugin add`」处置。**不抛**：
     源形态只是选路依据，判不出不该让升级整个失败。
     """
-    rc, out, _err = run_codex(exe, ["plugin", "list", "--json"], cwd=cwd, timeout=120)
+    try:
+        rc, out, _err = run_codex(exe, ["plugin", "list", "--json", "-m", mkt_name], cwd=cwd,
+                                  timeout=PENDING_LIST_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return None
     data = _json_out(out) if rc == 0 else None
     if not isinstance(data, dict):
         return None
@@ -737,6 +749,7 @@ def step_roles(project, installed_root, marketplace, wrote=None):
                    "marketplace list` 可看市场指向哪里，只读）"), None)
     ledger = Path(project) / codex_roles.LEDGER_REL
     ledger_before = ledger.read_bytes() if ledger.is_file() else None
+    say_roles_preview(project, src_root, marketplace)
     try:
         report, roles = codex_roles.generate(project, src_root, installed_version(src_root), marketplace=marketplace)
     except codex_roles.RoleError as e:
@@ -757,6 +770,51 @@ def step_roles(project, installed_root, marketplace, wrote=None):
     if problems:
         raise DoorError(EXIT_COUNT, "角色产物对账不过: " + "；".join(problems))
     return [r for r, _d, _b in roles], src_root
+
+
+def roles_freshness(project, root, verify_problems=()):
+    """`--check` 用：角色与托管段比当前 Codex 实际加载的那一份（`codex_roles.compare`）。返回 (问题行, 说明行)。
+
+    **纯落后只出说明行**（用户拍板：落后只提示，退出码不变）；**归属冲突进问题行**——`verify()` 只遍历账本里登记了
+    的文件，账本缺一条登记时它看不见那份文件，而升级会因它整批拒写，`--check` 若报「一致」就是空绿。`verify()` 已
+    点名的文件不再重复。`root` 是由 `hooks/list` 反推出的实际加载根；反推不出、版本读不出时不拿本命令自己的根顶上，
+    只报未核实。"""
+    if root is None or not (Path(root) / "agents").is_dir():
+        return [], ["角色新旧：反推不出 Codex 实际加载的插件根，未核实"]
+    version, why = plugin_version(root)
+    if not version:
+        return [], [f"角色新旧：读不出 {root} 的插件版本（{why}），未核实"]
+    try:
+        items = codex_roles.compare(project, root, version)
+    except Exception as e:                     # 账本 JSON 坏了等：诊断照常输出，这一项只报未核实
+        return [], [f"角色新旧：按 {root} 比对失败，未核实（{type(e).__name__}: {e}）"]
+    stale, conflict, other = codex_roles.describe(items, version)
+    said = " ".join(verify_problems)
+    _s, problems, _o = codex_roles.describe([it for it in items if it["rel"] not in said], version)
+    if any(it["state"] == codex_roles.STATE_USER_CLOSED for it in items):
+        return problems, other                 # 已关门：不要求刷新，也不给升级出路
+    if not stale:
+        # `verify()` 已点名的冲突不重复进 problems，但有冲突就不能说「一致」
+        return problems, ([] if conflict else [f"角色新旧：与 Codex 实际加载的 v{version} 一致"]) + other
+    return problems, ([f"角色落后于 Codex 实际加载的 v{version}（跑 `workframe-door --upgrade` 刷新）："
+                       + "；".join(stale)] + other)
+
+
+def say_roles_preview(project, src_root, marketplace):
+    """写盘前的差异预告：升级写完后再比只剩 `current`，所以要在写之前按当前源比一次、说清这次会刷新什么。
+    市场名用**这次要写的那一个**（不按项目里旧段反推），版本读不出时不预告（拿显示用的 `"?"` 渲染会对不上）。"""
+    version, _why = plugin_version(src_root)
+    if not version:
+        return
+    try:
+        items = codex_roles.compare(project, src_root, version, marketplace)
+    except Exception:
+        return                                  # 渲染失败由随后的 generate() 报出来，这里不抢话
+    stale, _conflict, _other = codex_roles.describe(items, version)
+    if stale:
+        say(f"       写前比对（按 v{version} 重新渲染）：{len(stale)} 份将刷新")   # 子行，不占步号
+    for ln in stale:
+        say(f"       {ln}")
 
 
 def roles_registered_problems(server, project, roles):
@@ -1329,7 +1387,11 @@ def check_static(exe, project, mkt_name):
         n = trust_diag.orphan_count(s, plugin_id, {h.get("key") for h in mine}) if mine else None
         if n:
             info.append(f"孤儿信任记录 {n} 条（可安全删除，框架不代删）")
-    problems += codex_roles.verify(project)
+    verified = codex_roles.verify(project)
+    problems += verified
+    fresh_problems, fresh_info = roles_freshness(project, root, verified)
+    problems += fresh_problems
+    info.extend(fresh_info)
     if trust == "trusted":
         try:
             roles = [r for r, _d, _b in codex_roles.load_agents((root or PLUGIN_ROOT) / "agents")]
@@ -1352,7 +1414,7 @@ def check_static(exe, project, mkt_name):
     markers = sorted(state_dir_of(project).glob("current-session-codex-*.json"))
     if len(markers) > 1:
         info.append(f"同项目有 {len(markers)} 个 current-session-codex-*.json（上一个会话没跑到 "
-                    f"SessionEnd？模型手写事件会因分不清而省略 session_id；7 天后自清）")
+                    f"SessionEnd？模型手写事件会因分不清而省略 session_id；满 7 天后由下一次 Codex 开场清掉）")
     info.append(f"features: {features_multi_agent(exe)}")
     return problems, info, mine
 
@@ -1476,8 +1538,8 @@ def check_live(exe, project):
         if not ok:
             failed.append(script)
     say("   本次不判（只在条件成立时才有输出 / 侧效应）：heartbeat-check.py、"
-        "check-stale-modules.py scan-git-diff、memory-ask.py、user-prompt-inject.py；"
-        "需模型轮次：PostToolUse×4、Stop、SubagentStart×2、SubagentStop")
+        "check-stale-modules.py scan-git-diff、user-prompt-inject.py；"
+        "需模型轮次：PostToolUse×4、Stop、SubagentStart×2")
     stray = [r for r in inj if r.get("harness") not in (None, "codex")]
     if stray:
         failed.append(f"inject-log 出现非 codex 门的行: {stray[:2]}")
@@ -1502,7 +1564,7 @@ def check_cc(project):
     mkts = list((data.get("extraKnownMarketplaces") or {}).keys())
     if not core:
         return [f"{settings.name} 的 enabledPlugins 没有 {PLUGIN_NAME}@<市场>（**`--check` 与 `--cc` 自己"
-                f"只读、不写 settings**；写它的是装机链路与 /core:onboard 两个入口，已装项目用 "
+                f"只读、不写 settings**；写它的是装机链路，已装项目用 "
                 f"`workframe-door --backfill`）"], [f"extraKnownMarketplaces: {mkts}"]
     return [], [f"CC 门：enabledPlugins {core}；extraKnownMarketplaces {mkts}"]
 
@@ -1619,8 +1681,12 @@ def locate_market(mkt_name, exe=None, project=None):
             return declared, None, "本项目 settings 的 extraKnownMarketplaces（没有 installLocation）"
         return None, None, ("CC 用户级市场注册表与本项目 settings 里都没有这个市场，"
                             "而本机没有 codex 可执行文件——所有注册面都拿不到市场来源")
-    root = None
-    rc, out, _err = run_codex(exe, ["plugin", "marketplace", "list", "--json"], cwd=project, timeout=120)
+    root, unread = None, ""
+    try:
+        rc, out, _err = run_codex(exe, ["plugin", "marketplace", "list", "--json"], cwd=project, timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        # 问不到 Codex 的注册信息 = 这一路没有答案，照旧退到项目自己的声明；不崩掉整次回填
+        rc, out, unread = 1, "", f"，`codex plugin marketplace list` 没跑成（{type(e).__name__}）"
     data = _json_out(out) if rc == 0 else None
     for row in (data or {}).get("marketplaces") or []:
         if row.get("name") == mkt_name:
@@ -1640,7 +1706,7 @@ def locate_market(mkt_name, exe=None, project=None):
         if declared is not None:
             return declared, None, "本项目 settings 的 extraKnownMarketplaces（没有 installLocation）"
         return None, None, ("所有注册面都拿不到市场来源（CC 注册表没有这个市场；"
-                            f"Codex 侧 root={root!r} source={raw!r}；本项目 settings 里也没有声明）")
+                            f"Codex 侧 root={root!r} source={raw!r}{unread}；本项目 settings 里也没有声明）")
     if kind != "local":
         if declared is not None:
             # 项目自己的声明是**它自己写下的**，不是我替它猜的 ⇒ 用它，不落进「不代填」那一档
@@ -1929,7 +1995,12 @@ def do_codex(a, project, upgrade=False, wrote=None):
             raise DoorError(EXIT_ENV, f"app-server 未响应（{str(e)[:200]}）；hook 信任未能核实；运行 workframe-door --upgrade，成功后重开 Codex 会话，"
                             + ("[7/11] 的 config/batchWrite 已写入你的 Codex 用户配置、回读没做完——重跑 "
                                "workframe-door --codex" if trust_written else "未写入任何 hook 信任"))
-    except DoorError as e:
+    except (DoorError, subprocess.TimeoutExpired) as e:
+        if isinstance(e, subprocess.TimeoutExpired):
+            # codex 命令没等到结果就被终止（`run_codex`）：写入类命令可能已经改了用户层，不能说「没写」
+            shown = " ".join(str(x) for x in (e.cmd[1:] if isinstance(e.cmd, (list, tuple)) else [e.cmd]))
+            e = DoorError(EXIT_ENV, f"`codex {shown}` {e.timeout:g} 秒没有返回，已终止——它改没改你的 Codex 用户配置与"
+                                    f"插件缓存无法确认，先跑 workframe-door --check 核，再决定是否重跑")
         msg = f"{e}。{_wrote_note(wrote)}"
         if isinstance(e, InstalledRootError) and codex_roles.CONFIG_REL.as_posix() in wrote and not user_true_now:
             # 段首启用表已在本次写进项目、用户层不是 true ⇒ 走到这里时项目必已 trust（否则上面早以 3 停下）⇒

@@ -27,6 +27,26 @@ HARNESSES = (CC, CODEX)
 ROOT_MARKER = ".workframe-config.json"
 
 
+# skill 命令里定位插件根的变量名。会话开场（横幅）、子 agent 纪律片、Codex 主线程的周期补投各给一行
+# `plugin_root_line()`，模型照它替换。**不设成环境变量**：嵌套启动的另一扇门会继承它、原样配方静默跑错安装。
+PLUGIN_ROOT_VAR = "WF_PLUGIN_ROOT"
+
+
+def executing_plugin_root():
+    """正在执行的这份脚本所在的插件根（`scripts/` 的上一级），正斜杠绝对路径。
+
+    **不读 `plugin-root*.txt`、不读 `CLAUDE_PLUGIN_ROOT`**：两者都可能指向另一份安装（通用指针记的是最后起会话
+    的那扇门，环境变量随版本变）。要回答的是「这扇门此刻跑的是哪一份」，只有 `__file__` 答得准。"""
+    return str(Path(__file__).resolve().parents[1]).replace("\\", "/")
+
+
+def plugin_root_line(root=None):
+    """注入给模型的那一行。不带门名：同一份根与门无关，且剥掉 `--harness` 的行为探针要求输出逐字节相同。"""
+    root = root or executing_plugin_root()
+    return (f"本会话插件根：{root}——skill 命令里的 `${PLUGIN_ROOT_VAR}` 就是这个路径，执行前换成它"
+            f"（没换时它展开为空、命令报找不到文件，不会跑到另一扇门的脚本）")
+
+
 def cc_config_dir(env=None):
     """User configuration for an explicitly invoked CC CLI, from either door.
 
@@ -394,7 +414,7 @@ def plugin_root():
 def entrypoint():
     """CC 的 `CLAUDE_CODE_ENTRYPOINT`（交互 / headless 判据）；Codex 侧恒为空串。
 
-    收在这里而不是让 `memory-ask.py` 直读，理由与其余三个变量同：Codex 下取不到值时
+    收在这里而不是让调用方直读，理由与其余三个变量同：Codex 下取不到值时
     走的是「按交互处理」那条兜底分支，而那正是这个变量本该拦住的场景。
     """
     return os.environ.get("CLAUDE_CODE_ENTRYPOINT", "")
@@ -485,6 +505,23 @@ def detect():
     （`CLAUDE_*` 泄漏 / `CODEX_HOME` 缺省）在嵌套启动下会给出**确信而错误**的答案，
     比「不知道」更坏。没带 `--harness` 就如实说不知道，消费方按缺省口径处理。
     """
+    return UNKNOWN
+
+
+def command_door():
+    """模型在会话里亲手跑的命令没带 `--harness` 时，由**会话号环境变量**认门；认不准返回 `unknown`。
+
+    只认「一种标记独占」：只有 `CLAUDE_CODE_SESSION_ID` ⇒ `cc`，只有 Codex 的命令环境标记 ⇒ `codex`。
+    嵌套启动时两种并存，分不清哪层是当前会话 ⇒ `unknown`，与 `session_id()` 不采信继承来的会话号同一口径。
+    **只给模型直接跑的命令用**，不并进 `harness()`：hook 与后台进程的环境里可能只剩外层那扇门的变量
+    （CC 里起 `codex exec` 时 Codex 的 hook 就是这样），在那里按它认会得到确信而错误的答案。
+    """
+    codex = any(os.environ.get(k) for k in CODEX_COMMAND_ENV_MARKERS)
+    cc = bool(os.environ.get("CLAUDE_CODE_SESSION_ID"))
+    if cc and not codex:
+        return CC
+    if codex and not cc:
+        return CODEX
     return UNKNOWN
 
 

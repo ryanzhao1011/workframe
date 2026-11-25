@@ -31,6 +31,12 @@ try:
 except ImportError:
     yaml = None
 
+# 「未编写」判定与 core 其余读者共用一份（插件内 scripts/_doc_state.py）
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                os.pardir, os.pardir, os.pardir, "scripts"))
+import _doc_state  # noqa: E402
+import _taxonomy  # noqa: E402  受控词表取词与图谱巡检共用一份
+
 PRD_REQUIRED = ["type", "status", "owner_role", "updated", "module",
                 "req_slug", "sub_req_slug", "description", "related", "tags"]
 # markdown frontmatter 的 status 词表，与 document-norms §2.2 逐字对齐。
@@ -48,6 +54,11 @@ SMELL = re.compile(r"(满足[^。]{0,20}核心诉求|为[^。]{0,15}保驾护航
                    r"极大地?提升|全面提升[^。]{0,10}体验|奠定[^。]{0,10}基础)")
 
 
+def _doc_state_of(path):
+    with open(path, "rb") as fh:
+        return _doc_state.effective_state(fh.read())
+
+
 def find_project_root(start):
     d = os.path.abspath(start)
     while True:
@@ -60,11 +71,19 @@ def find_project_root(start):
 
 
 def load_vocab(root):
+    """taxonomy 缺失 → None（跳过词表检查）；否则 (已配置节的词集, 未配置的节名列表)。
+
+    取词见 `_taxonomy.parse`：只读能力域 / 平台 / 特殊标记三节的第一张表，出厂示例词不算。
+    节不存在 = 不适用，不放宽判定；节在但没有真词 = 未配置——这时不在词表里的 tag 可能属于那一节。
+    """
     p = os.path.join(root, "projects", "specs", "_meta", "taxonomy.md") if root else None
     if not p or not os.path.exists(p):
         return None
-    t = io.open(p, encoding="utf-8").read()
-    return set(re.findall(r"^\| `([^`]+)`", t, re.M))
+    sections = _taxonomy.parse(io.open(p, encoding="utf-8-sig").read())
+    words = {w for ws in sections.values() if ws for w in ws}
+    unconfigured = [name for name, ws in sections.items()
+                    if _taxonomy.section_state(ws) == _taxonomy.UNCONFIGURED]
+    return words, unconfigured
 
 
 def frontmatter(t):
@@ -89,6 +108,7 @@ def main():
         print("⚠ 未找到 taxonomy.md，跳过 tags 词表检查")
 
     bad = 0
+    notes = []   # 提示行：不计入异常、不影响退出码
     n_prd = 0
     used_imgs = set()
     img_refs = 0
@@ -98,7 +118,7 @@ def main():
             if not fn.endswith(".md"):
                 continue
             p = os.path.join(r, fn)
-            t = io.open(p, encoding="utf-8", errors="replace").read()
+            t = io.open(p, encoding="utf-8-sig", errors="replace").read()
             rel = os.path.relpath(p, M)
             errs = []
 
@@ -140,8 +160,9 @@ def main():
                 if ns != ne or ns == 0:
                     errs.append("AUTO-INDEX 段不配对 START=%d END=%d" % (ns, ne))
 
-            # prd.md frontmatter 深检
-            if fn == "prd.md" and "由 `prd-writer` skill 生成" not in t:
+            # prd.md frontmatter 深检：只有正文仍是盖过戳的骨架才跳过；字面 true（未盖戳）
+            # 与已编写照检——正文里留着哪句模板提示语都不构成跳过理由
+            if fn == "prd.md" and _doc_state_of(p) != "unwritten":
                 n_prd += 1
                 fm = frontmatter(t)
                 if not fm:
@@ -164,8 +185,14 @@ def main():
                         elif st not in PRD_STATUS:
                             errs.append("status 取值异常 %s" % st)
                         if vocab is not None:
+                            words, unconfigured = vocab
                             for tg in (fm.get("tags") or []):
-                                if tg not in vocab:
+                                if tg in words:
+                                    continue
+                                if unconfigured:   # 可能属于还没配置的那一节：只提示，不计入异常
+                                    notes.append("%s tag 「%s」不在已配置的词表里（「%s」节尚未配置）"
+                                                 % (rel, tg, "」「".join(unconfigured)))
+                                else:
                                     errs.append("tag 不在受控词表: " + tg)
 
             if errs:
@@ -186,6 +213,8 @@ def main():
     for o in orph:
         print("!! 孤儿图（assets 内无任何 md 引用）:", o)
     bad += len(orph)
+    for n in notes:
+        print("提示:", n)
 
     print("\n检查 PRD %d 份 | 图片引用 %d 条 | 异常合计 %d 项 %s"
           % (n_prd, img_refs, bad, "✅" if bad == 0 else "❌"))

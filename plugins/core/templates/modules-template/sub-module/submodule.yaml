@@ -19,7 +19,7 @@ tech_stack: []
 #   stack: wechat-cloudfunction
 
 # 反向桥梁：项目根相对路径（不是小程序根/app 根相对！）
-# PostToolUse hook 据此重建 code-paths-index.json 段
+# PostToolUse hook 据此全量重建 code-paths-index.json
 code_paths: []
 # 示例：
 # - miniprogram/pages/profile/edit/**

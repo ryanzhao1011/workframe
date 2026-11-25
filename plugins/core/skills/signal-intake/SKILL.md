@@ -105,7 +105,7 @@ sidecar **只索引 `MEMORY.md` 条目**；写入 `MEMORY.md` 之后**同步维�
 
 ## 6. 事件
 
-按分流写完目标资产后**当场**写一条 `user_correction`，机械写法用 `workframe-event`（`user-correction` 子命令）。模块分支使用 `--scope module --module <模块路径> --target-path <完整文档路径>`，不传 `--entry-key`。**收尾时不要为同一条纠正再补一条**——那会让问题加权分双倍计入。
+按分流写完目标资产后**当场**写一条 `user_correction`，机械写法用 `workframe-event`（`user-correction` 子命令）。模块分支使用 `--scope module --module <模块路径> --target-path <完整文档路径>`，不传 `--entry-key`。**收尾时不要为同一条纠正再补一条**——那会让同一条纠正被当成复发。
 
 ## 7. supersede 的落盘动作
 

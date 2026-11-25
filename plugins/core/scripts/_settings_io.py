@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """`settings.json` 家族的读 / merge / 写——**全仓唯一一份实现**，三个消费方共用。
 
-**为什么会有这份文件**：在此之前，框架从来没有用代码写过 settings——`onboard` 的
+**为什么会有这份文件**：在此之前，框架从来没有用代码写过 settings——当时的可选配置引导里
 「备份 + JSON merge + 失败兜底」是**模型照 SKILL 正文执行的工序**，不是可被单测钉住的函数。
 装机链路要在两扇门下都写出订阅声明（CC 门有 `claude` CLI、纯 Codex 机器没有），这一步
 必须落成代码，于是这三件事第一次需要一个确定性实现。
@@ -225,7 +225,7 @@ def iso_millis(now=None):
 
 
 def backup_name(path, now=None, backup_dir=None):
-    """备份文件名：`<原名>.bak-<YYYYmmdd-HHMMSS>`，与 onboard 工序里的形态同族。
+    """备份文件名：`<原名>.bak-<YYYYmmdd-HHMMSS>`，与框架其余备份的形态同族。
 
     **`backup_dir` 给了就落那儿，不落原文件旁边。** 框架的既有备份约定是落项目的
     `logs/`（`logs/CLAUDE.md.bak-<时间戳>`，见 `reference/claude-md-merge-guide.md`），

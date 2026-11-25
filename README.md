@@ -2,7 +2,7 @@
 
 > 让 Claude Code（或 Codex）成为一个专属于你的产品团队：需求、研发、测试、Prompt 各有一套专属的纪律、技能和记忆，项目自带看板。装一次插件，新老项目都能用；一份源、两扇门，同一个项目可以同时挂两边。
 
-**Status:** v1.3.0 · [CHANGELOG](./CHANGELOG.md) · [![validate](https://github.com/ryanzhao1011/workframe/actions/workflows/validate.yml/badge.svg)](https://github.com/ryanzhao1011/workframe/actions/workflows/validate.yml)
+**Status:** v1.4.0 · [CHANGELOG](./CHANGELOG.md) · [![validate](https://github.com/ryanzhao1011/workframe/actions/workflows/validate.yml/badge.svg)](https://github.com/ryanzhao1011/workframe/actions/workflows/validate.yml)
 
 ## 肺腑之言
 
@@ -25,20 +25,20 @@ Workframe 就是这套沉淀的开源版，目前支持 Claude Code 和 Codex �
 - **越用越懂你**——自动从对话里提炼有价值的经验沉淀为记忆，agents 和 skills 跟着你不断进化，纠正过的错不会再犯第二遍。
 - **产研双向互通**——支持把代码解析成文档、和需求关联起来，写需求快到飞起；快去找你的领导开放代码权限，体验不一样的产研协作。
 
-这些能力由 37 个 skills 支撑，完整清单与分层原理见 [docs/concepts.md](./docs/concepts.md)。
+这些能力由 35 个 skills 支撑，完整清单与分层原理见 [docs/concepts.md](./docs/concepts.md)。
 
 ## 前置依赖
 
-后台自迭代在有新有效证据且执行器隔离能力已确认时使用你已登录的 CLI 自动分析；每项目滚动七天最多一次、全机 UTC 每日最多一次，两门合计，默认十五分钟超时，不设费用限额。角色记忆和模块提醒可有限融合；冲突、重组、受保护资产交用户确认。后续对话会提示待批事项，`workframe-selfiter status` 查看日志与恢复依据。用户级 `<home>/.workframe/user-config.json` 设置 `{"version":1,"self_iteration":{"mode":"off"}}` 可关闭后台模型运行；缺配置默认 apply，损坏配置关闭。后台执行器需要 Python 3.11+；旧 Python 下保留手动入口。详见 [安装与配置](./docs/setup-guide.md#后台自迭代)。
+后台自迭代在有新有效证据且执行器隔离能力已确认时使用你已登录的 CLI 自动分析；每项目滚动七天最多一次、全机 UTC 每日最多一次，两门合计，默认十五分钟超时，不设费用限额。后台只出建议、不改项目文件；后续对话提示需要你看的主题，`workframe-selfiter status` 查看建议与日志。用户级 `<home>/.workframe/user-config.json` 设置 `{"version":1,"self_iteration":{"mode":"off"}}` 可关闭后台模型运行；缺配置默认只出建议，损坏配置关闭。后台执行器需要 Python 3.11+；旧 Python 下保留手动入口。详见 [安装与配置](./docs/setup-guide.md#后台自迭代)。
 
-- **Claude Code**（2.1.x 上验证过）：框架挂了 11 个 hook 事件，其中五个较新，旧版本会静默忽略它们、对应能力不可用。
+- **Claude Code**（2.1.x 上验证过）：框架挂了 12 个 hook 事件，其中五个较新，旧版本会静默忽略它们、对应能力不可用。
 - **Codex**（可选，codex-cli 0.153.4+，Windows 上实测）：同一个项目可以同时挂 Claude Code 与 Codex 两扇门，跑的是同一份框架；装法 `workframe-door --codex`，见 [docs/setup-guide.md](./docs/setup-guide.md) §Codex 门。
 - **Python 3**（3.8+）：能从命令行调用。Codex 门相关功能需要 Python 3.11+。
 - **git**：用来判断哪些代码改过（据此标记文档待更新）、以及检查 `.gitignore` 配置。没有也能跑，这两项降级但不报错。macOS 需先装 Xcode Command Line Tools。
 
 以下是部分按需功能
 
-- **PyYAML**（`pip install pyyaml`）：收口检查与安装自检里的「YAML 可解析性」两项要用真解析器读一遍模块文档与 `board.yaml`。**没装时这两项报红而不是跳过**——「这一项没跑」和「这一项通过」不是一回事，静默报绿等于替你声称验过。不想装就在 `.workframe-config.json` 里写一句显式声明关掉：`"close_check": {"yaml_parse": false}`。**装到你机器上的那部分**不依赖它；仓库自带的质量闸 `tools/validate.py` 会跑一组需要它的单测，那是给框架贡献者的，用户用不到。
+- **PyYAML**（`pip install pyyaml`）：收口检查与安装自检里的「YAML 可解析性」两项要用真解析器读一遍模块文档与 `board.yaml`。**没装时这两项报红而不是跳过**——「这一项没跑」和「这一项通过」不是一回事，静默报绿等于替你声称验过。不想装就在 `.workframe-config.json` 里写一句显式声明关掉：`"close_check": {"yaml_parse": false}`。识别「还没写过的模板」（未编写标记）也要用它，没装时空模板按已编写显示。其余**装到你机器上的那部分**不依赖它；仓库自带的质量闸 `tools/validate.py` 会跑一组需要它的单测，那是给框架贡献者的，用户用不到。
 - **Obsidian和 Obsidian CLI**：在使用 Claude Code时，能根据链接关系进行查找、管理文档、审计坏链
 - **Node.js 18+**：截图与原型出图用（把 HTML 原型、Mermaid 图渲染成 PNG）。首次使用会自动装 `puppeteer-core`，另需系统已有 Edge / Chrome / Chromium 任一。
 - **Python 包**：把 docx / pdf / xls 原始资料归档入库时使用
@@ -72,7 +72,7 @@ claude plugin install workframe-launcher@workframe
 | `/core:audit` | 看框架最近自动做了哪些维护 |
 | `/core:rollback` | 回滚某次自动变更 |
 | `/core:memory-log` | 看记忆层的提升 / 衰减 / 纠正 / 迁出流水，含模块纠正去向 |
-| `/core:maintenance-review` | 维护流程入口（librarian 整理、提案审批，每步你确认） |
+| `/core:maintenance-review` | 维护项关单与唤醒后的 librarian 整理（整理前你确认） |
 
 ## 几件先知道为好的事
 
@@ -96,13 +96,15 @@ cd <你的项目> && claude plugin update core@workframe -s project
 - `claude plugin update` **必须带插件名**，裸命令会报错
 - 第三条要**在项目目录里跑**。不在已接入项目里时，CLI 可能静默更新到别的项目——看输出括号里的路径确认
 
+用 Codex 的项目还要在项目目录里跑一次 `workframe-door --upgrade`，再重开 Codex 会话（做完上面的 Claude Code 更新再跑；普通终端和只装了 Codex 的写法见 [quickstart](./docs/quickstart.md)）。
+
 改完重启各项目会话——上一版装的项目（运行态还在 `.claude/` 下）先按 [setup-guide](./docs/setup-guide.md) 的「已装项目迁移」迁移、再重启会话。
 
 ## 平台支持
 
 面向 Windows 11 / macOS / Linux 设计。
 
-Windows 11 已完成真实会话全流程 E2E（覆盖全新创建、存量接入、升级、断点续做等九场景）与 `validate.py` 全量验证（当前 219 项检查，随新增检查增长；后台自迭代的两门执行器另按各自能力证据披露）。
+Windows 11 已完成真实会话全流程 E2E（覆盖全新创建、存量接入、升级、断点续做等九场景）与 `validate.py` 全量验证（当前 223 项检查，随检查增减变化；后台自迭代的两门执行器另按各自能力证据披露）。
 
 macOS / Linux 的兼容优化尚不够完整，后续会持续改进——遇到问题欢迎提 issue。
 
@@ -110,7 +112,7 @@ macOS / Linux 的兼容优化尚不够完整，后续会持续改进——遇到
 <summary><b>无人值守 / CI 初始化（没有交互会话时）</b></summary>
 
 launcher 是对话式的。需要从脚本初始化项目时，直接调用同一批底层步骤——`<core>` 指已安装的
-core 插件根（已接入的项目把它记录在 `.workframe/state/plugin-root.txt`；没有这份记录时去哪找，见
+core 插件根（已接入的项目按门记录在 `.workframe/state/plugin-root.cc.txt` / `plugin-root.codex.txt`；没有这份记录时去哪找，见
 [quickstart](./docs/quickstart.md) 第 1 步「`<core插件根>` 怎么找」那段。两扇门都没装过 core 的机器上，
 用本仓库克隆下来的 `plugins/core` 当 `<core>`——这一形态未实测）。
 

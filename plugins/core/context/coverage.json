@@ -110,8 +110,8 @@
     },
     {
       "section": "auto-update.md#受保护资产约束",
-      "lands_in": "skills/onboard/",
-      "note": "这一段被拆成两半：清单本体与「settings 只有 onboard 与装机链路两个豁免写入入口」这条硬约束留在 both/40；两个入口各自的前提、授权形态（经 launcher 有确认页 / 直接敲命令没有）与写入面下沉到 skill §受保护资产例外——只有走这两个入口的执行者用得到"
+      "lands_in": "reference/settings-write-boundary.md",
+      "note": "这一段被拆成两半：清单本体与「settings 只有装机链路一个豁免写入入口」这条硬约束留在 both/40；装机链路的前提、两个面的授权形态（经 launcher 有确认页 / 直接敲命令没有）与写入面下沉到 reference/settings-write-boundary.md——只有走这个入口的执行者用得到"
     },
     {
       "section": "closeout-discipline.md#谁签发这次收口：四段闸门",

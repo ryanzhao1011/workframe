@@ -10,7 +10,9 @@ allowed-tools: [Read, Glob, Grep, Bash]
 ## 产物去向
 
 审查结论**默认只在响应中呈现**。用户要求存档时按 skill: `document-norms` §1 落
-`projects/modules/<basic>/<sub>/requirements/<req_slug>/<sub_req_slug>/reviews/`；
+`projects/modules/<basic>/<sub>/requirements/<req_slug>/<sub_req_slug>/reviews/`，写入成功后跑
+`python "$WF_PLUGIN_ROOT/scripts/module_init.py" --project . --refresh-index --scope <刚写的评审文件>`（`$WF_PLUGIN_ROOT` 换成会话开场注入的「本会话插件根」）
+（需求页「评审」列逐个链接 `reviews/` 下的文件，不刷则新评审在导航里显示 `-`）；
 发现的缺陷若需跟踪，走 `projects/issues/` + board task 草稿（不直接写 board）。
 
 ## 适用场景

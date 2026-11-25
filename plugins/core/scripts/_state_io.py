@@ -58,15 +58,62 @@ ACTIVITY_DEFAULTS = {
     "session_counter": 0,
     "last_session_at": None,
     "active_sessions_30": 0,
-    "weighted_events_since_last_iteration": 0.0,  # deprecated: trigger 实时重算
+    "weighted_events_since_last_iteration": 0.0,  # deprecated：没有读者，留着只为兼容旧状态文件
     "dormant": False,
     "wake_up_pending": False,
-    "dormant_profile": "normal",
-    "last_digest_at": None,
     "last_prompt_injected_session_id": None,
     "pending_maintenance": [],
     "recent_drift_repairs": [],
 }
+
+
+# 不再产出的维护提醒种类（唯一定义）。存量 open 卡由 session-start-prep 转 `retired`；首问提醒与
+# 维护工单按本表过滤——两扇门可能新旧混跑，旧版那扇门还会写出这些卡。
+RETIRED_PM_KINDS = ("problem_threshold", "activity_threshold", "completed_delta", "cadence_timeout")
+
+
+def is_retired_pm(item):
+    """该维护项属于不再产出的种类（不看状态）。"""
+    return isinstance(item, dict) and item.get("kind") in RETIRED_PM_KINDS
+
+
+def retire_pending(items, now_iso):
+    """就地把 open 的退役种类改成 `status=retired` 并填 `closed_at`；其余条目一律不动。
+
+    **不写成 `closed`**：closed 的含义是「用户驳回过」，旧版那扇门据此压住驳回之前的纠正与阻塞证据，
+    而这些卡用户从没驳回过。`retired` 与 closed 用同一保留期到期清理。
+    """
+    for item in items if isinstance(items, list) else []:
+        if is_retired_pm(item) and item.get("status") == "open":
+            item["status"] = "retired"
+            item["closed_at"] = now_iso
+
+
+DORMANT_PROFILES = ("high-frequency", "normal", "low-frequency", "archive")
+DORMANT_PROFILE_DEFAULT = "normal"
+# 各档位多少天没开会话算「久违」（唤醒）；archive 恒为归档态。读者是 session-start-prep（写 dormant /
+# wake_up 标记），与 `dormant_profile_of` 放在一起，档位的口径只在这一个文件里
+DORMANT_THRESHOLDS_DAYS = {
+    "high-frequency": 30,
+    "normal": 60,
+    "low-frequency": 90,
+    "archive": 0,
+}
+
+
+def dormant_profile_of(project_dir):
+    """本次生效的活动档位：**只读 `.workframe-config.json` 的 `dormant_profile`**。
+
+    配置缺键、取值非法或读不出 → `normal`。**不回退** activity-state 里的旧值——
+    回退就又成了第二个来源，改配置不生效的老问题会原样回来。旧项目状态文件里残留的
+    `dormant_profile` 不再被任何运行时读取；它与配置不一致时由 doctor `config` 项点名两值。
+    """
+    try:
+        cfg = json.loads((Path(project_dir) / ".workframe-config.json").read_text(encoding="utf-8-sig"))
+        value = cfg.get("dormant_profile") if isinstance(cfg, dict) else None
+    except Exception:
+        value = None
+    return value if value in DORMANT_PROFILES else DORMANT_PROFILE_DEFAULT
 
 
 class StateUnavailable(Exception):
@@ -124,7 +171,10 @@ class FileLock:
             self.fh = None
 
 
-def atomic_write(path, content):
+REPLACE_ATTEMPTS = 4
+
+
+def atomic_write(path, content, attempts=REPLACE_ATTEMPTS):
     """write `.tmp` → os.replace → atomic.
 
     跨平台：os.replace 在 Windows 与 POSIX 下都是原子替换。
@@ -139,8 +189,25 @@ def atomic_write(path, content):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-    tmp.write_text(content, encoding="utf-8", newline="")
-    os.replace(str(tmp), str(path))
+    try:
+        tmp.write_text(content, encoding="utf-8", newline="")
+        for attempt in range(attempts):
+            try:
+                os.replace(str(tmp), str(path))
+                break
+            except PermissionError:
+                # Windows 上目标正被别的程序读着就换不上去，读一遍通常只占几毫秒。
+                # 占着它的也可能在写：内容不归本进程独有的文件传 `attempts=1`，别在对方写完后盖上去
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(0.05)
+    except BaseException:
+        # 换不上去时别把半成品留在目标旁边：目标可能是进 git 的文件（进程被硬杀时仍可能留下）
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 SPILL_SUFFIX = ".spill.jsonl"
@@ -158,7 +225,7 @@ def event_json(event, harness=None):
     内联 `json.dumps`」，把这条从纪律变成闸。
 
     取值优先级：显式传参 > 事件字典里已有的 `harness` > `_harness.harness()`（读 argv 的
-    `--harness`，没带就是 `unknown`）。**`unknown` 是显式写进去的，不省略**——省略在
+    `--harness`，没带就是 `unknown`；`workframe-event` 没带时由它自己认好门再显式传参）。**`unknown` 是显式写进去的，不省略**——省略在
     schema 里等于宣称 `cc`（存量兼容口径），把「不知道」写成「确定是 CC」是更坏的假话。
 
     **能力边界**：本函数不校验 `event` 里的其余字段，也不管 `ts`——ts 的口径归各
@@ -176,12 +243,12 @@ def event_lines(events, harness=None):
     return [event_json(ev, harness=harness) for ev in events]
 
 
-def append_line(path, line):
+def append_line(path, line, lock_timeout=LOCK_TIMEOUT_SEC):
     """追加**一行**。多行一次性写（要求它们同生共死）用 `append_lines`。"""
-    return append_lines(path, [line])
+    return append_lines(path, [line], lock_timeout)
 
 
-def append_lines(path, lines):
+def append_lines(path, lines, lock_timeout=LOCK_TIMEOUT_SEC):
     """向 append-only 文件（events.jsonl 等）追加若干**整行**；并发安全。全框架只此一份实现。
 
     返回 True=写进主文件 / False=锁抢不到，已落 spill / None=连 spill 都没落下。
@@ -211,7 +278,7 @@ def append_lines(path, lines):
         pass  # 目录建不出来时下面的 open 会失败，统一走 spill 分支
     lock_path = path.with_suffix(path.suffix + ".lock")
     try:
-        with FileLock(lock_path):
+        with FileLock(lock_path, lock_timeout):
             # 上一行没写完（历史遗留的半行 / 别的工具截断过）就先补一个换行，别把新记录
             # 接到残行尾巴上——那会让**两条**记录一起解析失败。判定放在锁内，
             # 否则「读末字节」与「追加」之间还是有窗口。
@@ -219,7 +286,7 @@ def append_lines(path, lines):
                 f.write(_newline_prefix(path) + payload)
         return True
     except TimeoutError:
-        reason = f"锁超时（{LOCK_TIMEOUT_SEC}s）"
+        reason = f"锁超时（{lock_timeout}s）"
     except OSError as e:
         reason = f"写入失败（{type(e).__name__}: {e}）"
     except Exception as e:  # noqa: BLE001 —— hook 永不因记账失败非零退出

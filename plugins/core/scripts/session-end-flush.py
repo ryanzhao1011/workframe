@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-SessionEnd Hook — 会话结束 flush + digest（v8.2）
+SessionEnd Hook — 会话结束 flush（v8.2）
 
-触发：会话结束。stdin 字段名是 `reason`（写进 digest 时才叫 exit_reason），
+触发：会话结束。stdin 字段名是 `reason`，
       取值 ∈ {clear, resume, logout, prompt_input_exit, bypass_permissions_disabled, other}
-职责：
-  - 写 session-digest-latest.md（本次会话自动变更摘要；Claude 主体产出的变更摘要由 model 填，此处给 fallback）
+职责（按执行顺序；两门的 SessionEnd 都有时限，到点后面的就不跑了，所以最要紧、最便宜的排最前）：
+  - 后台自迭代排队（`_selfiter_hooks.on_hook`）；Codex 门不在这里排（它挂 Stop）
+  - 写 session_ended 事件
+  - Codex 门：删掉本会话自己的标记文件
   - flush events.jsonl 未落盘部分（当前 append 模式下实际不需要额外 flush，保留为占位兼容）
   - snapshot rollback 索引（配合 /core:rollback）
   - 重算 board.yaml 的 summary 块（调用 recompute_board_summary 模块）
@@ -38,7 +40,7 @@ except Exception:
 import _harness  # noqa: E402
 from _harness import project_dir as _project_dir  # noqa: E402
 from _state_io import (  # noqa: E402
-    append_line, event_json, load_activity, save_activity as _save_activity,
+    append_line, atomic_write, event_json, load_activity, save_activity as _save_activity,
     state_dir_of,
 )
 
@@ -56,7 +58,6 @@ SESSION_END_REASONS = ("clear", "resume", "logout", "prompt_input_exit",
 
 PROJECT_DIR = _project_dir()
 STATE_DIR = state_dir_of(PROJECT_DIR)
-DIGEST_FILE = STATE_DIR / "session-digest-latest.md"
 ROLLBACK_INDEX = STATE_DIR / "rollback-index.json"
 ACTIVITY_FILE = STATE_DIR / "activity-state.json"
 EVENTS_FILE = STATE_DIR / "events.jsonl"
@@ -75,41 +76,14 @@ def save_state(state):
 
 
 def append_event(ev_type, **extra):
-    """加锁与 spill 见 _state_io.append_line。"""
+    """加锁与 spill 见 _state_io.append_line。锁只等很短：等锁的上限比 SessionEnd 的时限还长，
+    等满它就什么都落不下；抢不到立刻落 spill，下次开场并回。"""
     ev = {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "type": ev_type,
         **extra,
     }
-    append_line(EVENTS_FILE, event_json(ev))
-
-
-def write_digest_skeleton(reason):
-    """写 digest 骨架；真正的变更摘要由 Claude 在会话末尾或下次 SessionStart 主动调用 session-digest skill 填入。
-
-    字段名 / section 名与 plugins/core/skills/session-digest/SKILL.md 输出格式严格对齐：
-      - exit_reason（不是 reason）
-      - session_counter（来自 activity-state.json）
-      - Auto changes (T1/T2) / Pending maintenance (T3/T4) / Flags
-    """
-    now_iso = datetime.now(timezone.utc).isoformat()
-    state = load_state()
-    session_counter = state.get("session_counter", 0)
-    dormant_profile = state.get("dormant_profile", "normal")
-    content = (
-        "# Session Digest (latest)\n\n"
-        f"- session_ended_at: {now_iso}\n"
-        f"- session_counter: {session_counter}\n"
-        f"- exit_reason: {reason}\n\n"
-        "## Auto changes (T1/T2)\n"
-        "- (填充：本次 session 内自动应用的 T1/T2 变更列表，由 session-digest skill 从 events.jsonl 重建)\n\n"
-        "## Pending maintenance (T3/T4)\n"
-        "- (填充：未处理的维护项；下次 session 启动展示)\n\n"
-        "## Flags\n"
-        f"- dormant_profile: {dormant_profile}\n"
-    )
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    DIGEST_FILE.write_text(content, encoding="utf-8", newline="")
+    append_line(EVENTS_FILE, event_json(ev), lock_timeout=0.3)
 
 
 def _parse_iso_datetime(value):
@@ -155,7 +129,7 @@ def _gc_rollback_index_inner():
             "__schema__": "workframe.rollback-index.v1",
             "entries": [],
         }
-        ROLLBACK_INDEX.write_text(json.dumps(skeleton, indent=2), encoding="utf-8", newline="")
+        atomic_write(ROLLBACK_INDEX, json.dumps(skeleton, indent=2))
         return
 
     try:
@@ -235,7 +209,7 @@ def _gc_rollback_index_inner():
     data["entries"] = [entry for entry, _ in kept]
     if "__schema__" not in data:
         data["__schema__"] = "workframe.rollback-index.v1"
-    ROLLBACK_INDEX.write_text(json.dumps(data, indent=2), encoding="utf-8", newline="")
+    atomic_write(ROLLBACK_INDEX, json.dumps(data, indent=2))
 
 
 def snapshot_rollback_index():
@@ -256,10 +230,9 @@ def snapshot_rollback_index():
 def _stage(name, fn, *args, **kwargs):
     """跑一个收尾阶段：失败只记一笔，绝不阻断后面的阶段。
 
-    SessionEnd 是「最后一次把状态落下去」的机会。此前只有 rollback GC 做了隔离，
-    digest 骨架与 session_ended 事件是裸奔的——状态目录被占用或不可写，第一步一抛，
-    后面的结束事件、summary 重算、skill-metrics 重算、last_digest_at 全部陪葬，
-    而整轮会话看起来只是「安静地结束了」。
+    SessionEnd 是「最后一次把状态落下去」的机会：状态目录被占用或不可写时，任何一步一抛，
+    后面的结束事件、summary 重算、skill-metrics 重算就全部陪葬，而整轮会话看起来只是
+    「安静地结束了」。
     """
     try:
         fn(*args, **kwargs)
@@ -268,6 +241,22 @@ def _stage(name, fn, *args, **kwargs):
         print(f"[warn] SessionEnd 阶段「{name}」失败（不阻断后续）: "
               f"{type(e).__name__}: {e}", file=sys.stderr)
         return False
+
+
+def remove_session_marker(payload):
+    """Codex 门：删掉本会话自己的标记文件（session-start-prep 写的那份，只删自己这一个）。
+
+    它是 `workframe-event` 第三级兜底的来源；会话结束后留着，下一个会话就有两个候选、
+    兜底按「分不清」省略 session_id。会话号只认本次载荷里的那一个：环境变量可能是外层会话的。
+    """
+    if _harness.harness() != _harness.CODEX:
+        return
+    sid = payload.get("session_id")
+    if isinstance(sid, str) and sid:
+        try:
+            (STATE_DIR / f"current-session-{_harness.CODEX}-{sid}.json").unlink()
+        except FileNotFoundError:
+            pass                     # 别的失败（被占用）由 `_stage` 报一行
 
 
 def main():
@@ -302,11 +291,12 @@ def main():
     except Exception:
         pass
 
-    from _selfiter_hooks import on_hook
-    on_hook(PROJECT_DIR, _harness.harness(), 'SessionEnd', _harness.session_id(payload))
-    digest_ok = _stage("digest 骨架", write_digest_skeleton, reason)
-    _stage("rollback 索引", snapshot_rollback_index)
+    if _harness.harness() != _harness.CODEX:
+        from _selfiter_hooks import on_hook
+        on_hook(PROJECT_DIR, _harness.harness(), 'SessionEnd', _harness.session_id(payload))
     _stage("session_ended 事件", append_event, "session_ended", reason=reason)
+    _stage("会话标记", remove_session_marker, payload)
+    _stage("rollback 索引", snapshot_rollback_index)
 
     # 自动重算 board.yaml 的 summary 块（v0.2.2 起从手工重算改为 SessionEnd 自动 + drift check 兜底）
     if recompute_board_summary is not None:
@@ -338,30 +328,6 @@ def main():
                     reason=f"exception during recompute: {type(e).__name__}: {str(e)[:200]}",
                 )
             except Exception:
-                pass
-
-    # 更新 activity-state.last_digest_at
-    def _touch_digest_at():
-        state = load_state()
-        state["last_digest_at"] = datetime.now(timezone.utc).isoformat()
-        save_state(state)
-
-    # 只在 digest 真写成功后才推进 last_digest_at——否则这个字段会宣称「刚生成过摘要」
-    # 而磁盘上根本没有那份摘要
-    if digest_ok:
-        _stage("last_digest_at", _touch_digest_at)
-    else:
-        print("[warn] digest 未写成，last_digest_at 保持原值", file=sys.stderr)
-
-    # Codex 门：删掉本会话自己的标记文件（session-start-prep 写的那份，只删自己这一个）。
-    # 它是 `workframe-event` 第三级兜底的来源；会话结束后留着，下一个会话就有两个候选、
-    # 兜底按「分不清」省略 session_id。文件名只含本会话号，删错别的会话不可能。
-    if _harness.harness() == _harness.CODEX:
-        sid = _harness.session_id(payload)
-        if sid:
-            try:
-                (STATE_DIR / f"current-session-{_harness.CODEX}-{sid}.json").unlink()
-            except OSError:
                 pass
 
     sys.exit(0)

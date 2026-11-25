@@ -22,8 +22,9 @@ prompt 直接送给模型，`PostToolUse(matcher: Skill)` 永远等不到。于�
 ## 幂等与去重
 
 同一次调用只应产生一条。两个入口理论上互斥（直敲走展开、模型调走工具），但为防将来
-CC 行为变化，这里按 `(session_id, skill, 分钟级 ts)` 做一次轻量去重：同窗口同 skill
-已有记录则跳过。**去重是尽力而为，不保证跨进程原子**——事件流是观测用途，宁可偶尔多一条
+CC 行为变化，这里按 `(session_id, plugin, skill, 分钟级 ts)` 做一次轻量去重：同窗口同一个技能
+已有记录则跳过。**比较的是完整身份**（插件前缀 ＋ 名）——只比裸名的话，同一分钟里两个插件的
+同名技能，后一条会在进汇总之前被当成重复丢掉。**去重是尽力而为，不保证跨进程原子**——事件流是观测用途，宁可偶尔多一条
 也不要为它上锁拖慢 hook。
 
 ## 顺带：主会话角色记忆投递（CC 门）
@@ -129,8 +130,11 @@ def _extract(payload):
     return (None, None, None)
 
 
-def _is_dup(events_file, session_id, skill, minute):
-    """同 session + 同 skill + 同分钟已记过则跳过。
+def _is_dup(events_file, session_id, skill, minute, plugin=None, resolve=None):
+    """同 session + 同一个技能 + 同分钟已记过则跳过。
+
+    「同一个技能」按 `_skill_identity` 的规范身份比（`resolve`，与聚合同一套判定）：裸名 `audit` 与 `core:audit`
+    是同一个、`other:audit` 不是。只比原始字符串的话，同一次调用从两个入口分别以裸名和带前缀名到达会记两条。
 
     实现是「读全文、只比对尾部 200 行」——不是 seek 回退。events.jsonl 通常在几 MB
     量级，一次性读入比分块回读简单得多，不值得为它引入额外复杂度；真正要防的是
@@ -144,6 +148,10 @@ def _is_dup(events_file, session_id, skill, minute):
             tail = f.readlines()[-200:]
     except OSError:
         return False
+    if resolve is None:
+        def resolve(name, plug=None):
+            return f"{plug}:{name}" if plug else name
+    me = resolve(skill, plugin)
     for line in reversed(tail):
         line = line.strip()
         if not line or EVENT_TYPE not in line:
@@ -152,7 +160,7 @@ def _is_dup(events_file, session_id, skill, minute):
             e = json.loads(line)
         except ValueError:
             continue
-        if (e.get("type") == EVENT_TYPE and e.get("skill") == skill
+        if (e.get("type") == EVENT_TYPE and resolve(e.get("skill"), e.get("plugin")) == me
                 and e.get("session_id") == session_id
                 and str(e.get("ts", ""))[:16] == minute):
             return True
@@ -195,7 +203,12 @@ def main():
 
     state = _state_dir()
     events_file = state / "events.jsonl"
-    if _is_dup(events_file, session_id, skill, ts[:16]):
+    try:
+        import _skill_identity
+        resolve = _skill_identity.resolver(_project_dir(payload))
+    except Exception:   # 判定器加载失败也不能拦住记账：退回按原始插件＋名比
+        resolve = None
+    if _is_dup(events_file, session_id, skill, ts[:16], plugin, resolve):
         return 0
 
     record = {"ts": ts, "type": EVENT_TYPE, "skill": skill, "entry": entry}

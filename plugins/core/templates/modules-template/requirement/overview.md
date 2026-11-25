@@ -22,11 +22,11 @@ auto_sections:
 ## 子需求清单
 
 <!-- WORKFRAME:AUTO-INDEX:START -->
-> ⚙️ 此段由 `module-index-refresh` 自动维护，请勿手动编辑。基于 `<sub_req_slug>/prd.md` frontmatter 提炼。
+> ⚙️ 此段由 `module-index-refresh` 自动维护，请勿手动编辑。基于 `<sub_req_slug>/prd.md` 与其 `reviews/`、`test-cases/` 提炼。
 
-| 子需求 | 状态 | 摘要 | PRD | 复盘 |
-|---|---|---|---|---|
-| _暂无子需求。运行 `/core:module-index-refresh` 同步_ | - | - | - | - |
+| 子需求 | 状态 | 摘要 | PRD | 评审 | 用例 |
+|---|---|---|---|---|---|
+| _（暂无子需求）_ | - | - | - | - | - |
 
 <!-- WORKFRAME:AUTO-INDEX:END -->
 

@@ -26,15 +26,6 @@ const BROWSER_PATHS = {
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 运行态状态目录的 JS 侧解析——与 core 插件 `_state_io.py` 的 `runtime_rel(_, "state")`
-// 同口径：恒为新形态，不看旧目录在不在。
-// Node 进程 import 不了 Python，这是**同一事实唯一无法合并的两个表现层**，因此两处
-// 同批改、并由 validate 的 `paths_single_source` 把本文件列为该断言的第二个（也是最后
-// 一个）豁免点，任何第三处写死字面都会当场变红。
-function stateDir() {
-  return path.resolve('.workframe', 'state');
-}
-
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
@@ -252,34 +243,17 @@ async function main() {
   };
   const manifestPath = path.join(outputDir, '_manifest.json');
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-
-  const logDir = path.join(stateDir(), 'logs', 'screenshot');
-  fs.mkdirSync(logDir, { recursive: true });
-  const logPath = path.join(logDir, `${taskId}.json`);
-  fs.writeFileSync(
-    logPath,
-    JSON.stringify(
-      {
-        __schema__: 'workframe.task-log.v1',
-        task_id: taskId,
-        skill: 'screenshot',
-        status: errors.length ? (captures.some((c) => c.status === 'success') ? 'partial' : 'error') : 'success',
-        started_at: startedAt,
-        ended_at: endedAt,
-        source: config.source,
-        artifact_paths: captures.filter((c) => c.path).map((c) => c.path),
-        error_summary: errors.length ? errors.map((e) => `${e.name}: ${e.error}`).join('; ') : null,
-      },
-      null,
-      2
-    )
-  );
+  // 本次结果只记在输出目录的 _manifest.json，不在状态目录另存一份长期回执
 
   console.log(`\n[screenshot] manifest → ${manifestPath}`);
-  console.log(`[screenshot] log → ${logPath}`);
 
   if (errors.length) {
     console.error(`[screenshot] ${errors.length}/${captures.length} 失败`);
+    process.exit(2);
+  }
+  // 「成功」至少要有一张图：captures 为空（或字段写错没读到）不能报全部成功
+  if (!captures.some((c) => c.status === 'success')) {
+    console.error('[screenshot] 没有生成任何截图（config.captures 为空或未读到）');
     process.exit(2);
   }
   console.log(`[screenshot] ✓ ${captures.length} 张全部成功`);

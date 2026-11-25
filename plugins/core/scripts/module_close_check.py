@@ -7,8 +7,9 @@ module-close-check — 功能收口时的确定性检查命令（独立 CLI，�
 ——红了就是没收干净。触发靠纪律：正确时点 = 模块文档与账本写完之后、外层仓收口
 提交之前（代码仓应已提交——基准 hash 只有提交后才存在）。
 
-九项检查：
-  1. stale 清单为空（非空 → error 逐条列出）
+十项检查：
+  1. stale 清单为空（非空 → error 逐条列出）；反向索引与声明按三元组只读对账，
+     缺 / 多 / 错桶 / 缓存缺失或损坏 / 声明读不了 → error（零子模块时也跑）
   2. code_paths 形态与指向健康：非法形态（绝对路径 / `..` 逃逸，literal 与 glob
      同判）→ error；literal 指向不存在文件 → error；glob 展开为空（目录没了，
      或目录在但 git 视野内无文件）→ error。glob 判的是「还指不指向任何东西」这个
@@ -17,12 +18,15 @@ module-close-check — 功能收口时的确定性检查命令（独立 CLI，�
   3. 基准引用同值性：code-map `source_ref` / submodule `last_synced_ref` /
      overview「基准 commit」行（若有）不同值 → error
   4. 命中模块已刷新：source_ref..HEAD 之间存在触碰该模块 code_paths 的提交，
-     或工作树/暂存区有命中改动 → error（=漏刷）；source_ref 解析不到 → error
+     或工作树/暂存区有命中改动 → error（=漏刷）；source_ref 解析不到 → error。
+     结论行按五档计数（已对账 / 未首同步 / 已豁免 / 外仓不可核 / 未配置，见 `_Tally`）；
+     已对账为 0 时结论与项头都是 info，不打 ok 勾
   5. 嵌套代码仓提交状态：工作树脏 → warn（真命中模块清单的脏已由检查 4 升
      error）；领先 upstream → warn（中性提示，不催推送——何时推送是发版纪律）
   6. code-map 覆盖率对账：code-map frontmatter 的 `source_paths` 与 `code_paths`
      （`source_repo` 圈定仓内那部分）展开文件集**不相等** → error，「少」与「多」
-     文案分开；跨仓路径显式跳过并报数；`code_map_coverage: exempt` 声明豁免走 info
+     文案分开；跨仓路径显式跳过并报数；`code_map_coverage: exempt` 声明豁免走 info；
+     结论行与检查 4 同一套五档计数
   7. 账本条目字段：读 `.workframe-config.json` 的 `close_check` 键（scaffold 装机即
      写入，默认开启；改成空壳 `{}` 则读不到 `ledger`，本项跳过）；
      最新条目日期不在 {今天, 昨天} → error；必含字段头缺失 → error。
@@ -41,11 +45,16 @@ module-close-check — 功能收口时的确定性检查命令（独立 CLI，�
   9. 纪律产物痕迹（`[discipline-trace]`，**warn 档，永不产 error**）：窗口起点 = 本地
      「昨天 00:00」。适用前提 = 窗口内任一子模块的 `code_paths` 在所属仓有提交或工作树
      改动（按仓分组、git 查询写全时刻）。三条判据：a 窗口内项目里零 `skill_used` → 只出
-     info 提示（协议允许「没用 skill 就不写」，判红即结构性假红）；b 映射同次运行的
+     info 提示（有 hook 记的 `skill_invoked` 时说明「有调起、缺自报」；协议允许「没用 skill 就不写」，判红即结构性假红）；b 映射同次运行的
      `[ledger]`（error → 红）；c 命中子模块的看板候选任务无一在今天 / 昨天更新 → 红。
      `main()` 每次运行追加一行计数日志并从日志现算升级计数，达标只打印建议、不自动升；
      标记「确实漏做 / 闸判错」走独立命令 `workframe-discipline-mark`。能力边界见
      `check_discipline_trace` 的 docstring。
+  10. 导航段与实物一致（`[nav-index]`，**warn 档，永不产 error**）：拿 `_module_nav.plan()`
+     （与 `module_init.py --refresh-index / --check` 同一个规划器）零写入比较。新版式段有差异 →
+     每份文件一条 warn；旧版式段只汇总一条 info（等 `--convert-layout`）；段结构或取数有问题 →
+     每条一条 warn「无法检查」；`unwritten` 字段值不合法的文档 → 每份一条 warn。
+     结论带具体文件路径（`path`），gates 查询据此定位。
 
 序数的用法约定（本文件内**有意**保留序数，别当成漏改）：`检查 N` 这种写法只在
 **本 docstring 与本文件的段落标题**里用，指的是紧邻上方那份编号清单，改一个就得
@@ -54,7 +63,7 @@ module-close-check — 功能收口时的确定性检查命令（独立 CLI，�
 输出本来打的就是 id。
 
 退化行为：`projects/modules/` 不存在的项目，检查 1-6 整体跳过；检查 7（账本）照跑；
-检查 8 扫描面为空，报 info 并明说「一份文件都没读到，不等于通过」；检查 9 无对象可查，
+检查 8 扫描面为空，报 info 并明说「一份文件都没读到，不等于通过」；检查 9、10 无对象可查，
 报不适用（info，不等于通过）。
 写入面：除它自己的计数日志外（检查 9 同时读这份日志算升级计数），不改动任何被检对象
 （体检/检查类工具不得改变被检对象）。计数日志只在 `main()` 里追加，`run_all()` 零写入
@@ -144,7 +153,10 @@ def _load_csm(project_dir):
 # ---------- git 薄封装（自建，不复用 csm._git_lines——那个失败路径写事件，本命令不写事件） ----------
 
 
-def _git(repo_dir, *args):
+_PATHSPEC_ENV = ("GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS")
+
+
+def _git(repo_dir, *args, raw=False):
     """跑一条 git 命令。返回 (rc, stdout_lines, err_text)；进程级异常 rc=-1。
 
     `-c core.quotepath=off`：git 默认 `quotepath=true`，输出路径里的非 ASCII 字节会被
@@ -154,15 +166,19 @@ def _git(repo_dir, *args):
     ——同一个开关在这里损的是判定。modules 体系明确允许中文模块名与中文路径
     （reference/module-architecture.md §5.1），所以这不是边角形态。
     """
+    # 这几个环境变量会改写全部 pathspec 的解释（`GIT_LITERAL_PATHSPECS=1` 时 `:(literal)` 前缀本身被当成文件名，
+    # 粗筛筛空 ⇒ 检查 4 报「已对账」）。本命令的判定不该随调用方的 shell 环境变，子进程里一律去掉
+    env = {k: v for k, v in os.environ.items() if k not in _PATHSPEC_ENV}
     try:
         r = subprocess.run(
             ["git", "-C", str(repo_dir), "-c", "core.quotepath=off", *args],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=30,
+            timeout=30, env=env,
         )
-        return r.returncode, r.stdout.splitlines(), r.stderr.strip()
+        # raw=True 原样给 stdout 字符串：`-z` 输出要按 NUL 切，先 splitlines 会在 U+2028 等字符处把文件名拆坏
+        return r.returncode, (r.stdout if raw else r.stdout.splitlines()), r.stderr.strip()
     except Exception as e:  # git 缺失 / 超时：降级交给调用方，不炸整个命令
-        return -1, [], f"{type(e).__name__}: {e}"
+        return -1, ("" if raw else []), f"{type(e).__name__}: {e}"
 
 
 # ---------- 轻量解析（无第三方 yaml：与 parse_code_paths 同思路的标量字段版） ----------
@@ -311,15 +327,95 @@ def _collect_submodules(project_dir, csm):
 # ---------- 检查 1：stale 清单 ----------
 
 
+STALE_CLEAN_OK = "stale 清单为空；它只记 hook 看见的改动，已提交改动由 [module-refreshed] 判"
+
+
 def check_stale_clean(project_dir, csm, subs):
-    stale = csm.load_stale().get("submodules", {})
-    if not stale:
-        return [("ok", "stale 清单为空")]
+    """stale 清单为空 ＋ 反向索引与声明一致（只读对账，不自己重建）。
+
+    索引漂移与 stale 非空**互不吞并**：漂移期间 hook 查不到命中模块，stale 清单只会更空——
+    只报其一，读者会把「清单为空」当成「没有漏刷」。
+    """
     out = []
+    try:
+        stale = csm.load_stale().get("submodules", {})
+    except Exception as e:
+        # 单独兜住、不让它冒到 run_all：那里会把整项降成 warn，下面的漂移对账也就没跑——
+        # 一个读不了的 stale 清单会顺手把同时存在的索引漂移一起放行
+        stale = {}
+        out.append(("error", f"stale 清单读不了（{type(e).__name__}: {str(e)[:120]}）——"
+                             f"哪些模块挂着 stale 无从得知；先保留原件（里面的历史标记无法从索引重建），修好编码或权限后重跑"))
     for sub, info in sorted(stale.items()):
         reasons = "; ".join(info.get("reasons", [])[:3])
-        out.append(("error", f"{sub} 仍挂 stale（{reasons}）——更新文档后走 "
-                             f"clear-stale 清除（可带 --reason 留处置理由）"))
+        out.append(_PathLine("error", f"{sub} 仍挂 stale（{reasons}）——更新文档后走 "
+                                      f"clear-stale 清除（可带 --reason 留处置理由）",
+                             f"projects/modules/{sub}/overview.md"))
+    try:
+        out += _index_drift(csm)
+    except Exception as e:
+        # 本项单独兜住：run_all 会把检查异常降为 warn，而「漂移 = error」是已定口径
+        out.append(("error", f"反向索引对账自身异常：{type(e).__name__}: {str(e)[:120]}——对账不可信"))
+    return out or [("ok", STALE_CLEAN_OK)]
+
+
+def _index_triples(buckets):
+    # 比法的唯一实现在 csm.index_triples（迁移计划判缓存新旧也用它）
+    return _CSM.index_triples(buckets)
+
+
+def _index_drift(csm):
+    """按声明在内存里重建一份索引，与磁盘缓存按 `(bucket, pattern, 子模块)` 三元组比语义。
+
+    容器形态另用 `validate_index` 判；空桶、重复项不算漂移（旧的段更新确实会留下空桶）。
+    读缓存直接读文件字节，**不经**会重建的入口——本命令零写入。
+    """
+    # 带上被检查的项目：close-check 可能经 `--project` 查的是别的项目，提示命令不绑项目的话，
+    # 照抄会按当前 shell 解析出的项目重建另一份缓存
+    rebuild = (f'python "{Path(csm.__file__).resolve()}" rebuild-index '
+               f'--project "{Path(csm.PROJECT_DIR).resolve()}"')
+    stamp, pairs, errors = csm.declared_snapshot(csm.MODULES_DIR)
+    if errors:
+        return [_PathLine("error", f"projects/modules/{rel} 读不了（{err}）——反向索引对账不可信；"
+                                   f"修好它（编码或权限）后跑 {rebuild}", f"projects/modules/{rel}")
+                for rel, err in errors]
+    # 缓存本身的问题都指向缓存文件：gates 查询据此定位，不退回到某份无关的模块文档
+    try:
+        index_rel = Path(csm.INDEX_FILE).resolve().relative_to(Path(csm.PROJECT_DIR).resolve()).as_posix()
+    except ValueError:
+        index_rel = None
+    expected = _index_triples(csm.build_index(stamp, pairs)["buckets"])
+    index_file = Path(csm.INDEX_FILE)
+    if not index_file.exists():
+        if pairs:
+            return [_PathLine("error", f"反向索引从未构建（声明里有 {len(pairs)} 条 code_paths）——"
+                                       f"编辑 hook 查不到任何命中模块；跑 {rebuild}", index_rel)]
+        return []
+    try:
+        data = json.loads(index_file.read_bytes().decode("utf-8"))
+    except Exception as e:
+        return [_PathLine("error", f"反向索引文件损坏（{type(e).__name__}）——跑 {rebuild}", index_rel)]
+    if not csm.validate_index(data):
+        return [_PathLine("error", f"反向索引形态不合法（桶或模块列表类型不对）——lookup 会读出错的命中；跑 {rebuild}",
+                          index_rel)]
+    actual = _index_triples(data["buckets"])
+    exp_pairs = {(p, s): set() for _b, p, s in expected}
+    for b, p, s in expected:
+        exp_pairs[(p, s)].add(b)
+    act_pairs = {(p, s): set() for _b, p, s in actual}
+    for b, p, s in actual:
+        act_pairs[(p, s)].add(b)
+    missing = sorted(k for k in exp_pairs if k not in act_pairs)
+    extra = sorted(k for k in act_pairs if k not in exp_pairs)
+    misplaced = sorted(k for k in exp_pairs if k in act_pairs and exp_pairs[k] != act_pairs[k])
+    out = []
+    for label, items, why in (
+            ("缺", missing, "声明里有、缓存里没有——改到这些路径不会标 stale"),
+            ("多", extra, "缓存里有、声明里已没有——会把改动误标到旧模块"),
+            ("错桶", misplaced, "两边都有但分桶不同——lookup 同样查不到")):
+        if items:
+            pat, sub = items[0]
+            out.append(_PathLine("error", f"反向索引与声明不一致（{label} {len(items)} 条，例：{pat} → {sub}）——"
+                                          f"{why}；跑 {rebuild}", index_rel))
     return out
 
 
@@ -338,11 +434,29 @@ def _classify_path(pat):
     本函数是这个判定的唯一实现，检查 2 与检查 4 共用：两处各留一份副本时，
     收窄其中一份不会有任何东西报警（另一份照常红，终端上看仍有闸在拦）。
     """
-    norm = pat.replace("\\", "/")
+    if "\\" in re.sub(r"\[[^\]]*\]", "", pat):
+        # 字符类之外的反斜杠是分隔符：反向索引拿**原串**匹配 git 给出的文件名（分隔符恒为 `/`），
+        # 永远命中不了；若先换成 `/` 再判，检查 2/4/6/9 全绿而 hook 静默失明。
+        # 字符类里的 `\` 是转义（`[m\-]`），原样保留、不改写
+        return "bad", pat.replace("\\", "/")
+    norm = pat
     segs = [x for x in norm.split("/") if x]
     if norm.startswith("/") or re.match(r"^[A-Za-z]:", norm) or ".." in segs:
         return "bad", norm
+    if _noncanonical(_static_prefix(norm)):
+        # 静态前缀（第一个通配段之前）里有空段或 `.` 段：那几个字符必须原样出现在文件名里，
+        # 而 git 给的规范文件名里永远没有 `//`、`/./`、开头的 `./`——确定命不中，不是写法偏好。
+        # 通配段之后的 `//` 不在此列：非整段 `**` 可以吃掉一边，`plugins**//core/x` 照样命中
+        return "bad", norm
     return ("glob" if any(c in norm for c in "*?[") else "literal"), norm
+
+
+def _noncanonical(norm):
+    """写法里有 `//`、`./`、`/./` 段：**只用于红灯文案的提示**，不判对错——判对错一律看共用匹配式在
+    git 视野里命不命中（`plugins**//core/x` 这类非整段 `**` 照样能命中规范文件名，按字符串否决会误伤）。
+    字符类 `[...]` 里的 `/`、`.` 是类成员、不是路径段，先抹掉再看。"""
+    s = re.sub(r"\[[^\]]*\]", "x", norm).rstrip("/")
+    return _squash(s) != s
 
 
 def _static_prefix(norm):
@@ -375,6 +489,36 @@ def _owner_of(norm, nested):
     return owner
 
 
+def _nested_repos(csm, paths):
+    """`csm.discover_nested_repos` 的结果，只留**拼写与磁盘上真实目录名逐段一致**的仓。
+
+    仓发现按声明里的前缀去探 `.git`：大小写不敏感的文件系统上 `CLAUDE-WORKFRAME/x`、
+    任何系统上 `./claude-workframe/x` 都会被当成一个仓，随后文件清单再把这个拼写拼回 git
+    输出——等于用声明证明声明（检查 2 绿、检查 4 计数），而反向索引拿规范文件名查，永远命不中。
+    剔掉之后这些声明落回根仓，在根仓的 git 视野里命不中，由检查 2 报红。"""
+    out = []
+    for rel in csm.discover_nested_repos(paths):
+        segs = rel.split("/")
+        here, ok = project_dir_of(csm), True
+        for seg in segs:
+            try:
+                names = os.listdir(here)
+            except OSError:
+                ok = False
+                break
+            if seg in ("", ".") or seg not in names:
+                ok = False
+                break
+            here = here / seg
+        if ok:
+            out.append(rel)
+    return out
+
+
+def project_dir_of(csm):
+    return Path(csm.PROJECT_DIR)
+
+
 def _repo_file_index(project_dir, nested):
     """按仓收集「git 视野内的文件」（项目根相对），作为 glob 的展开面。
 
@@ -403,20 +547,43 @@ def _repo_file_index(project_dir, nested):
     unavailable = {}
     for owner in [""] + list(nested):
         repo_dir = project_dir / owner if owner else project_dir
-        rc, lines, _err = _git(repo_dir, "ls-files", "--cached", "--others",
-                               "--exclude-standard")
+        # `-z` ＋ 原样取 stdout：文件名不做 strip——以空格开头或结尾的合法文件名（YAML 引号里写得出来）
+        # 被改名后，真名报红、不存在的别名反而放行
+        rc, text, _err = _git(repo_dir, "ls-files", "-z", "--cached", "--others",
+                              "--exclude-standard", raw=True)
         if rc != 0:
             unavailable[owner] = "absent" if owner == "" else "failed"
             continue
         got = set()
-        for ln in lines:
-            ln = ln.strip()
+        for ln in text.split("\0"):
             # 目录条目（根仓未 ignore 嵌套仓时 ls-files 会报 `<dir>/`）不是文件，跳过
             if not ln or ln.endswith("/"):
                 continue
             got.add(f"{owner}/{ln}" if owner else ln)
         index[owner] = got
     return index, unavailable
+
+
+def _form_hint(norm):
+    """展开为空 / 命不中时附的写法提示（只提示，不判对错）。"""
+    return ("；写法里有 `//` 或 `.` 段——反向索引拿原串匹配规范文件名，多半是这里写岔了"
+            if _noncanonical(norm) else "")
+
+
+def _literal_miss(rel, pat, norm, project_dir):
+    """literal 在 git 视野里命不中时的红灯文案：按磁盘上实际是什么，给不同的修法。"""
+    target = project_dir / norm
+    if target.is_dir():
+        return (f"{rel} 的 code_paths 里的 literal 指向目录（{pat}）——反向索引对 literal 按 git 视野里的"
+                f"条目精确匹配，目录下的文件改动不会标 stale，检查 4 也看不见；要覆盖整片目录写成 "
+                f"`{norm.rstrip('/')}/**`" + _form_hint(norm))
+    if target.exists():
+        return (f"{rel} 的 code_paths 指向的文件在磁盘上，但 git 视野里没有这个名字（{pat}）——"
+                f"多半是大小写与真实文件名不符或尾斜杠（反向索引按原串精确匹配，对它静默失明）；"
+                f"若是被 .gitignore 忽略的文件，编辑 hook 仍能命中，但检查 4 / 9 看不到它的改动"
+                + _form_hint(norm))
+    return (f"{rel} 的 code_paths 指向不存在的文件（{pat}）——改名/移动/删除后清单未同步，"
+            f"反向查找对它静默失明" + _form_hint(norm))
 
 
 def check_code_paths_health(project_dir, csm, subs):
@@ -439,24 +606,34 @@ def check_code_paths_health(project_dir, csm, subs):
     见 skill: `test-case-design` 的 `reference/test-scoping.md` 档 4。
     """
     out = []
-    n_lit = n_glob = n_hit = 0
+    n_lit = n_glob = n_hit = n_lit_disk = 0
     skipped = {}  # owner -> 因该仓面取不到而未判的 glob 条数
     all_paths = sorted({p for s in subs for p in s["code_paths"]})
-    nested = csm.discover_nested_repos(all_paths)
+    nested = _nested_repos(csm, all_paths)
     index, unavailable = _repo_file_index(project_dir, nested)
     for s in subs:
         for pat in s["code_paths"]:
             kind, norm = _classify_path(pat)
             if kind == "bad":
                 out.append(("error", f"{s['rel']} 的 code_paths 含非法形态路径 "
-                                     f"（{pat}）——只接受项目根相对路径"))
+                                     f"（{pat}）——只接受项目根相对路径（不接受绝对路径 / 盘符 / `..` / "
+                                     f"反斜杠）"))
                 continue
             if kind == "literal":
                 n_lit += 1
-                if not (project_dir / norm).exists():
-                    out.append(("error", f"{s['rel']} 的 code_paths 指向不存在的文件"
-                                         f"（{pat}）——改名/移动/删除后清单未同步，"
-                                         f"反向查找对它静默失明"))
+                lit_owner = _owner_of(norm, nested)
+                if lit_owner in unavailable:
+                    # 取不到该仓的 git 视野：退回文件系统判「是一个存在的文件」（与反向索引不完全同判，
+                    # 已知边界）；目录照旧判红——退路不能把原有的目录判定一起丢掉
+                    hit_lit = (project_dir / norm).exists() and not (project_dir / norm).is_dir()
+                    n_lit_disk += 1
+                else:
+                    # 与反向索引同一判定：共用匹配式（literal = 精确）在 git 视野里命不命中。
+                    # 磁盘 exists() 会放过尾斜杠、Windows 大小写错拼——索引对它们永远命不中
+                    rx = _decl_regex(norm)
+                    hit_lit = any(rx.match(f) for f in index.get(lit_owner, set()))
+                if not hit_lit:
+                    out.append(("error", _literal_miss(s["rel"], pat, norm, project_dir)))
                 continue
             n_glob += 1
             owner = _owner_of(norm, nested)
@@ -467,7 +644,7 @@ def check_code_paths_health(project_dir, csm, subs):
                 continue
             files = index.get(owner, set())
             try:
-                rx = re.compile(csm.glob_to_regex(norm))
+                rx = _decl_regex(norm)
             except re.error as e:
                 out.append(("error", f"{s['rel']} 的 code_paths 含无法编译的 glob"
                                      f"（{pat}）：{e}"))
@@ -482,7 +659,7 @@ def check_code_paths_health(project_dir, csm, subs):
             else:
                 out.append(("error", f"{s['rel']} 的 code_paths 里的 glob 展开为空"
                                      f"（{pat}）——目录在，但 git 视野内一个文件都没有，"
-                                     f"该条已不指向任何东西"))
+                                     f"该条已不指向任何东西" + _form_hint(norm)))
     for owner, n in sorted(skipped.items()):
         label = owner or "(项目根仓)"
         if unavailable.get(owner) == "absent":
@@ -493,7 +670,8 @@ def check_code_paths_health(project_dir, csm, subs):
                                 f"展开判定（literal 不受影响）"))
     if not [x for x in out if x[0] == "error"]:
         judged = n_glob - sum(skipped.values())
-        out.append(("ok", f"literal {n_lit} 条全部存在；glob {judged}/{n_glob} 条可展开"
+        disk = f"（其中 {n_lit_disk} 条所在仓取不到 git 视野，按磁盘判）" if n_lit_disk else ""
+        out.append(("ok", f"literal {n_lit} 条都有对应条目{disk}；glob {judged}/{n_glob} 条可展开"
                           f"（共命中 {n_hit} 处）"))
     return out
 
@@ -553,15 +731,147 @@ def _split_paths_by_repo(code_paths, nested):
     return groups
 
 
+def _git_pathspecs(rels):
+    """git 的**粗筛** pathspec：每条 code_paths 只取静态前缀，`:(literal)` 传给 git；任一条没有静态前缀 → `[]`（整仓）。
+
+    **命中与否不交给 git 判**，由 `_path_matcher` 用 `_decl_regex` 复判（与反向索引、检查 2 同一判定）。
+    git 的任何一种 pathspec 语义都与框架不等价：裸 pathspec 的 `*` 跨 `/`、`**/` 不匹配零层；`:(glob)`
+    按字节匹配（中文的 `?` / `[桌]` 失配）、不认非整段的 `**`、字符类方言也不同。所以 git 只负责给出
+    **超集**——静态前缀以下的全部改动——再在本进程里按框架规则过滤；`git log` 的 rc 为 0 不证明匹配对了路径。
+    literal 按文件精确匹配（与反向索引一致）；literal 指向目录由检查 2 报红。
+    """
+    specs = []
+    for rel in rels:
+        _kind, norm = _classify_path(rel)
+        prefix = _static_prefix(norm).rstrip("/")
+        if not prefix:
+            return []
+        specs.append(":(literal)" + prefix)
+    return sorted(set(specs))
+
+
+def _squash(norm):
+    """去掉空段与 `.` 段后的形态——只用于判「这条写法规范吗」（`_noncanonical`），**不用于匹配**：
+    把它用在 glob 上会改写 glob 的含义（字符类里的 `.` 被当成路径段删掉）。"""
+    return "/".join(seg for seg in norm.split("/") if seg not in ("", "."))
+
+
+def _decl_regex(norm):
+    """一条（规范的）code_paths / source_paths 的匹配式：**唯一实现**，即反向索引用的 `glob_to_regex`；
+    literal 经它转成精确匹配。检查 2 的 glob 展开、检查 6 的 `_expand`、检查 4 / 9 的改动过滤都用它——
+    这几处各写一份时，每补一处就在别处分叉一次（字符类、`//`、literal 目录都分叉过）。编译不了抛 `re.error`。"""
+    return re.compile(_CSM.glob_to_regex(norm))
+
+
+def _bad_globs(rels):
+    """编译不了的 glob（如 `[z-a]`）：检查 2 已报红；检查 4 / 9 据此只把**这一个模块**判成不可核，不让异常撤掉别的模块。"""
+    bad = []
+    for rel in rels:
+        kind, norm = _classify_path(rel)
+        if kind == "glob":
+            try:
+                _decl_regex(norm)
+            except re.error:
+                bad.append(rel)
+    return bad
+
+
+def _path_matcher(rels):
+    """一条仓相对路径是否落在 `rels` 内：逐条用 `_decl_regex`（与反向索引、检查 2 同一判定）。
+    调用方先用 `_bad_globs` 挡掉编译不了的 glob；非法形态（`_classify_path` 判 bad）不参与。"""
+    regs = [_decl_regex(norm) for kind, norm in map(_classify_path, rels) if kind != "bad"]
+
+    def hit(path):
+        return any(r.match(path) for r in regs)
+    return hit
+
+
+def _git_dirty(repo_dir, rels):
+    """工作树 / 暂存区 / 未跟踪里落在 `rels` 内的改动：`(rc, ["XY path", …], err)`。按框架规则过滤。"""
+    rc, text, err = _git(repo_dir, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all",
+                         "--", *_git_pathspecs(rels), raw=True)
+    if rc != 0:
+        return rc, [], err
+    hit = _path_matcher(rels)
+    return rc, [t for t in text.split("\0") if len(t) > 3 and hit(t[3:])], err
+
+
+def _git_commits(repo_dir, rels, *rev_args):
+    """`git log <rev_args>` 里改动了 `rels` 内文件的提交：`(rc, ["<短 hash> <标题>", …], err)`，新的在前。
+
+    `--no-renames`：改名的两端都列出，旧路径落在 `rels` 内也算触碰；含已删除的文件（历史里有，工作树里没有）。
+    `-m`：合并提交对每个父各列一份改动（不加时合并提交不列文件、被整个丢掉）；同一提交按 hash 去重。"""
+    rc, text, err = _git(repo_dir, "log", "-m", "--no-renames", "--name-only", "-z", "--format=%x01%h %s",
+                         *rev_args, "--", *_git_pathspecs(rels), raw=True)
+    if rc != 0:
+        return rc, [], err
+    hit = _path_matcher(rels)
+    commits, seen, head = [], set(), None
+    for tok in text.split("\0"):
+        tok = tok.lstrip("\n")
+        if tok.startswith("\x01"):
+            head = tok[1:]
+        elif tok and head is not None and head not in seen and hit(tok):
+            seen.add(head)
+            commits.append(head)
+    return rc, commits, err
+
+
+class _Tally:
+    """检查 4 / 检查 6 的结论分档计数。每个子模块恰落一档（或不计档：落进原有的 warn / error）。
+
+    五档按「实际做了哪种核验」分：已对账 / 未首同步 / 已豁免 / 外仓不可核 / 未配置。
+    计数发生在核验**真正执行之后**——此前检查 4 在核验前就 `checked += 1`，
+    一次 git 都没跑的外仓模块也被报成「已刷新」。
+    """
+    KEYS = ("reconciled", "unsynced", "exempt", "external", "unconfigured")
+
+    def __init__(self):
+        for k in self.KEYS:
+            setattr(self, k, 0)
+
+
+class _TallyLine(tuple):
+    """结论 finding：仍是 `(level, msg)` 二元组（各处按二元组解包），另带 `tally`，供 run_all 判项头。"""
+
+    def __new__(cls, level, msg, tally):
+        obj = tuple.__new__(cls, (level, msg))
+        obj.tally = tally
+        return obj
+
+
+def _tally_line(t):
+    """分母（已对账）为 0 → info「没有可判的对象」，不打 ok 勾；否则 ok 带各档计数。"""
+    rest = (f"未首同步 {t.unsynced} · 已豁免 {t.exempt} · 外仓不可核 {t.external} · "
+            f"未配置 {t.unconfigured}")
+    if t.reconciled == 0:
+        return _TallyLine("info", f"本项没有可判的对象（{rest}）——这不等于通过", t)
+    return _TallyLine("ok", f"已对账 {t.reconciled} · {rest}", t)
+
+
 def check_module_refreshed(project_dir, csm, subs):
+    """命中模块已刷新。分档优先级（自上而下第一条命中即止，每个子模块恰落一档或不计档）：
+
+    1. `source_ref` 为空 → 未首同步
+    2. 可变引用 → 原 warn，不计档
+    3. `source_repo` 非空且不是已发现的嵌套仓 → 外仓不可核（其余已知仓的未提交改动照报）
+    4. `source_repo` 为空、`code_paths` 也为空 → 未配置
+       （`source_repo` 为空而 `code_paths` 全不在根仓 → 原 error，不计档；
+       `code_paths` 全是非法形态 → 不计档、不报，由检查 2 报）
+    5. 归属仓内零路径 → 外仓不可核（其余已知仓照报）
+    6. 进核验：归属仓 `git log` rc==0 且各仓 `git status` 都成功 → 已对账；任一 git 失败 → 原 warn，不计档
+
+    已豁免 code-map 的模块不进「已豁免」：豁免只管 code-map 对账，有基准就照常判刷新。
+    """
     out = []
-    checked = 0
+    t = _Tally()
     all_paths = sorted({p for s in subs for p in s["code_paths"]})
-    nested = csm.discover_nested_repos(all_paths)
+    nested = _nested_repos(csm, all_paths)
     for s in subs:
         kind, ref = _norm_ref(s["source_ref"] or "")
         if kind == "empty":
-            continue  # 未同步过的模块没有基准，不参与刷新判定
+            t.unsynced += 1
+            continue
         if kind == "mutable":
             out.append(("warn", f"{s['rel']} 的 source_ref 是可变引用（{s['source_ref']}）"
                                 f"——branch/tag 无法精判是否已刷新，跳过"))
@@ -572,61 +882,80 @@ def check_module_refreshed(project_dir, csm, subs):
         # 归属仓内的路径做，其他仓的 hash 解析必然失败，报出来是纯误伤。
         src_repo = (s["source_repo"] or "").replace("\\", "/").strip("/")
         if src_repo and src_repo not in nested:
-            out.append(("warn", f"{s['rel']} 的 source_repo（{src_repo}）不是已发现的"
-                                f"嵌套仓——无法定位基准归属仓，跳过精判"))
-            src_repo = None
+            src_repo = None          # 档 3：外仓（项目外仓的脱敏标识，本地没有它的历史）
         elif not src_repo:
-            src_repo = ""  # 根仓
-        groups_probe = _split_paths_by_repo(s["code_paths"], nested)
-        if src_repo == "" and "" not in groups_probe and groups_probe:
-            # **归属仓判空、而根仓一个路径都没有** ⇒ 基准不可能属于根仓。
-            # 此时下面那句 `owner != src_repo` 会把**每一个** path group 都 continue 掉，
-            # 基准精判整段不执行、且不留任何痕迹——报绿。把它变成显式信号。
-            out.append(("error",
-                        f"{s['rel']} 的 source_repo 为空（判为项目根仓），但它的 code_paths "
-                        f"一条都不在根仓（都在 {sorted(groups_probe)}）——基准不可能属于根仓，"
-                        f"此时基准精判会整段静默跳过。请在 submodule.yaml 或 code-map "
-                        f"frontmatter 里显式写 source_repo"))
-            continue
-        checked += 1
+            if not s["code_paths"]:
+                t.unconfigured += 1  # 档 4
+                continue
+            if not groups:
+                # code_paths 全是非法形态、被分组时过滤掉了：检查 2 已逐条报红。这里不计档，
+                # 也不报下面那条「都在别的仓」——那会把非法路径误说成外仓、把修法指向 source_repo
+                continue
+            if "" not in groups:
+                # **归属仓判空、而根仓一个路径都没有** ⇒ 基准不可能属于根仓。
+                # 不拦的话下面的归属仓精判整段不执行、且不留任何痕迹——报绿。
+                out.append(("error",
+                            f"{s['rel']} 的 source_repo 为空（判为项目根仓），但它的 code_paths "
+                            f"一条都不在根仓（都在 {sorted(groups)}）——基准不可能属于根仓，"
+                            f"此时基准精判会整段静默跳过。请在 submodule.yaml 或 code-map "
+                            f"frontmatter 里显式写 source_repo"))
+                continue
+            src_repo = ""            # 根仓
+        verified = src_repo is not None and src_repo in groups   # 否则档 3 / 档 5：外仓不可核
+        git_ok = True
         for owner, rels in sorted(groups.items()):
             repo_dir = project_dir / owner if owner else project_dir
             label = owner or "(项目根仓)"
+            bad = _bad_globs(rels)
+            if bad:
+                # 只让这一个模块不可核：在这里抛出去会被 run_all 兜成整项异常，别的模块的漏刷一起消失
+                git_ok = verified = False
+                out.append(("warn", f"{s['rel']} @ {label}: code_paths 有编译不了的 glob（{bad[0]}，检查 2 已报）"
+                                    f"——本模块刷新未核"))
+                continue
             # 工作树/暂存区命中：tracked 改动、staged、untracked（??）一并覆盖
-            rc, lines, err = _git(repo_dir, "status", "--porcelain", "--", *rels)
+            rc, lines, err = _git_dirty(repo_dir, rels)
             if rc != 0:
+                git_ok = False
                 out.append(("warn", f"{s['rel']} @ {label}: git status 失败（{err[:80]}）"))
             elif lines:
                 out.append(("error", f"{s['rel']} @ {label}: code_paths 有未提交改动 "
                                      f"{len(lines)} 处（如 {lines[0].strip()}）——"
                                      f"提交后才有可钉的基准 hash"))
-            if src_repo is None or owner != src_repo:
+            if not verified or owner != src_repo:
                 continue  # 非归属仓不做基准精判（该仓解析不到这个 hash 是正常的）
             rc, lines, err = _git(repo_dir, "rev-parse", "--verify", "--quiet",
                                   ref + "^{commit}")
             if rc != 0:
+                verified = False
                 out.append(("error", f"{s['rel']} 的 source_ref（{ref}）在 {label} "
                                      f"解析不到——死引用（仓历史被改写，或 hash 抄错）"))
                 continue
             full = lines[0].strip() if lines else ref
             rc, _, _ = _git(repo_dir, "merge-base", "--is-ancestor", full, "HEAD")
             if rc == -1:
+                verified = False
                 out.append(("warn", f"{s['rel']} @ {label}: merge-base 执行失败，跳过"))
                 continue
             if rc != 0:
+                verified = False
                 out.append(("error", f"{s['rel']} 的 source_ref（{ref}）不在 {label} "
                                      f"当前分支历史内——基准钉在别的分支上"))
                 continue
-            rc, lines, err = _git(repo_dir, "log", "--oneline", f"{full}..HEAD",
-                                  "--", *rels)
+            rc, lines, err = _git_commits(repo_dir, rels, f"{full}..HEAD")
             if rc != 0:
+                verified = False
                 out.append(("warn", f"{s['rel']} @ {label}: git log 失败（{err[:80]}）"))
             elif lines:
                 out.append(("error", f"{s['rel']} 基准（{ref}）之后有 {len(lines)} 个"
                                      f"提交触碰其 code_paths（最近：{lines[0]}）——"
                                      f"漏刷，基准落点须刷至当前"))
+        if src_repo is None or src_repo not in groups:
+            t.external += 1
+        elif verified and git_ok:
+            t.reconciled += 1
     if not [x for x in out if x[0] == "error"]:
-        out.append(("ok", f"{checked} 个有基准的子模块均已刷新到位"))
+        out.append(_tally_line(t))
     return out
 
 
@@ -636,7 +965,7 @@ def check_module_refreshed(project_dir, csm, subs):
 def check_repo_status(project_dir, csm, subs):
     out = []
     all_paths = sorted({p for s in subs for p in s["code_paths"]})
-    nested = csm.discover_nested_repos(all_paths)
+    nested = _nested_repos(csm, all_paths)
     for repo in nested:
         repo_dir = project_dir / repo
         rc, lines, err = _git(repo_dir, "status", "--porcelain")
@@ -703,10 +1032,10 @@ def check_code_map_coverage(project_dir, csm, subs):
     `reference/test-scoping.md` 档 4。
     """
     out = []
-    n_done = n_exempt = n_unsynced = n_skip_repo = 0
+    t = _Tally()
     cross_skipped = 0
     all_paths = sorted({p for s in subs for p in s["code_paths"]})
-    nested = csm.discover_nested_repos(all_paths)
+    nested = _nested_repos(csm, all_paths)
     index, unavailable = _repo_file_index(project_dir, nested)
 
     def _expand(pats, prefix):
@@ -719,15 +1048,12 @@ def check_code_map_coverage(project_dir, csm, subs):
                 continue
             full = f"{prefix}/{norm}" if prefix else norm
             files = index.get(_owner_of(full, nested), set())
-            if kind == "literal":
-                got = {full} & files
-            else:
-                try:
-                    rx = re.compile(csm.glob_to_regex(full))
-                except re.error:
-                    dead.append((pat, "bad"))
-                    continue
-                got = {f for f in files if rx.match(f)}
+            try:
+                rx = _decl_regex(full)      # literal 由它转成精确匹配：与检查 2 / 4 / 9、反向索引同一判定
+            except re.error:
+                dead.append((pat, "bad"))
+                continue
+            got = {f for f in files if rx.match(f)}
             if not got:
                 dead.append((pat, "empty"))
             hit |= got
@@ -744,7 +1070,7 @@ def check_code_map_coverage(project_dir, csm, subs):
                                  f"自己声明了豁免、而对账其实一直在跑"))
             continue
         if cov is not None and cov.strip() == "exempt":
-            n_exempt += 1
+            t.exempt += 1
             out.append(("info", f"{rel}: 已声明 code_map_coverage: exempt（有意不设 code-map），"
                                 f"不参与覆盖率对账——理由见该子模块 overview"))
             continue
@@ -768,7 +1094,7 @@ def check_code_map_coverage(project_dir, csm, subs):
         # L0b 未同步过：机械信号不是声明，给 warn 并指出两条出路
         kind, _ref = _norm_ref(s["source_ref"] or "")
         if kind == "empty":
-            n_unsynced += 1
+            t.unsynced += 1
             out.append(("warn", f"{rel}: code-map 的 source_ref 为空（未同步过），覆盖率未对账"
                                 f"——跑一次 code-to-doc 后本条自动转为对账；若是**有意**不设 "
                                 f"code-map，在 submodule.yaml 标 `code_map_coverage: exempt`，"
@@ -777,30 +1103,47 @@ def check_code_map_coverage(project_dir, csm, subs):
         # 坐标系锚点：source_repo 三态（空=根仓 / 项目内嵌套仓 / 项目外脱敏标识）
         src_repo = (s["source_repo"] or "").replace("\\", "/").strip("/")
         if src_repo and src_repo not in nested:
-            n_skip_repo += 1
+            t.external += 1
             out.append(("info", f"{rel}: source_repo（{src_repo}）不是项目内的嵌套仓——按契约"
                                 f"这是**项目外仓的脱敏标识**（dev-paste 形态）。本地没有那个仓的"
                                 f"文件视野，硬对账只会报出「缺掉全部文件」的假红，整条跳过"))
             continue
         owner = src_repo or ""
-        if owner in unavailable:
+
+        def _unavailable_line():
             lvl = "info" if unavailable[owner] == "absent" else "warn"
             label = owner or "(项目根仓)"
             why = "不是 git 仓" if unavailable[owner] == "absent" else "git ls-files 失败"
-            out.append((lvl, f"{rel}: {label} {why}——取不到文件视野，本模块覆盖率未对账"))
+            return (lvl, f"{rel}: {label} {why}——取不到文件视野，本模块覆盖率未对账")
+
+        if owner in unavailable and unavailable[owner] != "absent":
+            # 已知仓读取失败排在「未配置」之前：是故障，不能被「本来就没东西可比」抹掉
+            out.append(_unavailable_line())
+            continue
+        if not s["code_paths"] and not sp:
+            # 两张清单都空：没有任何文件可比，不是「比过、一致」。只空一边仍往下走——
+            # source_paths 非空而 code_paths 为空要报「多了」，不能在看见空 code_paths 时就跳过
+            t.unconfigured += 1
+            continue
+        if owner in unavailable:
+            out.append(_unavailable_line())
             continue
         groups = _split_paths_by_repo(s["code_paths"], nested)
         cp_in = groups.get(owner, [])
         cross = {o: len(v) for o, v in groups.items() if o != owner}
         cross_label = "、".join(sorted(k or "(项目根仓)" for k in cross))
+        # code_paths 全是非法形态（检查 2 已逐条报红）：不计档、不报下面那条「source_repo 填错」、不做集合对账；
+        # source_paths 自身的死条目 / 非法形态照报——那是 code-map 一侧的错，检查 2 不看它
+        all_bad = bool(s["code_paths"]) and not groups
         # L1 对账面为空：source_repo 填错/漏填时，对账会「全部跨仓跳过」而输出全绿
-        if not cp_in and s["code_paths"]:
+        if not all_bad and not cp_in and s["code_paths"]:
             out.append(("error", f"{rel} 的 source_repo（{src_repo or '空=项目根仓'}）圈定的对账面里"
                                  f"一条 code_paths 都没有，而本模块共 {len(s['code_paths'])} 条"
                                  f"（全在 {cross_label}）——source_repo 填错或漏填，对账整条落空："
                                  f"输出看着是绿的，实际一个文件都没比过"))
             continue
-        n_done += 1
+        if not all_bad:
+            t.reconciled += 1
         if cross:
             cross_skipped += sum(cross.values())
             out.append(("info", f"{rel}: {sum(cross.values())} 条 code_paths 在 {cross_label}"
@@ -811,7 +1154,8 @@ def check_code_map_coverage(project_dir, csm, subs):
         for pat, why in sp_dead:
             if why == "bad":
                 out.append(("error", f"{rel} 的 source_paths 含非法形态（{pat}）——只接受 "
-                                     f"source_repo 那个仓内的相对路径，不接受绝对路径 / 盘符 / `..`"))
+                                     f"source_repo 那个仓内的规范相对路径，不接受绝对路径 / 盘符 / `..` / "
+                                     f"`.` 段 / 连续斜杠"))
             elif pat.endswith("/"):
                 out.append(("error", f"{rel} 的 source_paths 有一条尾斜杠目录形态（{pat}）——"
                                      f"它不是合法 glob：匹配时被当成一个**名字带斜杠的文件**去找，"
@@ -820,6 +1164,8 @@ def check_code_map_coverage(project_dir, csm, subs):
             else:
                 out.append(("error", f"{rel} 的 source_paths 有一条展开为 0 个文件（{pat}）——"
                                      f"目录被删/改名后清单没跟着改，该条已不指向任何东西"))
+        if all_bad:
+            continue
         # L3 集合对账：缺 / 多 两种失败模式，指向相反的排查方向
         missing = sorted(cp_hit - sp_hit)
         extra = sorted(sp_hit - cp_hit)
@@ -837,9 +1183,10 @@ def check_code_map_coverage(project_dir, csm, subs):
                                  f"②同一文件被两份 code-map 声称覆盖时，描述分叉没有任何东西会报警。"
                                  f"去查这些文件到底归谁、是不是抄了别的模块的目录 glob"))
     if not [x for x in out if x[0] == "error"]:
-        out.append(("ok", f"{n_done} 个子模块的 code-map 覆盖率已对账（跨仓跳过 {cross_skipped} 条 "
-                          f"code_paths；{n_exempt} 个已声明豁免、{n_unsynced} 个未同步过、"
-                          f"{n_skip_repo} 个跨仓 dev-paste）"))
+        line = _tally_line(t)
+        if cross_skipped:
+            line = _TallyLine(line[0], f"{line[1]}（另有跨仓 code_paths {cross_skipped} 条不在对账面内）", t)
+        out.append(line)
     return out
 
 
@@ -937,7 +1284,7 @@ def check_ledger(project_dir, cfg, nested=None):
                          "或者装机时框架版本还没有这个默认值。想开启就把该键写成 "
                          '`"close_check": {"ledger": "<相对路径>", '
                          '"required_fields": ["模块", "验证", "提交"]}`，'
-                         "并按这份字段清单建好那个账本文件；跳过本项不影响其余八项"
+                         "并按这份字段清单建好那个账本文件；跳过本项不影响其余各项"
                          "（空壳只关账本这一项，不连带关掉 YAML 可解析性检查）")]
     ledger = project_dir / ledger_rel
     # 还没有账本 / 还没有任何条目时的参考点：窗口取「昨天与今天」，与「条目必须在
@@ -1261,17 +1608,18 @@ def _repo_touched_since(repo_dir, rels, since, known_repo=False):
     """
     if not rels:
         return False
+    if _bad_globs(rels):
+        return None  # 编译不了的 glob（检查 2 已报）：判不了，不抛
     if not known_repo:
         rc, lines, _ = _git(repo_dir, "rev-parse", "--is-inside-work-tree")
         if rc != 0 or not lines or lines[0].strip() != "true":
             return None
-    rc, lines, _ = _git(repo_dir, "log", "-1", "--format=%H",
-                        f"--since={since.isoformat()}", "--", *rels)
+    rc, lines, _ = _git_commits(repo_dir, rels, f"--since={since.isoformat()}")
     if rc != 0:
         return None
     if any(x.strip() for x in lines):
         return True
-    rc, lines, _ = _git(repo_dir, "status", "--porcelain", "--", *rels)
+    rc, lines, _ = _git_dirty(repo_dir, rels)
     if rc != 0:
         return None
     return any(x.strip() for x in lines)
@@ -1280,18 +1628,23 @@ def _repo_touched_since(repo_dir, rels, since, known_repo=False):
 def trace_premise(project_dir, csm, subs, since):
     """适用前提：窗口内任一子模块的 `code_paths` 在其所属仓有提交或工作树改动。
 
-    返回 `(applicable, hit_subs, unknown_repos, nested)`，applicable ∈ True / False / "unknown"：
+    返回 `(applicable, hit_subs, unknown, nested)`，applicable ∈ True / False / "unknown"；`unknown` 列判不了的
+    仓名，以及因 code_paths 有编译不了的 glob 而单独判不了的模块（`模块（原因）`）：
     任一仓 True ⇒ True；无 True 而有仓判不了 ⇒ "unknown"（与 False 分开——「判不了」与
     「确实没改」在日志里同形，事后就数不出闸有几次是瞎的）；全 False ⇒ False。
     仓集合 = 根仓 ＋ `discover_nested_repos`，分仓与剥前缀复用 `_split_paths_by_repo`。
     """
     all_paths = sorted({p for s in subs for p in s["code_paths"]})
-    nested = csm.discover_nested_repos(all_paths)
+    nested = _nested_repos(csm, all_paths)
     per_repo = {}
+    hit, unknown = set(), []
     for s in subs:
         for owner, rels in _split_paths_by_repo(s["code_paths"], nested).items():
+            if _bad_globs(rels):
+                # 只让这一个模块判不了：放进并集的话，同仓其他模块已证实的改动会一起被撤掉
+                unknown.append(f"{s['rel']}（code_paths 有编译不了的 glob）")
+                continue
             per_repo.setdefault(owner, {}).setdefault(s["rel"], []).extend(rels)
-    hit, unknown = set(), []
     for owner, by_sub in sorted(per_repo.items()):
         repo_dir = project_dir / owner if owner else project_dir
         union = sorted({r for rels in by_sub.values() for r in rels})
@@ -1310,29 +1663,33 @@ def trace_premise(project_dir, csm, subs, since):
     return ("unknown" if unknown else False), hit, unknown, nested
 
 
-def _count_skill_used_since(project_dir, since):
-    """窗口内项目里的 `skill_used` 条数：主文件 ＋ 未并回的 spill，坏行跳过。"""
+def _count_skill_events_since(project_dir, since):
+    """窗口内项目里的 `(skill_used, skill_invoked)` 条数：主文件 ＋ 未并回的 spill，坏行跳过。
+
+    两者**不相加**：前者是模型自报、后者是 hook 记的调起（只有 CC 门产得出），一次使用两条都有。
+    """
     state = _state_dir_of(project_dir)
     files = [state / "events.jsonl"] + sorted(state.glob("events.*" + SPILL_SUFFIX))
-    n = 0
+    counts = {"skill_used": 0, "skill_invoked": 0}
     for f in files:
         try:
             text = f.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         for line in text.splitlines():
-            if '"skill_used"' not in line:
+            if '"skill_used"' not in line and '"skill_invoked"' not in line:
                 continue
             try:
                 ev = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(ev, dict) or ev.get("type") != "skill_used":
+            kind = ev.get("type") if isinstance(ev, dict) else None
+            if not isinstance(kind, str) or kind not in counts:
                 continue
             ts = _parse_event_ts(ev.get("ts"))
             if ts is not None and ts >= since:
-                n += 1
-    return n
+                counts[kind] += 1
+    return counts["skill_used"], counts["skill_invoked"]
 
 
 def trace_criterion_b(ledger_findings):
@@ -1414,7 +1771,7 @@ def trace_criterion_c(project_dir, hit_subs, today=None):
 def check_discipline_trace(project_dir, csm, subs, ledger_findings, verdict=None, today=None):
     """检查 9：纪律产物痕迹——「该留的痕迹留了没有」。**warn 档：只产 ok / info / warn。**
 
-    判定式各段：适用前提 `trace_premise`；判据 a 只提示（`_count_skill_used_since`）；
+    判定式各段：适用前提 `trace_premise`；判据 a 只提示（`_count_skill_events_since`）；
     b `trace_criterion_b`；c `trace_criterion_c`。项级：前提不成立 ⇒ 不适用；前提成立时
     b 或 c 红 ⇒ 红；b、c 都不适用 ⇒ 不适用；其余 ⇒ 绿。
     `verdict`（dict）传入时被填上 `{applicable, result, criteria, repos}`，供 `main()` 记账；
@@ -1454,13 +1811,13 @@ def check_discipline_trace(project_dir, csm, subs, ledger_findings, verdict=None
     applicable, hit, unknown, nested = trace_premise(project_dir, csm, subs, since)
     v["repos"], v["applicable"] = list(nested), applicable
     if applicable == "unknown":
-        return done([("info", f"不适用：{'、'.join(unknown)} 判不了（不是 git 仓或 git 失败），"
+        return done([("info", f"不适用：{'、'.join(unknown)} 判不了（仓名未括注原因的：不是 git 仓或 git 失败），"
                               f"其余仓在窗口（{win} 起）内 code_paths 无改动——前提判不了，"
                               f"本次既不计入也不清零")])
     if not applicable:
         return done([("ok", f"不适用：窗口（{win} 起）内没有任何子模块的 code_paths 被改动，"
                             f"三条判据都不判")])
-    n_skill = _count_skill_used_since(project_dir, since)
+    n_skill, n_invoked = _count_skill_events_since(project_dir, since)
     b, b_why = trace_criterion_b(ledger_findings)
     c, c_why, n_cands = trace_criterion_c(project_dir, hit, today)
     v["criteria"] = {"a": "green" if n_skill else "info", "b": b, "c": c}
@@ -1473,6 +1830,9 @@ def check_discipline_trace(project_dir, csm, subs, ledger_findings, verdict=None
     head = (f"{label[v['result']]}（b {state(b, b_why)}；c {state(c, c_why)}）"
             f"——命中子模块 {len(hit)} 个，窗口 {win} 起")
     out = []
+    if unknown:
+        # 前提已由别的模块证成，但这几处没判——不说出来，读者会以为全部模块都核过
+        out.append(("info", f"适用前提里有未能核验的仓或路径：{'、'.join(unknown)}——上面的命中只来自核验了的部分"))
     if v["result"] == "green":
         out.append(("ok", head + "；窗口内项目里有痕迹（项目级：别的会话或子 agent 留下的同样"
                                  "算数，不代表本轮收口一定留了）"))
@@ -1489,7 +1849,10 @@ def check_discipline_trace(project_dir, csm, subs, ledger_findings, verdict=None
                     f"c 红：命中子模块的 {n_cands} 个看板候选任务（已排除 cancelled）没有一个在"
                     f"今天 / 昨天更新。两种成因：①看板没更新；②本轮还没走到看板流转——先走完再"
                     f"重跑本命令，这种红不算闸判错"))
-    if not n_skill:
+    if not n_skill and n_invoked:
+        out.append(("info", f"窗口内 hook 记到 {n_invoked} 次 skill 调起，但没有任何 `skill_used` 自报——"
+                            f"走收尾 Step 1 补记（只提示，不算红、不进计数）"))
+    elif not n_skill:
         out.append(("info", "窗口内项目里没有任何 `skill_used`——若本轮用过 skill，走收尾 "
                             "Step 1 补记（只提示，不算红、不进计数）"))
     return done(out)
@@ -1665,6 +2028,78 @@ def _read_cfg_quiet(project_dir):
         return None
 
 
+# ---------- 检查 10：导航段与实物一致 ----------
+
+
+class _PathLine(tuple):
+    """带具体文件的 finding：仍是 `(level, msg)` 二元组，另带 `path`（项目相对路径），
+    供 gates 查询把结论定位到那一份文件（只给目录时调用方打不开）。"""
+
+    def __new__(cls, level, msg, path):
+        obj = tuple.__new__(cls, (level, msg))
+        obj.path = path
+        return obj
+
+
+NAV_PROBLEMS = {
+    "missing-overview": "应有的 overview.md 不存在",
+    "missing-segment": "缺导航段",
+    "unpaired": "START / END 不配对",
+    "duplicate": "同名段重复",
+    "unknown-segment": "多出未知段",
+    "unreadable": "文件读不了",
+    "unreadable-source": "取数源读不了",
+}
+
+
+def check_nav_index(project_dir):
+    """导航段（AUTO-INDEX）与实物一致：拿 `_module_nav.plan(convert=False)` 做零写入比较。
+
+    规划器与 `module_init.py --refresh-index / --check` 是同一份，渲染规则不在本文件另写。
+    - 新版式段有差异 → 每份文件一条 warn（列段名），修法 `--refresh-index`
+    - 旧版式段（不比较、不刷新）→ 汇总一条 info，修法 `--convert-layout` 预览
+    - 段结构或取数有问题 → 每条一条 warn「无法检查」（该文件整份不会被刷新命令写入）
+    - 「未编写」字段的值不合法（`unstamped`）→ 每份一条 warn；规划器独立遍历全部现状四件与
+      `prd.md` 找它，不靠导航渲染顺带——旧版式段不渲染，顺带会漏
+
+    **永不产 error**：导航只影响展示与跳转，不影响判红；修法是一条命令，不要人工核验。
+    能力边界：只比段内；段外人写的矛盾句只在 `--convert-layout` 预览里粗筛列出，本项看不见。
+    """
+    import _module_nav as nav   # 同目录；import 零副作用（流包装只在 module_init.main 里）
+    init = f'python "{Path(__file__).resolve().parent / "module_init.py"}" --project "{Path(project_dir).resolve()}"'
+    p = nav.plan(project_dir, convert=False)
+    out = []
+    if any(d.code == "missing-modules-dir" for d in p.diagnostics):
+        return [("info", "projects/modules/ 不存在，本项无对象可查——这不等于通过")]
+    updates = {}
+    for c in p.changes:
+        if c.kind == "update":
+            updates.setdefault(c.path, []).append(c.segment or "匿名段")
+    for path, segs in sorted(updates.items()):
+        out.append(_PathLine("warn", f"{path} 的导航段与实物不一致（{'、'.join(segs)}）——跑 {init} --refresh-index", path))
+    for d in p.diagnostics:
+        if d.code == "unstamped":
+            out.append(_PathLine("warn", f"{d.path} 的 `unwritten` 字段值不是合法摘要——查询与导航按已编写展示；"
+                                         f"正文已写过就跑 {init} --unstamp \"{d.path}\" 删掉它，"
+                                         f"仍是骨架就把值改成 true 后跑 {init} --mark-unwritten \"{d.path}\"", d.path))
+        else:
+            where = f"{d.path}:{d.line}" if d.line else d.path
+            seg = f"（段 {d.segment}）" if d.segment else ""
+            detail = f"：{d.detail}" if d.detail else ""
+            out.append(_PathLine("warn", f"{where} 无法检查——{NAV_PROBLEMS.get(d.code, d.code)}{seg}{detail}；"
+                                         f"这份文件的导航段不会被刷新命令写入，修好后跑 {init} --check 复核",
+                                 d.path))
+    legacy = [c for c in p.changes if c.kind == "legacy"]
+    if legacy:
+        files = len({c.path for c in legacy})
+        out.append(("info", f"{len(legacy)} 段仍是旧版式（分布在 {files} 份文件，不比较、不刷新）——"
+                            f"跑 {init} --convert-layout 预览转换，确认后按预览给的确认码执行"))
+    same = sum(1 for c in p.changes if c.kind == "unchanged")
+    if not any(level == "warn" for level, _ in out) and same:
+        out.insert(0, ("ok", f"已比较 {same} 段，与实物一致"))
+    return out
+
+
 # ---------- 汇总与入口 ----------
 
 CHECKS = [
@@ -1690,6 +2125,15 @@ def run_all(project_dir, trace=None):
         csm = _load_csm(project_dir)
         subs = _collect_submodules(project_dir, csm)
     if modules_ok and not subs:
+        # 零子模块仍跑检查 1：抓「声明全没了、缓存还有」——那份缓存会把改动误标到已不存在的模块
+        try:
+            findings = check_stale_clean(project_dir, csm, subs)
+        except Exception as e:
+            findings = [("error", f"检查自身异常：{type(e).__name__}: {str(e)[:120]}")]
+        if findings != [("ok", STALE_CLEAN_OK)]:
+            status = "error" if any(l == "error" for l, _ in findings) else "ok"
+            results.append({"id": "stale-clean", "name": "stale 清单已清", "status": status,
+                            "findings": [_finding_dict(f) for f in findings]})
         # 「扫 0 报 ok」：`projects/modules/` 在、但一个子模块都没有时，六项检查各自
         # 对空集判绿，输出一排绿勾——看起来像「全都查过且没问题」，实际一项都没查到
         # 东西。合并成一条 info，并说清怎么让它真正生效（否则用户以为已经在被看着）。
@@ -1697,7 +2141,7 @@ def run_all(project_dir, trace=None):
             "id": "modules", "name": "modules 体系", "status": "ok",
             "findings": [{"level": "info", "msg":
                           "projects/modules/ 在，但还没有任何子模块（`<basic>/<sub>/"
-                          "submodule.yaml`），检查 1-6 无对象可查——**这不等于检查通过**。"
+                          "submodule.yaml`），检查 2-6 无对象可查（检查 1 照跑，只在反向索引残留时报红）——**这不等于检查通过**。"
                           "想让它们生效：先用 module-init 建基础模块与子模块，在子模块的 "
                           "submodule.yaml 里把 `code_paths` 填成本模块涉及的代码路径，"
                           "再跑 code-to-doc 生成 current-state/（基准 commit 由它写入）。"
@@ -1710,8 +2154,13 @@ def run_all(project_dir, trace=None):
                 findings = [("warn", f"检查自身异常：{type(e).__name__}: {str(e)[:120]}")]
             status = ("error" if any(l == "error" for l, _ in findings)
                       else "warn" if any(l == "warn" for l, _ in findings) else "ok")
+            # 只对带分档结论的两项（检查 4 / 检查 6）：一个都没对账上时项头是 info，不打 ok 勾。
+            # 其余检查的项头规则不动——检查 9 等本来就只出 info 的项若一并改，牵动面大且无收益
+            if status == "ok" and any(getattr(f, "tally", None) is not None and f.tally.reconciled == 0
+                                      for f in findings):
+                status = "info"
             results.append({"id": cid, "name": name, "status": status,
-                            "findings": [{"level": l, "msg": m} for l, m in findings]})
+                            "findings": [_finding_dict(f) for f in findings]})
     else:
         results.append({"id": "modules", "name": "modules 体系", "status": "ok",
                         "findings": [{"level": "info",
@@ -1742,7 +2191,7 @@ def run_all(project_dir, trace=None):
             nested = []
             if modules_ok and subs:
                 try:
-                    nested = csm.discover_nested_repos(
+                    nested = _nested_repos(csm, 
                         sorted({p for s in subs for p in s["code_paths"]}))
                 except Exception:
                     nested = []
@@ -1775,7 +2224,27 @@ def run_all(project_dir, trace=None):
         findings = [("warn", f"检查自身异常：{type(e).__name__}: {str(e)[:120]}")]
     results.append({"id": "discipline-trace", "name": "纪律产物痕迹", "status": _status_of(findings),
                     "findings": [{"level": l, "msg": m} for l, m in findings]})
+    # 检查 10 追加在检查 9 之后（同样不进 CHECKS 循环，理由同检查 8：插进前面会让序数引用作废）。
+    if modules_ok:
+        try:
+            findings = check_nav_index(project_dir)
+        except Exception as e:  # 与上面几处同款降级：检查自身异常不炸整个命令
+            findings = [("warn", f"检查自身异常：{type(e).__name__}: {str(e)[:120]}")]
+    else:
+        findings = [("info", "projects/modules/ 不存在，本项无对象可查——这不等于通过")]
+    status = _status_of(findings)
+    if status == "ok" and not any(l == "ok" for l, _ in findings):
+        status = "info"   # 一段都没比较上（全是旧版式或空树）：不打 ok 勾
+    results.append({"id": "nav-index", "name": "导航段与实物一致", "status": status,
+                    "findings": [_finding_dict(f) for f in findings]})
     return results
+
+
+def _finding_dict(f):
+    d = {"level": f[0], "msg": f[1]}
+    if getattr(f, "path", None):
+        d["path"] = f.path
+    return d
 
 
 def _utf8_streams():
@@ -1792,7 +2261,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="module-close-check",
         description="功能收口确定性检查：stale/路径存在性/基准同值与刷新/仓状态/code-map 覆盖率/"
-                    "账本/YAML 可解析性/纪律产物痕迹（warn 档）。"
+                    "账本/YAML 可解析性/纪律产物痕迹（warn 档）/导航段与实物一致（warn 档）。"
                     "正确时点 = 模块文档与账本写完之后、外层仓收口提交之前。"
                     "每次运行追加一行计数日志；标记红灯用 workframe-discipline-mark。")
     ap.add_argument("--project", help="目标项目目录；缺省按 _harness.project_dir() 解析"
@@ -1822,14 +2291,14 @@ def main(argv=None):
             extra = [("warn", "本项没有得出判定（检查自身异常，见上），没写运行行——本次未计入计数")]
         tr["findings"] += [{"level": l, "msg": m} for l, m in extra]
         tr["status"] = _status_of([(f["level"], f["msg"]) for f in tr["findings"]])
-    counts = {"ok": 0, "warn": 0, "error": 0}
+    counts = {"ok": 0, "info": 0, "warn": 0, "error": 0}
     print(f"module-close-check — {project_dir}")
     for r in results:
         counts[r["status"]] += 1
         print(f"{LEVEL_MARK[r['status']]} [{r['id']}] {r['name']}")
         for f in r["findings"]:
             print(f"    {LEVEL_MARK[f['level']]} {f['msg']}")
-    print(f"结果: ok {counts['ok']} / warn {counts['warn']} / error {counts['error']}"
+    print(f"结果: ok {counts['ok']} / info {counts['info']} / warn {counts['warn']} / error {counts['error']}"
           + ("　→ 未收干净，不得声明完成" if counts["error"] else ""))
     return 1 if counts["error"] else 0
 

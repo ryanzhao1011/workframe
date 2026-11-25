@@ -18,4 +18,3 @@
 - events.jsonl append `{"ts":"...","type":"proposal_failed","proposal_id":"PROP-20260401-001"}`
 - recompute_skill_metrics.py 下次重算后 `proposal_failures_count` +1
 - 下一轮 self-iteration 阶段 2 可把该失败作为**反思证据**（"提案失败回路"候选模式）
-- **`check-iteration-trigger.py` problem 分不因 `proposal_failed` 增加**（`proposal_failed` 是 model_mediated，已从 PROBLEM_WEIGHTS 移除，见 v0.2.2-fixup-2）

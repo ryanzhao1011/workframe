@@ -77,7 +77,7 @@ class Fixture:
         for name, val in (("PROJECT_DIR", P), ("STATE_DIR", state), ("ACTIVITY_FILE", state / "activity-state.json"),
                           ("CANDIDATES_FILE", state / "promotion-candidates.md"),
                           ("WORKORDER_FILE", state / "maintenance-workorder.md"),
-                          ("MAINT_FLAG_FILE", state / "maintenance-run.flag"), ("EVENTS_FILE", state / "events.jsonl"),
+                          ("EVENTS_FILE", state / "events.jsonl"),
                           ("SIDECAR_FILE", state / "memory-index.json"),
                           ("MANIFEST_FILE", P / "logs" / "maintenance-commit.json"),
                           ("MANIFEST_APPLIED", P / "logs" / "maintenance-commit.applied.json")):

@@ -962,22 +962,18 @@ def _report_items(project, git, post_kinds, skills_moving, rewrite_plan_paths, m
     if skills_moving:
         prefix = _harness.SKILLS_DIR_CC.as_posix() + "/"
         lines = []
+        try:
+            parse = _code_paths_parser()
+        except RuntimeError as e:
+            parse = None
+            out.append(_item("L-report", "report",
+                             f"按 {prefix} 圈文件的模块清单**算不出来**：{e}——手工查 projects/modules 下各 submodule.yaml 的 code_paths"))
         idx = state / "code-paths-index.json"
-        if idx.is_file():
-            try:
-                n = sum(1 for k in (json.loads(idx.read_bytes().decode("utf-8-sig")) or {}) if prefix in str(k))
-            except Exception:
-                n = 0
-            if n:
-                lines.append(f"{idx.name} 有 {n} 个含 {prefix} 的键")
+        mdir = project / "projects" / "modules"
+        if mdir.is_dir():
+            out += _index_report(idx, mdir, prefix)
         if git:
             rc, text, _ = _git(project, "grep", "-l", "-z", "-F", "-e", prefix, "--", "projects/modules")
-            try:
-                parse = _code_paths_parser()
-            except RuntimeError as e:
-                parse = None
-                out.append(_item("L-report", "report",
-                                 f"按 {prefix} 圈文件的模块清单**算不出来**：{e}——手工查 projects/modules 下各 submodule.yaml 的 code_paths"))
             for f in (_z(text) if rc == 0 and parse else []):
                 if f.endswith("submodule.yaml") and any(str(p).startswith(prefix) for p in parse(project / f)):
                     lines.append(f)                  # 只认 code_paths 列表项；注释与别的字段里提到的不算
@@ -1001,12 +997,71 @@ def _report_items(project, git, post_kinds, skills_moving, rewrite_plan_paths, m
     return out
 
 
+def _stale_modules():
+    """importlib 加载 `check-stale-modules.py`（文件名带连字符）。它的包流只在 `__main__` 下做，import 期不碰流。
+
+    给 `_index_report` 用索引的**同一份**实现（`declared_snapshot` / `build_index` / `declared_stamp` /
+    `validate_index`）：在这里另写一份去重或判新旧，两边一改就漂。加载失败抛 `RuntimeError`。"""
+    import importlib.util
+    try:
+        spec = importlib.util.spec_from_file_location("check_stale_modules", CODE_PATHS_SOURCE)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception as e:
+        raise RuntimeError(f"加载不了 {CODE_PATHS_SOURCE.name}（{type(e).__name__}: {e}）")
+
+
+def _index_report(idx, mdir, prefix):
+    """反向索引两条报告：按索引语义重算的计数（`build_index` 去重后的 (pattern, 子模块) 映射），
+    与磁盘缓存此刻的新旧——后者另起一条，不依赖旧前缀当前还有没有命中（声明已迁走、缓存独留旧前缀时
+    计数为 0，新旧却恰恰是要报的）。只读：不调会重建的入口。"""
+    try:
+        csm = _stale_modules()
+        stamp, pairs, errors = csm.declared_snapshot(mdir)
+        buckets = csm.build_index(stamp, pairs)["buckets"]
+        n = sum(len(subs) for bucket in buckets.values() for pat, subs in bucket.items() if pat.startswith(prefix))
+    except Exception as e:  # noqa: BLE001 —— 那个模块改名 / 依赖变化时 plan 不崩，出「算不出来」
+        return [_item("L-report", "report", f"反向索引的计数与新旧**算不出来**：{type(e).__name__}: {e}"
+                                            "——迁移后跑一次 rebuild-index")]
+    state = None
+    if errors:
+        state = f"无法判定——{len(errors)} 份声明读不了（如 {errors[0][0]}），计数也不完整"
+    elif not idx.exists():
+        state = "不存在（读者首次查询时自动构建）"
+    elif not idx.is_file():
+        state = "无法判定——该路径不是文件"
+    else:
+        try:
+            raw = idx.read_bytes()
+        except OSError as e:
+            state = f"无法判定——读不了（{type(e).__name__}）"
+        if state is None:
+            try:
+                data = json.loads(raw.decode("utf-8"))
+            except Exception:
+                data = None
+            if data is None or not csm.validate_index(data):
+                state = "损坏或形态不合法（读者下次查询时自动重建）"
+            elif not data.get("built_at") or data.get("source_stamp") != stamp:
+                state = "已过期，与当前声明不一致（读者下次查询时自动重建）"
+            elif csm.index_triples(data["buckets"]) != csm.index_triples(buckets):
+                # 戳对而内容不对：同字节同 mtime 的改动是 stat 戳的已知盲区，读者不会自己重建
+                state = "戳是新的，但映射与当前声明不一致（读者不会自动重建；迁移后跑一次 rebuild-index）"
+            else:
+                state = "与当前声明一致"
+    lines = [f"磁盘缓存：{state}"]
+    if n:
+        lines.append(f"会随声明改口：按当前声明有 {n} 条 {prefix} 开头的 (code_paths, 子模块) 映射")
+    return [_item("L-report", "report", f"{idx.name}（反向索引缓存）的状态", lines)]
+
+
 def _code_paths_parser():
     """`submodule.yaml` 的 `code_paths` 解析，复用 `check-stale-modules.py` 的 `parse_code_paths`（唯一实现）。
 
-    **不 import 那个模块**：它在 import 期把 `sys.stdout` 换成新的 `TextIOWrapper`，而 door 已经包过一层——
-    先前那层失去引用被回收时会关掉共用的底层 buffer，之后任何输出都抛 `I/O operation on closed file`。
-    所以只把那一个纯函数的源码取出来单独执行；它只依赖 `re`。
+    **只取这一个纯函数的源码单独执行**（它只依赖 `re`），不经 `_stale_modules()` 整模块加载：那个模块曾在
+    import 期把 `sys.stdout` 换成新的 `TextIOWrapper`（door 已包过一层，先前那层被回收时关掉共用 buffer），
+    现在包流已挪到 `__main__` 下；本函数留着单独取源码，是为了下面的自检能让函数体依赖变化响亮失效。
 
     **失效要响亮**：取不出（改名 / 删除）、执行不了，或对一份已知输入给不出已知结果，都抛 `RuntimeError`，
     由调用方在 plan 里出一条「算不出来」的报告项。最后一种要靠自检：函数体开始依赖那个模块里的别的名字时，

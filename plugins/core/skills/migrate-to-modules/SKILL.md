@@ -211,7 +211,7 @@ docs/auth/login-flow.md 被以下文件引用（4 处）：
 
 对每个新建子模块且 `code_paths` 非空，跑 CLI：
 ```bash
-python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" init-submodule <basic>/<sub>
+python "$WF_PLUGIN_ROOT/scripts/check-stale-modules.py" init-submodule <basic>/<sub>
 ```
 （与 module-init Step 2a 中脚本内部的反向索引初始化语义一致；不要直接 `from check_stale_modules import ...`，本 skill `allowed-tools` 不含 Python import 能力）
 
@@ -220,7 +220,7 @@ python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" 
 迁移是断链最高发的操作（批量挪位 + 引用改写），索引重建后必须全库巡检验收：
 
 ```bash
-python "$(cat .workframe/state/plugin-root.txt)/skills/doc-graph-health/scripts/graph_health.py"
+python "$WF_PLUGIN_ROOT/skills/doc-graph-health/scripts/graph_health.py"
 ```
 
 - 断链 / 孤儿指向**本次迁移涉及的文件** → 当场修复（引用漏改 / 映射错位），修完重跑确认
@@ -273,7 +273,7 @@ python "$(cat .workframe/state/plugin-root.txt)/skills/doc-graph-health/scripts/
 - [ ] 删除整目录前先 `_legacy/` 备份
 - [ ] frontmatter 补全合规（§2）
 - [ ] 全量索引段已重建
-- [ ] 反向索引段已初始化（子模块 code_paths 非空）
+- [ ] 反向索引已按全部声明重建（子模块 code_paths 非空；`init-submodule` 非零退出时已转述）
 - [ ] 巡检收尾已跑：迁移涉及文件零断链零孤儿（存量遗留另列跟进）
 
 ## 反模式

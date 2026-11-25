@@ -16,10 +16,13 @@
      实现**复用** `maintenance_workorder._normalize_key_fragment`，不另写一份——这条
      规则已经因为两处手写漂过一次。
   4. **task_blocked 去重**：schema 不含 session_id，dedup 只以 `task_id` 为准；协议要求
-     append 前先扫 events.jsonl，扫漏就把 problem 加权分算两遍。
+     append 前先扫 events.jsonl，扫漏就把同一次阻塞记两遍。
 
-`harness` 由 `--harness` 给；**不给就显式写 `unknown`，不省略**——省略在 schema 里等于
-宣称 `cc`（存量兼容口径），把「不知道」写成「确定是 CC」是更坏的假话。
+`harness` 由 `--harness` 给；不给时按会话号环境变量认门（`_harness.command_door()`，只认一种标记独占），
+**认不准就显式写 `unknown`，不省略**——省略在 schema 里等于宣称 `cc`（存量兼容口径），
+把「不知道」写成「确定是 CC」是更坏的假话。显式给了非法值也是 `unknown`，不再去认。
+认出来的门只用来写 `harness`：会话标记文件那一级仍要显式 `--harness codex` 才用（标记可能是别的会话留下的；显式时也不拿 `CODEX_THREAD_ID` 核对——
+子线程的线程号本来就不等于会话号，所以唯一的残留标记仍会被采信）。
 
 **能力边界（现在就写清楚，别等它变成暗坑）**：
 
@@ -32,7 +35,7 @@
     `session-start-prep.py --harness codex` 写、`session-end-flush.py` 删（实测：不带
     `--session-id` 跑本命令，落行的 `session_id` 等于标记里的线程号）。**恰好一个标记才采信**：
     同一项目下有两个候选（上一个会话没跑到 SessionEnd、标记还没被 7 天清理）时省略
-    `session_id`，消费方回退到按 ts 分桶、per-session cap 对那些行失效。
+    `session_id`，消费方不得假设它一定在。
   - 本模块不写 memory-index sidecar，也不动 MEMORY.md：它只管事件流那一半。纠正类条目的
     sidecar 与 MEMORY 写入仍按 correction-detection 第 3、4 步由模型完成；scope=module
     的纠正只记录模块、完整目标路径与事实快照，不生成 entry_key、不写 sidecar。
@@ -48,7 +51,7 @@ from pathlib import Path
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
-from _harness import UNKNOWN, harness as _harness_of  # noqa: E402
+from _harness import CODEX, command_door as _command_door, find_root, harness as _harness_of  # noqa: E402
 from _harness import project_dir as _project_dir  # noqa: E402
 from _harness import session_id as _harness_session_id  # noqa: E402
 from _state_io import append_line, event_json, state_dir_of  # noqa: E402
@@ -99,9 +102,9 @@ def session_marker_id(state_dir, harness_name):
 
     文件名形态 `current-session-<harness>-<session_id>.json`。**按 session_id 命名而不是
     按 harness 单文件**：同一扇门同时开两个会话（两个 CC 窗口是常态）时单文件会被后启动者
-    覆盖，先启动那个会话的模型就会拿到别人的 session_id，per-session cap 归错桶且无从发现。
+    覆盖，先启动那个会话的模型就会拿到别人的 session_id，归错会话且无从发现。
     所以这里只在**恰好一个**候选时采信；多于一个说明分不清是哪个会话，宁可省略 session_id
-    （消费方回退到按 ts 分桶）也不猜。
+    也不猜。
     """
     prefix = f"current-session-{harness_name}-"
     try:
@@ -322,8 +325,12 @@ def main(argv=None):
             # 后一次会静默覆盖前一次，等于替用户挑了一个数；在任何写入之前拒绝（argparse 的 exit 2）
             ap.error(f"--criterion 的判据 id 重复：{', '.join(dup)}——每个 id 只写一次")
 
-    harness_name = _harness_of() or UNKNOWN   # 读 sys.argv 的 --harness；没带就是 unknown
-    project = Path(args.project).resolve() if args.project else _project_dir()
+    # 给了 --harness 就只认它（非法值归 unknown）；没给才按会话环境认
+    harness_name = _harness_of() if args.harness is not None else _command_door()
+    # 门、项目、会话号按同一扇门解析：Codex 从当前目录找根、不采信外层 Claude Code 留下的变量
+    codex = harness_name == CODEX
+    project = (Path(args.project).resolve() if args.project
+               else (find_root() or Path.cwd()) if codex else _project_dir())
     events_file = state_dir_of(project) / "events.jsonl"
 
     if args.event_type == "task_blocked" and task_blocked_exists(events_file, args.task_id):
@@ -332,15 +339,14 @@ def main(argv=None):
         return 0
 
     event = build_event(args)
-    # session_id 只对 skill_used 有消费方（check-iteration-trigger 的 per-session cap）；
-    # 另两类的 schema 里没有这个字段，塞进去只会造出 schema 外的键。
+    # session_id 只随 skill_used 记；另两类的 schema 里没有这个字段，塞进去只会造出 schema 外的键。
     if args.event_type == "skill_used":
         # 三级兜底，顺序即优先级：显式参数 > harness 自己的会话号 > 会话标记文件。
         # 中间那一级是 CC 门下**今天就能拿到**的（`CLAUDE_CODE_SESSION_ID` 注进 Bash
-        # 子进程，与 hooks stdin 的 `session_id` 同值）；漏接它等于让 per-session cap
-        # 在唯一有数据的那扇门上也失效。最后一级见 `session_marker_id` 的能力边界。
-        sid = (args.session_id or _harness_session_id() or
-               session_marker_id(state_dir_of(project), harness_name))
+        # 子进程，与 hooks stdin 的 `session_id` 同值）；漏接它等于在唯一
+        # 有数据的那扇门上也丢掉会话归属。最后一级见 `session_marker_id` 的能力边界。
+        sid = (args.session_id or ("" if codex else _harness_session_id()) or
+               (session_marker_id(state_dir_of(project), harness_name) if args.harness is not None else ""))
         if sid:
             event["session_id"] = sid
 

@@ -85,7 +85,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(cwd, self.job.resolve())
         self.assertEqual(env["WORKFRAME_SELFITER_JOB"], "job")
         self.assertGreater(timeout, 895)
-        self.assertLessEqual(timeout, 900)
+        # a clock that has not ticked leaves (start + limit) - start, which rounds a hair above limit
+        self.assertLessEqual(timeout, 900 + 1e-6)
         self.assertNotIn("--model", cmd)
         self.assertFalse(any("budget" in arg or "bypass" in arg for arg in cmd))
         self.assertIn("frozen evidence", prompt)
@@ -98,7 +99,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--model") + 1], "chosen")
         self.assertEqual(env["WORKFRAME_SELFITER_JOB"], "controller-id")
         self.assertGreater(timeout, 5)
-        self.assertLessEqual(timeout, 10)
+        self.assertLessEqual(timeout, 10 + 1e-6)
 
     def test_cc_rejects_each_incomplete_success_condition(self):
         for stdout in ("", "not json", "[]", self.cc(type="assistant"),

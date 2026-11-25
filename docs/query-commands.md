@@ -4,7 +4,7 @@
 
 | 命令 | 做什么 |
 |---|---|
-| `workframe-query` | 六个查询主题加一个能力查询，输出带格式版本的 JSON |
+| `workframe-query` | 按主题读取框架数据或协商能力，输出带格式版本的 JSON |
 | `workframe-codex-trust` | 窄恢复入口：只为本插件的 hook 补回 Codex 的信任记录，别的什么都不写 |
 
 两条命令都放在 core 插件里（脚本在 `scripts/`，同名入口在 `bin/`）。**日常使用框架用不到它们**；只有你在写读取框架状态的程序时才需要本文。
@@ -18,7 +18,7 @@
 | 子进程回收 | 本命令启动的子进程在返回前全部结束；不连接、不结束其他会话共用的服务 |
 | 输出 | 标准输出只有一个 JSON 对象，UTF-8，无字节序标记；提示与警告不写标准输出 |
 | 依赖 | 只用 Python 标准库加框架已有的依赖。涉及 Codex 的主题要求 **Python 3.11 及以上** |
-| 耗时 | `project-status`、`board`、`modules`、`stats` 在一千个任务、两百个文档的项目上目标不超过 1 秒；`gates` 不设目标但可被外部终止 |
+| 耗时 | `project-connection`、`project-status`、`board`、`modules`、`stats` 在一千个任务、两百个文档的项目上目标不超过 1 秒；`gates` 不设目标但可被外部终止 |
 | **不在零写入承诺内** | `codex-trust` 主题与 `gates --gate doctor` 的 Codex 信任检查会启动 Codex 的后台服务，它会写 `CODEX_HOME` 下自己的日志与运行态文件。结果里用 `side_effects` 字段声明，范围见下文「`codex-trust` 的副作用范围」 |
 
 ## 调用
@@ -28,7 +28,7 @@ python "<插件根>/scripts/workframe_query.py" <主题> --project "<项目目�
 python "<插件根>/scripts/workframe_query.py" --capabilities
 ```
 
-- `--project` 可以是任意存在的目录，不要求已接入框架：未接入时 `project-status` 照常返回，其余主题返回 `not_connected`。
+- `--project` 可以是任意存在的目录。未接入时 `project-connection` 和 `project-status` 返回目录状态，其余主题返回 `not_connected`。
 - `--schema workframe.query.v1` 显式指定格式版本；不带时输出框架支持的最高版本。
 - 退出码：`0` 成功；`1` 查询失败（标准输出仍是带 `error` 的 JSON）；`2` 用法错误或项目目录无效（同样输出带 `error` 的 JSON）。`--schema` 指定了不支持的版本按查询失败处理，退出 `1`。
 
@@ -43,7 +43,7 @@ python "<插件根>/scripts/workframe_query.py" --capabilities
   "schema": "workframe.query.v1",
   "topic": "board",
   "generated_at": "2026-11-11T12:00:00+00:00",
-  "framework_version": "1.3.0",
+  "framework_version": "1.4.0",
   "project": "D:/work/shop-admin",
   "depends_on": ["projects/board.yaml"],
   "warnings": [],
@@ -90,9 +90,17 @@ python "<插件根>/scripts/workframe_query.py" --capabilities
 
 ## 查询主题
 
+### `project-connection`
+
+用于巡检项目接入状态。`data` 中的 `connected`、`layout`、`project_name`、`setup`、`support`、`ancestor_project` 字段沿用 [`project-status`](#project-status) 的定义。旧布局仍返回 `layout: "legacy"`，其他功能主题的 `legacy_layout` 错误照常返回。
+
+`depends_on` 覆盖接入标记、状态目录里的 `setup-state.json`、`AGENTS.md`、`.claude/settings.json`、`.claude/settings.local.json`、`.codex/config.toml` 和旧布局路径。缺失的文件也会列出。目录未接入时另列经过的各级祖先标记，直到最近已接入的祖先或盘符根。查询只读取这些接入数据，项目根和 Git 目录无需作为依赖。
+
+调用方在 `--capabilities` 的 `topics` 中找不到本主题时，可使用聚合 `project-status`，并监听它实际返回的依赖。已声明本主题的框架返回失败时，直接处理该错误。
+
 ### `project-status`
 
-轻量判定一个目录的状态；不运行完整体检，不访问 Codex 的后台服务。
+一次读取接入状态、目录分类、Git 状态和执行插件的来源，适用于打开目录或确认插件来源。查询复用 `project-connection` 的项目读取规则。
 
 | `data` 字段 | 说明 |
 |---|---|
@@ -152,12 +160,21 @@ python "<插件根>/scripts/workframe_query.py" --capabilities
 
 **退出码**：六态都是一次成功完成的分类，退出 `0`，必须读 `data.state`；项目文件解析失败等通用失败退出 `1`，用法错误退出 `2`。
 
-**`codex-trust` 的副作用范围**。`side_effects` 含 `codex_app_server_logs`，覆盖 Codex 的 `log/` 目录、后台服务的控制目录、日志库 `logs_*.sqlite` 与其 `-wal`、`-shm`，以及按版本实测登记的运行态文件：codex-cli 0.167.2 为 `tmp/` 与 `.tmp/` 下的临时目录、`.sandbox/` 下的日志、任意 `*.sqlite-shm`（前提是对应数据库本体与 `-wal` 字节不变）。会话与历史库的内容、插件缓存、认证、`config.toml` 等其他文件都不得变化；未登记的 Codex 版本返回 `unverified`（`side_effect_scope_unknown`）并不启动后台服务。
+**`codex-trust` 的副作用范围**。`side_effects` 含 `codex_app_server_logs`，覆盖 Codex 的 `log/` 目录、后台服务的控制目录、日志库 `logs_*.sqlite` 与其 `-wal`、`-shm`，以及按版本实测登记的运行态文件：codex-cli 0.167.2 为 `tmp/` 与 `.tmp/` 下的临时目录、`.sandbox/` 下的日志、任意 `*.sqlite-shm`（前提是对应数据库本体与 `-wal` 字节不变）。每次查询只在前后对比信任判断读到的输入：`config.toml`、`CODEX_HOME/.hook-trust/`、各市场已安装的 `plugins/cache/<市场>/core/`（路径上或其中的链接会跟进：链接本身与它指向的内容都比对）；这些有任何变化（不论是本次查询还是别的进程造成）都返回 `unverified`（`side_effect_scope_unknown`）。窄恢复入口用同一范围，另加它自己的精确字段与信任文件回读；不在 `plugins/cache/<市场>/core/` 下的插件根（如从本地市场目录直接加载的，不论是否位于 `CODEX_HOME` 内）不在对比范围内。会话与历史库、其他数据库、缓存、认证、其他插件随时被正在运行的 Codex 改写，不在每次查询的对比范围内：已登记版本的后台服务在这些位置会写什么，由每个版本一次的隔离实测界定，运行时不再逐次检出。未登记的 Codex 版本返回 `unverified`（`side_effect_scope_unknown`）并不启动后台服务。
 
 启动任何后台服务之前：
 
-- 先用真实路径核对 `CODEX_HOME`、用户配置文件（含符号链接目标）与日志、控制目录；落在项目目录、框架状态目录或插件目录内返回 `unverified`（`protected_path_overlap`）；副作用路径无法确定（含用户配置读不了、日志或数据库位置被重定向）返回 `unverified`（`side_effect_scope_unknown`）。
+- 先用真实路径核对 `CODEX_HOME`、用户配置文件、日志、控制目录、模型缓存和远程精选插件的缓存与安装暂存目录。项目目录、框架状态目录和实际 Workframe 插件安装根有重叠时返回 `unverified`（`protected_path_overlap`）。同在 `plugins/cache/` 下的独立子树可以通过。副作用路径无法确定时返回 `unverified`（`side_effect_scope_unknown`），包括用户配置读不了以及守卫查询遇到未登记的日志或数据库重定向。
 - 目标 Codex 版本从未在这个 home 里运行过时，它第一次启动会创建初始化文件（codex-cli 0.167.2：`installation_id`、`skills/.system/`、`state_5.sqlite`、`goals_1.sqlite`、`memories_1.sqlite`、`queue_1.sqlite`，以及插件功能开启时的 `.tmp/plugins.sync.lock`）。这些都不在上面的范围内，所以缺任何一个时同样返回 `unverified`（`side_effect_scope_unknown`），不启动后台服务；先在该 home 里运行一次 Codex 再查询即可。
+
+桌面客户端在用户主动打开或继续普通 Codex 会话时使用独立的启动观察。每次用这次会话的最终环境、目录、profile 和覆写参数向 Codex 查询。主动观察允许 Codex 在自己的目录写日志、缓存、数据库及配套临时文件，检查已知目标以及显式重定向的真实路径。发生重叠或路径无法核实时返回 `unverified`。检查范围限于这些路径及其父目录，更深层的链接由使用方管理。查询在确认自己启动的服务已经退出后才返回观察结果。
+
+| Windows Codex CLI | 主动启动观察 | `codex-trust` 守卫查询与窄恢复 |
+|---|---|---|
+| 0.167.2 | 支持 | 支持 |
+| 0.169.0 | 支持 | 未核实 |
+
+0.169.0 的启动观察可以报告 hook 信任状态，恢复仍须由已验证的入口执行。已登录的隔离实测中，过期模型缓存在 0.167.2 启动之后自行刷新，0.169.0 在观察窗口内保留过期值，显式查询模型之后刷新。
 
 ### 窄恢复入口 `workframe-codex-trust restore`
 
@@ -203,7 +220,9 @@ workframe-codex-trust restore --project <根目录> --codex-exe <入口> --codex
 | `ledgers` | 项目账本类文档 |
 | `cross_module` | 项目级的方案与计划 |
 
-子模块：`{ name, path, status, overview_path, stale, docs, requirements, error }`。文档：`{ kind, title, path, type, status, updated, meta_error }`，`kind` 取 `overview` / `architecture` / `api-surface` / `data-model` / `code-map` / `decision` / `research` / `other` / `ledger` / `plan` / `shared`；`title` 取文档元数据，没有则取元数据区之后的第一个一级标题（元数据区里的注释不算标题）。单篇元数据无法解析时该篇照常返回，`meta_error` 写原因；子模块自身的 `submodule.yaml` 无法解析时该子模块照常返回，`error` 写原因，整个主题不因此失败。
+子模块：`{ name, path, status, overview_path, stale, docs, requirements, error }`。文档：`{ kind, title, path, type, status, updated, unwritten, meta_error }`，`kind` 取 `overview` / `architecture` / `api-surface` / `data-model` / `code-map` / `decision` / `research` / `other` / `ledger` / `plan` / `shared`；`title` 取文档元数据，没有则取元数据区之后的第一个一级标题（元数据区里的注释不算标题）。单篇元数据无法解析时该篇照常返回，`meta_error` 写原因；子模块自身的 `submodule.yaml` 无法解析时该子模块照常返回，`error` 写原因，整个主题不因此失败。
+
+`unwritten`（新增字段，旧版框架输出里没有，缺省按 `false` 读）：文档仍是建骨架时的原样、没人写过正文时为 `true`；元数据无法解析或读不到时恒为 `false`，坏文档照常可导航。`requirements` 每项 `{ slug, title, status, subs }`，`subs` 每项 `{ slug, prd_path, status, description, unwritten }`，其中 `unwritten` 判的是该子需求的 `prd.md`。只认布尔 `true`，字符串 `"false"` 之类不当真值。
 
 `stale` 为 `null` 或 `{ reasons, files }`：`reasons` 是 `[{ kind, path, message }]`，`files` 是去重后的代码文件路径列表。
 
@@ -217,7 +236,7 @@ workframe-codex-trust restore --project <根目录> --codex-exe <入口> --codex
 |---|---|
 | `gate` | 回显 |
 | `summary` | `{ ok, info, skipped, warn, error }`：各级别的条数 |
-| `checks` | `[{ id, name, level, message, detail, doc_path, files }]`；同一项检查给出多条结论时每条一项，共用同一个 `id` |
+| `checks` | `[{ id, name, level, message, detail, doc_path, files }]`；同一项检查给出多条结论时每条一项，共用同一个 `id`。结论针对单份文件时（`stale-clean` 里挂着待更新标记的子模块、`nav-index` 的各条），`files` 只含那份文件，`doc_path` 是它（不是 Markdown 时为 `null`）；其余结论的 `files` 是该项检查读取的输入 |
 
 `level` 取 `ok` / `info` / `skipped` / `warn` / `error`；`skipped` 表示该项无对象可查或不适用，**不等于通过**。以后新增的级别属于兼容变更，调用方对不认识的级别应按「未识别」显示、不计为通过。两类检查都复用现有的纯判定函数，不追加计数日志、不写初始化进度；`doctor` 的 Codex 信任检查会启动后台服务，结果的 `side_effects` 声明它。
 
@@ -233,32 +252,37 @@ workframe-codex-trust restore --project <根目录> --codex-exe <入口> --codex
 |---|---|---|
 | `board` | `{ state, error?, tasks_by_status, tasks_by_role }` | 来自看板；不含已取消 |
 | `completion` | `{ state, error?, weeks, without_date }` | 按 `--weeks` 的划分归属；没有任务的周也返回，`count` 为 0；`without_date` 为已完成但没有完成日期的任务数 |
-| `events` | `{ state, error?, range, skill_usage, signals, unparsed_lines }` | 来自事件记录；`signals` 含 `user_correction`、`turn_failed`、`task_blocked`，各带 `count` 与 `sources`（该事件在哪些工具里有采集通路，`turn_failed` 目前只有 `["claude"]`——不要把 0 解释成「没有发生」） |
+| `events` | `{ state, error?, range, skill_usage, skill_invoked, signals, unparsed_lines }` | 来自事件记录；`skill_usage` 是模型自报的使用次数、`skill_invoked` 是 hook 记的调起次数，两者**不相加**（Codex 门没有调起的采集通路），技能名已把裸名与 `core:` 名归一；`signals` 含 `user_correction`、`turn_failed`、`task_blocked`，各带 `count` 与 `sources`（该事件在哪些工具里有采集通路，`turn_failed` 目前只有 `["claude"]`——不要把 0 解释成「没有发生」） |
 
-`state` 取 `ok` 或 `error`；`error` 时不给该组的数字，`error` 为 `{ code, message, detail }`。统计口径由框架按它的事件定义实现，调用方不重算。事件读取覆盖主文件 `events.jsonl`、尚未合并的补记文件与合并时改名留下的副本，三处合起来按整行内容去重；已知限制：同一秒内同一 skill 的两条逐字相同的记录会被当成一条。
+`state` 取 `ok` 或 `error`，`events` 组另有 `unrecorded`：项目里一份事件记录文件都没有（不是「有文件、零条」），此时不给数字，调用方应显示「未记录」而不是 0；`error` 时不给该组的数字，`error` 为 `{ code, message, detail }`。统计口径由框架按它的事件定义实现，调用方不重算。事件读取覆盖主文件 `events.jsonl`、尚未合并的补记文件与合并时改名留下的副本，三处合起来按整行内容去重；已知限制：同一秒内同一 skill 的两条逐字相同的记录会被当成一条。
 
-`depends_on`（信封）：看板文件、状态目录下的事件文件（目录形式）。`valid_until`：时间范围起点越过最早一条已计入事件的时刻，与 `--weeks` 第一项的 `end`，取较早者。
+`depends_on`（信封）：看板文件、状态目录下的事件文件（目录形式）、项目 skills 的两种目录布局（`.agents/skills/` 与 `.claude/skills/`，目录形式；技能名归一要看项目里有没有同名技能）。`valid_until`：时间范围起点越过最早一条已计入事件的时刻，与 `--weeks` 第一项的 `end`，取较早者。
 
 ### `--capabilities`
 
 不需要 `--project`，返回这份框架支持的能力，供调用方启动时协商：
 
 ```json
-{ "schema": "workframe.query.v1", "topic": "capabilities", "framework_version": "1.3.0", "project": null,
+{ "schema": "workframe.query.v1", "topic": "capabilities", "framework_version": "1.4.0", "project": null,
   "depends_on": [], "warnings": [],
   "data": { "schemas": ["workframe.query.v1"],
-            "topics": ["project-status", "codex-trust", "board", "modules", "gates", "stats"],
+            "topics": ["project-status", "gates", "codex-trust", "board", "modules", "stats", "project-connection"],
+            "stats_stream": "workframe.stats-stream.v1",
+            "nav_refresh": { "schema": "workframe.nav.v1", "command": "module_init.py",
+                             "operations": ["refresh-index", "check", "convert-layout"] },
             "codex_trust": { "states": ["ready", "needs_trust", "disabled_by_user", "not_installed", "version_unsupported", "unverified"],
                              "recovery": { "schema": "workframe.codex-trust-restore.v1", "command": "workframe-codex-trust", "operations": ["restore"] } } } }
 ```
 
-`topics` 只列这份框架**已实现**的主题；窄恢复入口是否存在按 `codex_trust.recovery` 判断，不凭版本号猜。
+`topics` 只列这份框架**已实现**的主题；窄恢复入口是否存在按 `codex_trust.recovery` 判断，不凭版本号猜。支持长连接的统计消费者可在 `stats_stream` 为 `workframe.stats-stream.v1` 时运行 `python -B <脚本> --stats-stream`。每行输入一个以 `stats` 开始的 UTF-8 JSON 参数数组，每行输出 `{exit_code,result}`，其中 `result` 为普通查询信封。输入结束后进程退出。无此能力时继续逐次运行 `stats`。导航段刷新是否由框架脚本承担按 `nav_refresh` 判断：有它时，`scripts/module_init.py --project <dir> --refresh-index | --check | --convert-layout [--scope <路径>…] --json` 输出 `nav_refresh.schema` 那一版的结果（`{schema, command, results: [{path, segment, status, reason, line}], confirm?}`，成功与失败都输出）；没有它的旧框架只能由模型按规程刷新。
 
 ## 调用约定（建议）
 
-- 每次查询启动一个子进程，以 `python -B` 运行，环境带 `PYTHONDONTWRITEBYTECODE=1`、`GIT_OPTIONAL_LOCKS=0`；轻量主题超时 10 秒，`gates` 120 秒，`codex-trust` 30 秒。超时或取消时结束该子进程的整个进程树，不结束树外的共享服务。
+- 一次性查询以 `python -B` 启动，环境带 `PYTHONDONTWRITEBYTECODE=1`、`GIT_OPTIONAL_LOCKS=0`。轻量主题超时 10 秒，`gates` 120 秒，`codex-trust` 30 秒。超时或取消时结束该子进程的整个进程树，树外的共享服务可继续运行。
+- 支持流式统计时，子进程可在多个请求之间复用增量读取索引。索引只保存在该进程的有限内存里，超出索引容量的事件流回到完整读取。保持有限并发并在空闲或退出时回收该进程。
 - 结果按「项目 + 主题 + 参数」缓存；监听 `depends_on` 里的路径，变化或到了 `valid_until` 就标为过期并重查。失败响应的 `depends_on` 同样要监听。
 - 迟到的旧结果不要覆盖界面上更新的结果；同一「项目 + 主题 + 参数」在同一时刻只跑一个。`gates` 不缓存。
+- 界面若展示上次运行的闸结果，可独立监听项目文件变化并标记结果过期。每次实际运行闸仍由用户发起。
 - 标准输出按 UTF-8 解码后解析 JSON，解析失败按内部错误处理。
 
 ## 格式版本与兼容

@@ -28,7 +28,7 @@ import workframe_doctor as doctor
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS = ("workframe.query.v1",)
-TOPICS = ("project-status", "gates", "codex-trust", "board", "modules", "stats")
+TOPICS = ("project-status", "gates", "codex-trust", "board", "modules", "stats", "project-connection")
 KNOWN_TOPICS = TOPICS
 
 
@@ -234,7 +234,10 @@ def marketplace_source(warnings):
                      and same(str(Path(_unc_strip(raw)) / "plugins" / "core")))
             cached = (PLUGIN_ROOT.parent.name == "core" and
                       same(str(home / "plugins" / "cache" / name / "core" / PLUGIN_ROOT.name)))
-            if (local or cached) and kind in ("local", "git") and isinstance(raw, str):
+            # An upgrade runs the new version from the marketplace snapshot, before it is installed.
+            snapshot = (kind == "git" and
+                        same(str(home / ".tmp" / "marketplaces" / name / "plugins" / "core")))
+            if (local or cached or snapshot) and kind in ("local", "git") and isinstance(raw, str):
                 matches.append(codex_source(entry))
     except (OSError, ValueError, TypeError, AttributeError, QueryError) as exc:
         warnings.append(f"Codex marketplace source could not be read: {exc}")
@@ -258,10 +261,11 @@ def layout_dependencies(paths):
     return paths
 
 
-def project_dependencies(project):
+def project_dependencies(project, *, aggregate=True):
     paths = [ROOT_MARKER, (state_dir_of(project) / "setup-state.json").relative_to(project).as_posix(),
-             ".claude/settings.json", ".claude/settings.local.json", ".codex/config.toml", "AGENTS.md",
-             "./", ".git", ".git/"]
+             ".claude/settings.json", ".claude/settings.local.json", ".codex/config.toml", "AGENTS.md"]
+    if aggregate:
+        paths.extend(("./", ".git", ".git/"))
     layout_dependencies(paths)
     if not (project / ROOT_MARKER).is_file():
         for parent in project.parents:
@@ -271,7 +275,7 @@ def project_dependencies(project):
     return paths
 
 
-def project_status(project, warnings, depends_on=None):
+def project_connection(project, warnings):
     connected = (project / ROOT_MARKER).is_file()
     cfg = read_object(project / ROOT_MARKER, ROOT_MARKER)
     name = cfg.get("project_name")
@@ -289,12 +293,16 @@ def project_status(project, warnings, depends_on=None):
     return {"connected": connected,
             "layout": ("legacy" if doctor._has_legacy(paths) else "current") if connected else None,
             "project_name": name, "setup": setup, "support": project_support(project),
-            "ancestor_project": ancestor.as_posix() if ancestor else None,
+            "ancestor_project": ancestor.as_posix() if ancestor else None}
+
+
+def project_status(project, warnings, depends_on=None):
+    return {**project_connection(project, warnings),
             "directory_kind": classify_directory(project), "git": git_status(project, warnings, depends_on),
             "marketplace_source": marketplace_source(warnings)}
 
 
-def main(argv=None):
+def main(argv=None, *, event_cache=None, emit=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if hasattr(sys.stderr, "reconfigure"):
@@ -318,7 +326,7 @@ def main(argv=None):
             project = Path(_unc_strip(args.project)).resolve()
             if not project.is_dir():
                 raise QueryError("bad_usage", "Project must be an existing directory", exit_code=2)
-            depends_on = project_dependencies(project)
+            depends_on = project_dependencies(project, aggregate=topic != "project-connection")
             if topic == "gates":
                 depends_on = []
             elif topic == "board":
@@ -358,6 +366,11 @@ def main(argv=None):
             if args.topic is not None or args.project is not None:
                 raise QueryError("bad_usage", "--capabilities takes no topic or project", exit_code=2)
             data = {"schemas": list(SCHEMAS), "topics": list(TOPICS)}
+            from _query_stats import STATS_STREAM
+            data["stats_stream"] = STATS_STREAM
+            from _module_nav import SCHEMA as NAV_SCHEMA
+            data["nav_refresh"] = {"schema": NAV_SCHEMA, "command": "module_init.py",
+                                   "operations": ["refresh-index", "check", "convert-layout"]}
             from _query_codex_trust import STATES, RESTORE_SCHEMA
             from _query_codex_runtime import VERSION as trust_runtime_version
             data["codex_trust"] = {"states": list(STATES), "recovery": {
@@ -366,7 +379,7 @@ def main(argv=None):
         else:
             if args.topic not in KNOWN_TOPICS or not args.project:
                 raise QueryError("bad_usage", "A known topic and --project are required", exit_code=2)
-            if args.topic != "project-status":
+            if args.topic not in ("project-status", "project-connection"):
                 if not (project / ROOT_MARKER).is_file():
                     raise QueryError("not_connected", "Directory is not connected to Workframe")
                 if doctor._has_legacy(doctor.Paths(project)):
@@ -409,7 +422,10 @@ def main(argv=None):
                 data = run(project, cfg, warnings, depends_on, error=QueryError)
             elif args.topic == "stats":
                 from _query_stats import run
-                data, valid_until = run(project, warnings, depends_on, now, args.days or 30, weeks, error=QueryError)
+                data, valid_until = run(project, warnings, depends_on, now, args.days or 30, weeks,
+                                        error=QueryError, event_cache=event_cache)
+            elif args.topic == "project-connection":
+                data = project_connection(project, warnings)
             else:
                 if args.gate:
                     raise QueryError("bad_usage", "--gate is only valid for gates", exit_code=2)
@@ -437,9 +453,15 @@ def main(argv=None):
             error["detail"] = exc.detail
         value = {"schema": SCHEMAS[-1], "topic": topic, "depends_on": depends_on, "error": error}
         code = exc.exit_code
-    print(json.dumps(value, ensure_ascii=False))
+    if emit is None:
+        print(json.dumps(value, ensure_ascii=False))
+    else:
+        emit(code, value)
     return code
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--stats-stream"]:
+        from _query_stats import serve_stats
+        sys.exit(serve_stats(main, sys.stdin.buffer, sys.stdout))
     sys.exit(main())

@@ -2,7 +2,7 @@
 
 记忆与数据管理主链路的全链路真实验证资产。首跑 2026-08-07（沙盒 wf-g7-sandbox，
 真实 plugin 订阅 + 真实 `claude -p` 会话），首跑当时的 13 例全部通过；开源后兼作回归集。
-现共 15 例——X4 随 main-led 改造于 2026-08-16 新增，尚未跑过真实会话，复跑时一并覆盖；
+现共 14 例——X4 随 main-led 改造于 2026-08-16 新增，尚未跑过真实会话，复跑时一并覆盖；
 J11 于 2026-08-27 新增（补 librarian 关信号后的抑制闭环），**落盘时已按其前置与断言实跑 7/7**。
 
 ## 验收判据（四项，全部机器可查）
@@ -33,21 +33,18 @@ J11 于 2026-08-27 新增（补 librarian 关信号后的抑制闭环），**落
 |---|---|---|---|
 | J1 | 纠正写入分流（角色 supersede / 主 Claude 层双消费 / 模块权威文档） | 真实会话 | cases/J1-correction-write.md |
 | J2 | 写时 A.U.N. 同主题查重 | 真实会话（与 J1 合并） | cases/J2-aun-write.md |
-| J3 | 开场卡闸门矩阵（首跑 8 断言；F4b 修复后含入口闸三态） | 脚本直调 + 真实 SessionStart | cases/J3-ask-gates.md |
-| J4 | librarian 开场卡消费 | 真实会话 --resume | cases/J4-librarian-consume.md |
+| J4 | librarian 显式整理 | 真实会话 -p | cases/J4-librarian-consume.md |
 | J5 | maintenance 两阶段（judge → --commit） | 真实 --maintenance 会话 + 代码 | cases/J5-maintenance-two-phase.md |
 | J6 | doctor 造脏/撤脏双向 | 脚本 | cases/J6-doctor-dirty.md |
-| J7 | 自迭代 baseline 代码派生（A/B 两 fixture——断言 2 是兜底信号，与 1/3 互斥） | 真实 **Stop** 或脚本直调 | cases/J7-baseline-derive.md |
 | J8 | subagent 记忆注入三态 | 真实会话双探针 | cases/J8-subagent-inject.md |
 | J9 | 跨会话状态流转 | 多会话累积 + 读账 | cases/J9-cross-session.md |
 | J10 | 三账对齐终查（含迁出证据与无 sidecar 的模块纠正） | 脚本 | cases/J10-three-ledgers.md |
 | X1 | 同消息命中多 rule 不重复记账 | 真实会话（与 J1 合并） | cases/X1-multi-rule.md |
-| X2 | maintenance flag 撞车双向 | 脚本直调 | cases/X2-flag-collision.md |
 | X3 | dormant 全链静默 | 脚本直调 | cases/X3-dormant-silence.md |
 | X4 | step2 与 step5 同事实不双写（main-led 直做） | 真实会话 | cases/X4-step2-step5-no-double-write.md |
 | J11 | librarian 关 memory_backlog 后的抑制闭环（关→静默→GC→重开） | 脚本直调 | cases/J11-backlog-suppression.md |
 
-人工目检（不可机器断言，单列）：M1 开场卡 AskUserQuestion 交互渲染样式；
+人工目检（不可机器断言，单列）：M1 librarian 交互整理时 AskUserQuestion 的渲染样式；
 M2 judge 会话 acceptEdits 真实交互表现。宿主项目日常会话顺带看一眼即可。
 
 ## headless 形态的三条固有约束（跑用例前必读）
@@ -64,7 +61,7 @@ M2 judge 会话 acceptEdits 真实交互表现。宿主项目日常会话顺带�
    直接放行，交互与 headless 一致——沙盒按新布局建时（scaffold 默认），那里的写入被拒是链路缺陷
    而非伪影（运行态仍在 `.claude/` 下的旧布局沙盒里，这类写入仍会被拒）
 2. Skill 工具不注入正文——依赖 SKILL.md 的用例须在 prompt/工单里写明 Read 兜底路径
-3. hook 脚本直调必须喂 stdin payload（如 `echo '{"source":"startup"}' | python memory-ask.py`），
+3. hook 脚本直调必须喂 stdin payload（如 `echo '{"source":"startup"}' | python heartbeat-check.py`），
    否则 `json.load(sys.stdin)` 阻塞挂起
 
 ## 首跑发现（2026-08-07，同日全部修复并复验）

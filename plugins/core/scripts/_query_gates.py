@@ -7,6 +7,7 @@ from pathlib import Path
 import module_close_check as close
 import workframe_doctor as doctor
 from _state_io import state_dir_of
+from codex_roles import LEDGER_REL
 
 
 @contextmanager
@@ -30,6 +31,10 @@ def read_only_git():
                 os.environ[key] = value
 
 
+# Close-check rows whose findings carry the specific file they are about (`path`).
+PER_FILE_ROWS = frozenset({"stale-clean", "nav-index"})
+
+
 def normalize(gate, rows, related):
     """One finding per output row; absent module inputs are never a pass."""
     checks = []
@@ -40,9 +45,13 @@ def normalize(gate, rows, related):
         for finding in row["findings"]:
             level = "skipped" if row["id"] == "modules" else finding["level"]
             summary[level] = summary.get(level, 0) + 1
+            # Rows whose findings each name their own file never fall back to an unrelated module document.
+            own = finding.get("path")
+            fallback = None if row["id"] in PER_FILE_ROWS else doc
             checks.append({"id": row["id"], "name": row["name"], "level": level,
                            "message": finding["msg"], "detail": row.get("criteria", ""),
-                           "doc_path": doc, "files": files})
+                           "doc_path": own if own and Path(own).suffix == ".md" else (None if own else fallback),
+                           "files": [own] if own else files})
     return {"gate": gate, "summary": summary, "checks": checks}
 
 
@@ -57,13 +66,16 @@ def related_files(project, cfg, rows):
                           for path in (project / "projects" / "modules").glob("*/*/current-state/*.md"))
     table = {
         "modules": ["projects/modules/"], "ledger": [ledger, ".workframe-config.json"],
-        "stale-clean": [state + "/stale-modules.yaml"] + module_docs,
+        "stale-clean": [state + "/stale-modules.yaml", state + "/code-paths-index.json"] + module_docs,
         "code-paths": module_docs, "ref-consistency": module_docs,
         "module-refreshed": module_docs, "repo-status": [".git/"],
         "code-map-coverage": module_docs, "yaml-parse": module_docs + [ledger],
         "discipline-trace": module_docs + [ledger, state + "/events.jsonl"],
+        "nav-index": ["projects/modules/"],
         "agents_md": ["AGENTS.md"], "claude_md": ["CLAUDE.md", "AGENTS.md"],
         "config": [".workframe-config.json"], "codex_trust": [".codex/config.toml"],
+        "codex_roles": [".codex/config.toml", ".codex/roles/", LEDGER_REL.as_posix(),
+                        state + "/plugin-root.codex.txt"],
         "setup_state": [state + "/setup-state.json"], "gitignore": [".gitignore"],
         "subscription": [".claude/settings.json", ".claude/settings.local.json"],
         "yaml_parse": ["projects/board.yaml", "projects/issues/", "projects/proposals/"],

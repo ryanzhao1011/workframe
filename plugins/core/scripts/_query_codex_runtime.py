@@ -6,18 +6,26 @@ project declarations alone are not installation or source evidence.
 """
 
 import copy
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import time
 
 from _harness import is_dir_link
 from workframe_door import _norm_path, _unc_strip
 
 VERSION = "0.167.2"
+LAUNCH_OBSERVATION_VERSION = "0.169.0"
 CONTROL_DIRS = ("tmp", ".tmp", ".sandbox")
+BOOTSTRAP_FILES = ("installation_id", "skills/.system/.codex-system-skills.marker")
+STATE_DATABASES = ("state_5.sqlite", "goals_1.sqlite", "memories_1.sqlite", "queue_1.sqlite")
+LOG_DATABASE = "logs_2.sqlite"
+PLUGIN_SYNC_LOCK = ".tmp/plugins.sync.lock"
+REMOTE_PLUGIN_DIRS = ("plugins/cache/openai-curated-remote", "plugins/.remote-plugin-install-staging")
 
 
 def tree_snapshot(root, deadline=None):
@@ -42,6 +50,114 @@ def tree_snapshot(root, deadline=None):
                         sha.update(chunk)
                 rows[name] = ("file", sha.hexdigest())
     walk(root)
+    return rows
+
+
+def trust_input_roots(home):
+    """The CODEX_HOME entries a trust observation reads, relative to the home.
+
+    The user config (trust, enablement, registrations), the hook trust store and
+    every marketplace's installed `core` plugin under `plugins/cache/`. The rest
+    of a home (sessions, databases, caches, logs, other plugins) is written by
+    whichever Codex process is running, so a before/after comparison there
+    cannot attribute a change to one query; the service's own writes there are
+    bounded by the per-version isolated measurement
+    (tools/probe_codex_trust_runtime.py), not per query. A plugin root the
+    service loads from anywhere else (a local marketplace directory) is not
+    among these roots.
+    """
+    home = Path(home)
+    roots = ["config.toml", ".hook-trust"]
+    cache = home / "plugins/cache"
+    if cache.is_dir():
+        for market in sorted(cache.iterdir()):
+            core = market / "core"
+            if core.exists() or core.is_symlink():
+                roots.append(f"plugins/cache/{market.name}/core")
+    return roots
+
+
+def _first_link(home, name):
+    """The shortest prefix of `name` (relative to the home) that is a link, if any."""
+    parts = PurePosixPath(name).parts
+    for count in range(1, len(parts) + 1):
+        prefix = "/".join(parts[:count])
+        path = Path(home) / prefix
+        if path.is_symlink() or is_dir_link(path):
+            return prefix
+    return None
+
+
+def _file_digest(path, deadline):
+    sha = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("Side-effect snapshot deadline expired")
+            sha.update(chunk)
+    return sha.hexdigest()
+
+
+def _follow(path, name, rows, deadline, seen):
+    """Rows for one trust input, entering links: a link keeps its own row (so
+    retargeting it is a change) and its target is compared by content too."""
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("Side-effect snapshot deadline expired")
+    linked = path.is_symlink() or is_dir_link(path)
+    if linked and not path.exists():
+        rows[name] = ("link", os.readlink(path))
+        return
+    if path.is_dir():
+        if linked:
+            rows[name] = ("link", os.readlink(path))
+        real = os.path.realpath(path)
+        rows[name + "/"] = ("directory",)
+        if real in seen:
+            return
+        for child in sorted(path.iterdir()):
+            _follow(child, f"{name}/{child.name}", rows, deadline, seen | {real})
+    elif path.exists():
+        digest = _file_digest(path, deadline)
+        rows[name] = ("link", os.readlink(path), digest) if linked else ("file", digest)
+
+
+def trust_input_snapshot(home, deadline=None):
+    """Rows for the trust inputs only, named from the home like `tree_snapshot`.
+
+    Rows keep the whole-home naming (`config.toml`, `.hook-trust/`, ...) so
+    `side_effect_violations` applies its allowance unchanged; an absent root
+    has no row, so its creation shows as a change. Unlike `tree_snapshot`,
+    links on the way to or inside a trust input are followed: each link keeps
+    a row and the bytes behind it are compared as well.
+    """
+    home, rows = Path(home), {}
+    for prefix in ("plugins", "plugins/cache"):
+        if (home / prefix).is_symlink() or is_dir_link(home / prefix):
+            rows[prefix] = ("link", os.readlink(home / prefix))
+    for name in trust_input_roots(home):
+        parent = PurePosixPath(name).parent
+        if parent.parent.as_posix() == "plugins/cache":
+            market = home / parent.as_posix()
+            if market.is_symlink() or is_dir_link(market):
+                rows[parent.as_posix()] = ("link", os.readlink(market))
+        _follow(home / name, name, rows, deadline, frozenset())
+    return rows
+
+
+def presence_rows(home, names):
+    """Entry kinds for named home paths, without reading content (cold-home gate input)."""
+    rows = {}
+    for name in names:
+        path = Path(home) / name
+        linked = _first_link(home, name)
+        if linked:
+            # A link anywhere on the way (the entry or a parent directory) is not
+            # an initialised file, as the whole-home snapshot never traversed links.
+            rows[name] = ("link", os.readlink(Path(home) / linked))
+        elif path.is_dir():
+            rows[name] = ("directory",)
+        elif path.is_file():
+            rows[name] = ("file", "present")
     return rows
 
 
@@ -241,6 +357,159 @@ def runtime_paths_known(context, env, overrides):
         return False
 
 
+def _launch_path(value, base=None):
+    if not isinstance(value, (str, Path)) or not str(value) or "\x00" in str(value):
+        raise ValueError("Invalid Codex runtime path")
+    raw = str(value)
+    # The normal local-drive prefix is removable. Preserve the UNC server/share.
+    path = Path("\\\\" + raw[8:] if raw.lower().startswith("\\\\?\\unc\\") else _unc_strip(raw))
+    if not path.is_absolute():
+        if base is None or path.anchor:
+            raise ValueError("Codex runtime path has no absolute base")
+        path = base / path
+    return path
+
+
+def _real_launch_path(path, *, directory):
+    """Resolve existing prefixes strictly. A missing suffix is safe to create."""
+    path = _launch_path(path)
+    try:
+        resolved = path.resolve(strict=True)
+    except FileNotFoundError:
+        if path.parent == path or os.path.lexists(path):
+            raise
+        return _real_launch_path(path.parent, directory=True) / path.name
+    mode = resolved.stat().st_mode
+    if not (stat.S_ISDIR(mode) if directory else stat.S_ISREG(mode)):
+        raise ValueError("Codex runtime path has an unexpected entry type")
+    return _launch_path(resolved)
+
+
+def _configured_launch_dirs(config, base=None):
+    if not isinstance(config, dict):
+        raise ValueError("Unexpected Codex configuration shape")
+    return {(name, _launch_path(config[name], base)) for name in ("log_dir", "sqlite_home")
+            if config.get(name) is not None}
+
+
+def _candidate_launch_dirs(context, env, overrides):
+    """Check local path candidates before starting any native process.
+
+    Files resolve relative values against their layer; session overrides and
+    CODEX_SQLITE_HOME use cwd. Candidate layers are checked conservatively
+    before Codex can report which ones actually took effect.
+    """
+    import tomllib
+
+    home, cwd = Path(context["codex_home"]), Path(context["cwd"])
+    layer_paths = config_layer_paths(context, env)
+    system = layer_paths[-1].parent
+    paths = [*layer_paths, cwd / "config.toml", system / "requirements.toml"]
+    if os.name == "nt":
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Policies\OpenAI\Codex", 0,
+                                winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+                required, _ = winreg.QueryValueEx(key, "RequirementsPath")
+            paths.append(_launch_path(required))
+        except FileNotFoundError:
+            pass
+    if context["profile"]:
+        profile = context["profile"]
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", profile):
+            raise ValueError("Unrecognised Codex profile name")
+        paths.append(home / f"{profile}.config.toml")
+
+    found = {("log_dir", home / "log"), ("sqlite_home", home)}
+    sqlite = env.get("CODEX_SQLITE_HOME", "").strip()
+    if sqlite:
+        found.add(("sqlite_home", _launch_path(sqlite, cwd)))
+    layers = []
+    for path in dict.fromkeys(paths):
+        try:
+            if not stat.S_ISREG(path.stat().st_mode):
+                raise ValueError("Codex configuration path is not a regular file")
+            layers.append((tomllib.loads(path.read_text(encoding="utf-8-sig")), path.parent))
+        except FileNotFoundError:
+            if os.path.lexists(path):
+                raise
+    for override in overrides:
+        key, value = (part.strip() for part in override.split("=", 1))
+        try:
+            cfg = tomllib.loads(override)
+        except ValueError:
+            # Codex treats a non-TOML CLI right-hand side as a literal string.
+            cfg = {key: value}
+        layers.append((cfg, cwd))
+    profiles = {context["profile"], *(layer.get("profile") for layer, _ in layers)}
+    for cfg, base in layers:
+        found.update(_configured_launch_dirs(cfg, base))
+        for name, profile in (cfg.get("profiles") or {}).items():
+            if name in profiles:
+                found.update(_configured_launch_dirs(profile, base))
+    return found
+
+
+def protected_install_roots(project, home, executing_plugin):
+    """The executing plugin and actual installed versions of the configured target."""
+    from _codex_trust import project_plugin
+
+    yield executing_plugin
+    _, plugin_id, _ = project_plugin(project)
+    market = plugin_id.partition("@")[2] if plugin_id else ""
+    if market and market not in (".", "..") and not Path(market).anchor and not any(char in market for char in "/\\"):
+        core = Path(home) / "plugins/cache" / market / "core"
+        if core.is_dir():
+            yield from (path for path in core.iterdir() if path.is_dir() or is_dir_link(path))
+
+
+class LaunchPathGuard:
+    """Resolve only known startup targets and their existing parents."""
+
+    def __init__(self, project, plugin_root, context, env, overrides):
+        from _state_io import state_dir_of
+
+        home = self.home = Path(context["codex_home"])
+        plugins = protected_install_roots(project, home, plugin_root)
+        self.protected = {_real_launch_path(path, directory=True)
+                          for path in (project, state_dir_of(project), *plugins)}
+
+        storage = home / ".hook-trust"
+        if is_dir_link(storage) or storage.is_dir() and any(is_dir_link(path) for path in storage.iterdir()):
+            raise ValueError("Cannot verify redirected Codex trust storage")
+        self.targets = {(home, False)}
+        self.targets.update((_real_launch_path(home / name, directory=True), True)
+                            for name in (*CONTROL_DIRS, *REMOTE_PLUGIN_DIRS,
+                                         "skills", "skills/.system", ".hook-trust"))
+        dates = {date.today(), datetime.now(timezone.utc).date()}
+        recent = {d + timedelta(days=offset) for d in dates for offset in (-1, 0, 1)}
+        files = ("config.toml", *BOOTSTRAP_FILES, PLUGIN_SYNC_LOCK, "models_cache.json",
+                 *(f".sandbox/sandbox.{d.isoformat()}.log" for d in recent))
+        self.targets.update((_real_launch_path(home / name, directory=False), False) for name in files)
+        self.add_directories(_candidate_launch_dirs(context, env, overrides))
+
+    def add_directories(self, targets):
+        for kind, path in targets:
+            directory = _real_launch_path(path, directory=True)
+            # The default SQLite directory is the home itself, which can contain
+            # the protected plugin in an unrelated subtree.
+            self.targets.add((directory, kind == "log_dir" or directory != self.home))
+            files = (("codex-tui.log", LOG_DATABASE) if kind == "log_dir"
+                     else (*STATE_DATABASES, LOG_DATABASE))
+            for name in files:
+                suffixes = ("", "-wal", "-shm", "-journal") if name.endswith(".sqlite") else ("",)
+                self.targets.update((_real_launch_path(directory / (name + suffix), directory=False), False)
+                                    for suffix in suffixes)
+
+    def effective(self, config):
+        self.add_directories(_configured_launch_dirs(config))
+
+    def overlaps(self, loaded_roots=()):
+        protected = self.protected | {_real_launch_path(path, directory=True) for path in loaded_roots}
+        return any(path.is_relative_to(root) or covers and root.is_relative_to(path)
+                   for path, covers in self.targets for root in protected)
+
+
 def source_binding(context, plugin_id, root, user, effective):
     """Bind a loaded root, or verify available definitions for a door repair.
 
@@ -301,15 +570,16 @@ def source_binding(context, plugin_id, root, user, effective):
 
 class Codex01672:
     control_dirs = CONTROL_DIRS
+    supports_recovery = True
     # The first start in a home holding only config.toml creates these (a
     # second start creates none), and none is within the registered allowance.
     # The sync lock appears only while the plugins feature is enabled.
-    initialised_files = ("installation_id", "skills/.system/.codex-system-skills.marker",
-                         "state_5.sqlite", "goals_1.sqlite", "memories_1.sqlite", "queue_1.sqlite")
-    plugin_sync_lock = ".tmp/plugins.sync.lock"
+    initialised_files = BOOTSTRAP_FILES + STATE_DATABASES
+    plugin_sync_lock = PLUGIN_SYNC_LOCK
 
     def __init__(self):
         self.user_layer = None
+        self.configuration = None
         self.attempted = {}
         self.attempted_storage = None
 
@@ -340,23 +610,24 @@ class Codex01672:
         except (OSError, ValueError, TypeError, AttributeError):
             return False
 
-    def uninitialised(self, snapshot, context, env, overrides, config):
+    def uninitialised(self, snapshot, context, env, overrides, config, *, launch=False):
         """Names this build would create on its first start in the home.
 
         `snapshot` is the pre-start tree snapshot, `config` the user config bytes;
         a missing or non-file entry counts as absent.
         """
-        required = self.initialised_files
+        required = BOOTSTRAP_FILES if launch else self.initialised_files
         if not self.plugins_known_off(context, env, overrides, config):
             required += (self.plugin_sync_lock,)
         return [name for name in required if snapshot.get(name, (None,))[0] != "file"]
 
-    def observe(self, server, context, project):
+    def observe(self, server, context, project, *, config=None, listing=None):
         import _codex_appserver as cas
         import _codex_trust as ct
         import _query_codex_trust as trust
-        config = server.config_read(True, cwd=context["cwd"])
-        listing = server.hooks_list([context["cwd"]])
+        config = server.config_read(True, cwd=context["cwd"]) if config is None else config
+        self.configuration = config
+        listing = server.hooks_list([context["cwd"]]) if listing is None else listing
         data = trust.empty(context)
         try:
             hooks = cas.hooks_of(listing)
@@ -436,3 +707,12 @@ class Codex01672:
         config_file = Path(_unc_strip(target[0]))
         path = config_file.parent / ".hook-trust" / hook_trust_filename(str(config_file), plugin_id)
         return path, next(iter(contents))
+
+
+class Codex01690(Codex01672):
+    """The Windows 0.169.0 launch observation shares the measured read protocol."""
+
+    supports_recovery = False
+
+    def write_target(self, context):
+        return None

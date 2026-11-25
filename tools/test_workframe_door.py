@@ -166,13 +166,18 @@ def test_roles():
         cr.generate(d, PLUGIN, "1.1.0", marketplace=MKT)
         check("段外用户内容保留", cfg.read_text(encoding="utf-8").endswith("[features]\nmulti_agent = true\n"), True)
         check("段外改动后 verify 仍过", cr.verify(d), [])
-        # 手改账本内的 role 文件 → 跳过不覆盖
+        # 手改账本内的 role 文件 → 写前拒绝、整批不写（不覆盖，也不留一半新一半旧）
         pm = d / cr.ROLES_DIR_REL / f"{roles[0][0]}.toml"
         pm.write_bytes(pm.read_bytes() + b"\n# user edit\n")
-        report3, _ = cr.generate(d, PLUGIN, "1.1.0", marketplace=MKT)
-        acts = {r: a for r, a, _n in report3}
-        check("手改的 role 文件被跳过", acts.get((cr.ROLES_DIR_REL / f"{roles[0][0]}.toml").as_posix()), "skipped")
+        other = d / cr.ROLES_DIR_REL / f"{roles[1][0]}.toml"
+        other_before = other.read_bytes()
+        try:
+            cr.generate(d, PLUGIN, "1.2.0", marketplace=MKT)
+            check("手改的 role 文件：写前拒绝", "no error", cr.KIND_ROLE_CONFLICT)
+        except cr.PreflightError as e:
+            check("手改的 role 文件：写前拒绝", e.kind, cr.KIND_ROLE_CONFLICT)
         check("手改文件未被覆盖", pm.read_bytes().endswith(b"# user edit\n"), True)
+        check("整批不写：别的角色也没换版本", other.read_bytes(), other_before)
         check("verify 报出手改", any("被手改" in p for p in cr.verify(d)), True)
         pm.write_bytes(pm.read_bytes().replace(b"\n# user edit\n", b""))
         # 不在账本内的既有文件不动
@@ -181,10 +186,14 @@ def test_roles():
             foreign = d2 / cr.ROLES_DIR_REL / f"{roles[0][0]}.toml"
             foreign.parent.mkdir(parents=True)
             foreign.write_bytes(b"developer_instructions = 'mine'\n")
-            report4, _ = cr.generate(d2, PLUGIN, "1.1.0", marketplace=MKT)
-            acts4 = {r: a for r, a, _n in report4}
-            check("不在账本内的既有文件跳过", acts4.get(foreign.relative_to(d2).as_posix()), "skipped")
+            try:
+                cr.generate(d2, PLUGIN, "1.1.0", marketplace=MKT)
+                check("不在账本内的既有文件：写前拒绝", "no error", cr.KIND_ROLE_CONFLICT)
+            except cr.PreflightError as e:
+                check("不在账本内的既有文件：写前拒绝", e.kind, cr.KIND_ROLE_CONFLICT)
             check("其内容未动", foreign.read_bytes(), b"developer_instructions = 'mine'\n")
+            check("整批不写：一份产物都没生成", sorted(x.name for x in (d2 / cr.ROLES_DIR_REL).iterdir()),
+                  [foreign.name])
         finally:
             rm(d2)
         # .local.toml 追加
@@ -684,7 +693,7 @@ def _plugin_list_payload(source_type, market=MKT):
     return json.dumps({"installed": [other, mine], "available": []})
 
 
-def _drive(proj, echoed="workframe", upgrade=False, appserver_error=True, source_type=None):
+def _drive(proj, echoed="workframe", upgrade=False, appserver_error=True, source_type=None, hang=None):
     """打桩驱动 do_codex：run_codex 记录调用、AppServer 构造即记录并抛（不起 codex）。返回 (code, msg, calls, constructed)。
 
     `source_type=None` 时 `plugin list` 按失败返回（= 源形态分辨不出，`--upgrade` 走 git 那一路）；
@@ -693,6 +702,8 @@ def _drive(proj, echoed="workframe", upgrade=False, appserver_error=True, source
 
     def fake_run(exe, args, cwd=None, timeout=180, env=None):
         calls.append(list(args))
+        if hang and list(args[:len(hang)]) == list(hang):      # 这条 codex 命令一直不返回
+            raise subprocess.TimeoutExpired([exe] + list(args), timeout)
         if args[:1] == ["--version"]:
             return 0, "codex-cli 0.153.4", ""
         if args[:3] == ["plugin", "marketplace", "add"]:
@@ -773,6 +784,72 @@ def test_do_codex_order():
         check("--upgrade（本地源）：走的是 plugin add，marketplace upgrade 一次没跑",
               (["plugin", "add"] in [c[:2] for c in calls],
                ["plugin", "marketplace", "upgrade"] in [c[:3] for c in calls]), (True, False))
+    finally:
+        rm(d)
+
+
+def _claims_untouched(msg):
+    """消息里断言「没写 / 没改」的句子。只豁免**整句恰为**「未写任何项目文件」的那一句（`_wrote_note` 的项目文件口径）
+    ——按子串抹掉的话，「未写任何项目文件或用户配置」会连带放过。疑问说法（改没改 / 有没有改动）不是断言，先去掉。"""
+    out = []
+    for sent in re.split(r"[。；]", msg):
+        sent = sent.strip()
+        if sent == "未写任何项目文件":
+            continue
+        stated = re.sub(r"(\S)没\1|有没有\S", "", sent)
+        if re.search(r"未写|未改|未动|没写|没改|没动|没有(写|改|动)", stated):
+            out.append(sent)
+    return out
+
+
+def test_do_codex_codex_timeouts():
+    """codex 命令一直不返回：列表类不许停下升级；写入类停成一句人话——不崩栈、不说「用户配置没写」。"""
+    print("[door] codex 命令超时：列表类放行、写入类停成人话")
+    for text, want in [("未写任何项目文件", 0), ("未写任何项目文件或用户配置", 1), ("未写任何用户配置", 1),
+                       ("它改没改你的 Codex 用户配置无法确认。未写任何项目文件", 0),
+                       ("它有没有改动你的 Codex 用户配置无法确认", 0), ("你的 Codex 用户配置没有改动", 1),
+                       ("插件缓存没动。未写任何项目文件", 1), ("写没写无法确认；用户配置未改", 1)]:
+        check(f"反向断言自检：{text}", len(_claims_untouched(text)), want)
+    for label, hang, kw in [("--upgrade（本地源）的 plugin add", ["plugin", "add"], dict(upgrade=True, source_type="local")),
+                            ("--upgrade（git 源）的 marketplace upgrade", ["plugin", "marketplace", "upgrade"],
+                             dict(upgrade=True, source_type="git")),
+                            ("--upgrade（判不出源）的 marketplace upgrade", ["plugin", "marketplace", "upgrade"], dict(upgrade=True)),
+                            ("--codex 的 marketplace add", ["plugin", "marketplace", "add"], {})]:
+        d, proj = _mk()
+        try:
+            before = _snap(proj)
+            try:
+                code, msg, calls, constructed = _drive(proj, hang=hang, **kw)
+            except subprocess.TimeoutExpired:
+                code, msg, calls, constructed = "traceback", "", [], []
+            check(f"{label} 超时：exit 2、不崩栈", code, wd.EXIT_ENV)
+            check(f"{label} 超时：文案点名那条命令、说无法确认、给 --check",
+                  (" ".join(hang) in msg, "无法确认" in msg, "--check" in msg), (True, True, True))
+            # 反向：不许同时承诺「用户配置没写」
+            check(f"{label} 超时：不承诺用户配置 / 插件缓存没写", _claims_untouched(msg), [])
+            check(f"{label} 超时：没往下走（app-server 未构造）、项目树不变", (constructed, _snap(proj) == before), ([], True))
+        finally:
+            rm(d)
+    # 只读的版本查询超时：单独一句，不误报「可能改过用户配置」；后面的 codex 命令一条没跑
+    for kw in ({}, dict(upgrade=True)):
+        d, proj = _mk()
+        try:
+            try:
+                code, msg, calls, constructed = _drive(proj, hang=["--version"], **kw)
+            except subprocess.TimeoutExpired:
+                code, msg, calls, constructed = "traceback", "", [], []
+            tag = "--upgrade" if kw else "--codex"
+            check(f"{tag} 的 codex --version 超时：exit 2、只问过版本", (code, calls, constructed), (wd.EXIT_ENV, [["--version"]], []))
+            check(f"{tag} 的 codex --version 超时：点名命令、不说「无法确认」、写没写项目文件照说",
+                  ("codex --version" in msg, "无法确认" in msg, "未写任何项目文件" in msg), (True, False, True))
+        finally:
+            rm(d)
+    d, proj = _mk()
+    try:
+        code, msg, calls, _c = _drive(proj, upgrade=True, hang=["plugin", "list"])
+        check("--upgrade 的列表类查询全超时：仍走到写入那一步（不因查询停下）",
+              ["plugin", "marketplace", "upgrade"] in [c[:3] for c in calls], True)
+        check("--upgrade 的列表类查询全超时：停下的原因是后面的 app-server，不是超时", ("app-server" in msg, "没有返回" in msg), (True, False))
     finally:
         rm(d)
 
@@ -966,6 +1043,47 @@ def test_enable_layers():
             rm(d)
 
 
+def test_check_static_role_conflicts():
+    """`check_static` 真的把角色归属冲突接进问题列表、把纯落后接进说明列表（只测 `roles_freshness` 的话，
+    调用处漏接一个返回值照样绿）。实际加载的插件根由 `loaded_root` 打桩给出。"""
+    print("[roles] --check 接线：缺登记进 problems、纯落后只进 info")
+    keys = _manifest_keys()
+    for label, stale, unledger in [("缺登记", False, True), ("纯落后", True, False), ("健康", False, False)]:
+        d, proj = _mk(gen=True)
+        home = d / "home"
+        home.mkdir()
+        env_backup = dict(os.environ)
+        saved = (wd.cas.AppServer, wd.run_codex, wd.loaded_root)
+        try:
+            os.environ["CODEX_HOME"] = str(home)
+            led = cr.load_ledger(proj)
+            rel = ".codex/roles/qa.toml"
+            p = proj / rel
+            if stale:
+                data = p.read_bytes().replace(b"developer_instructions = '''\n", b"developer_instructions = '''\nOLD LINE\n", 1)
+                p.write_bytes(data)
+                led["files"][rel]["sha256"] = cr.sha256_bytes(data)
+            if unledger:
+                del led["files"][rel]
+            cr.save_ledger(proj, led)
+            srv = LayeredServer(keys, wd.project_key(proj), user=False, trusted=True, table=True,
+                                trusted_hooks={f"{PID}:hooks/hooks.codex.json:{k}" for k in keys})
+            wd.cas.AppServer = _ctx(srv)
+            wd.run_codex = lambda *a, **k: (0, "multi_agent stable true", "")
+            wd.loaded_root = lambda mine: (Path(PLUGIN), None)
+            problems, info, _m = wd.check_static("codex", proj, MKT)
+            check(f"check_static {label}：qa.toml 进 problems", any("qa.toml" in x for x in problems), unledger)
+            check(f"check_static {label}：「一致」只在没有冲突时出现",
+                  any("角色新旧：" in x and "一致" in x for x in info) and unledger, False)
+            if stale:
+                check("check_static 纯落后：进 info 并点名 qa.toml", any("角色落后" in x and "qa.toml" in x for x in info), True)
+        finally:
+            wd.cas.AppServer, wd.run_codex, wd.loaded_root = saved
+            os.environ.clear()
+            os.environ.update(env_backup)
+            rm(d)
+
+
 def test_marketplace_add_name_taken():
     """同名不同源被 Codex 拒时给人话出路；**别的失败仍原样透传 stderr**。
 
@@ -1072,8 +1190,21 @@ def test_upgrade_source_routing():
         finally:
             restore()
         check(f"source_type：{label}", got, want)
-        check(f"source_type：{label} 问的是 plugin list 而不是 marketplace list",
-              calls, [["plugin", "list", "--json"]])
+        check(f"source_type：{label} 问的是 plugin list（限本市场）而不是 marketplace list",
+              calls, [["plugin", "list", "--json", "-m", MKT]])
+    # 命令起不来 / 超时：同样是「判不出」，不许崩掉整次升级（不限市场时 Codex 会去等远程市场，真实超时过）
+    for label, exc in [("超时", subprocess.TimeoutExpired(["codex", "plugin", "list"], 60)), ("命令起不来", FileNotFoundError("codex")),
+                       ("子进程错误", subprocess.SubprocessError("x"))]:
+        def boom(a, exc=exc):
+            raise exc
+        _calls, restore = _run_codex_stub(boom)
+        try:
+            got = wd.marketplace_source_type("codex", MKT, None)
+        except Exception as e:
+            got = f"raised {type(e).__name__}"
+        finally:
+            restore()
+        check(f"source_type：{label} → None、不抛", got, None)
 
     def answer(source_type=None, upgrade=(0, "{}", ""), add=(0, json.dumps(
             {"installedPath": str(PLUGIN), "version": "1.1.0"}), "")):
@@ -1096,12 +1227,21 @@ def test_upgrade_source_routing():
         finally:
             restore()
 
+    # 列表超时 ⇒ 判不出 ⇒ 仍走「先试 git 那条、撞见拒绝再 plugin add」，升级不因它停下
+    def listing_times_out(a):
+        if a[:2] == ["plugin", "list"]:
+            raise subprocess.TimeoutExpired(["codex"] + list(a), 60)
+        return answer(upgrade=(1, "", f"Error: marketplace '{MKT}' is {wd.UPGRADE_NOT_GIT}"))(a)
+    got, err, calls = drive_upgrade(listing_times_out)
+    check("列表超时：升级照常走到 plugin add", (err, got[0] == PLUGIN if got else None, [c[:3] for c in calls if c[:2] != ["plugin", "list"]]),
+          (None, True, [["plugin", "marketplace", "upgrade"], ["plugin", "add", PID]]))
+
     # ② 本地源：直接走 plugin add，**不先跑一条必然失败的 marketplace upgrade**
     got, err, calls = drive_upgrade(answer(source_type="local"))
     check("本地源：返回 (安装根, 用户层被写回 true)", got, (PLUGIN, True))
     # 第二条是装前核对（收在 step_plugin_add 入口）：这里的桩答不出 core 那一行，它放行、照常重装
     check("本地源：marketplace upgrade 一次没跑（先判源形态，再装前核对，再重装）",
-          calls, [["plugin", "list", "--json"], ["plugin", "list", "--json", "--available", "-m", MKT],
+          calls, [["plugin", "list", "--json", "-m", MKT], ["plugin", "list", "--json", "--available", "-m", MKT],
                   ["plugin", "add", PID, "--json"]])
 
     # ③ git 源：走 marketplace upgrade，不碰 plugin add、不动用户层
@@ -1114,7 +1254,7 @@ def test_upgrade_source_routing():
         source_type=None, upgrade=(1, "", f"marketplace '{MKT}' {wd.UPGRADE_NOT_GIT}; remove it")))
     check("分辨不出 ＋ 被拒：落到 plugin add 并报出用户层被写回", got, (PLUGIN, True))
     check("分辨不出 ＋ 被拒：先试过 marketplace upgrade 才落（落回的那一路同样先过装前核对）",
-          calls, [["plugin", "list", "--json"], ["plugin", "marketplace", "upgrade", MKT, "--json"],
+          calls, [["plugin", "list", "--json", "-m", MKT], ["plugin", "marketplace", "upgrade", MKT, "--json"],
                   ["plugin", "list", "--json", "--available", "-m", MKT], ["plugin", "add", PID, "--json"]])
 
     # ④' 同一句拒绝落在 **stdout** 上时也要认出来（真机上它在 stderr，这一支是防御性冗余；
@@ -1521,6 +1661,25 @@ def test_locate_market():
             src, loc, via = wd.locate_market(MKT, exe="codex", project=proj)
             check("② 非 local 且项目没声明：不代填（返回 None）", src, None)
             check("② 非 local：把原值念出来让用户自己定", "owner/repo" in via, True)
+
+            # 问 Codex 注册面时起不来 / 超时：这一路没有答案，不崩；项目没声明 ⇒ 说明里点出成因
+            for label, exc in (("超时", subprocess.TimeoutExpired(["codex"], 120)), ("命令起不来", FileNotFoundError("codex"))):
+                def hangs(exe, args, cwd=None, timeout=180, env=None, exc=exc):
+                    raise exc
+                wd.run_codex = hangs
+                put_settings({})
+                try:
+                    src, loc, via = wd.locate_market(MKT, exe="codex", project=proj)
+                except Exception as e:
+                    src, loc, via = f"raised {type(e).__name__}", None, ""
+                check(f"② Codex 注册面{label}、项目没声明：返回 None 并点出成因", (src, loc, type(exc).__name__ in via), (None, None, True))
+                put_settings({"extraKnownMarketplaces": {MKT: {"source": DIR_SRC}}})
+                try:
+                    src, loc, via = wd.locate_market(MKT, exe="codex", project=proj)
+                except Exception as e:
+                    src, loc, via = f"raised {type(e).__name__}", None, ""
+                check(f"② Codex 注册面{label}、项目有声明：用项目自己那份", (src, loc), (DIR_SRC, None))
+                wd.run_codex = fake_run
 
             # 非 local 但项目自己声明过 ⇒ 用项目自己那份（不是我替它猜的）
             put_settings({"extraKnownMarketplaces": {MKT: {"source": DIR_SRC}}})
@@ -3435,9 +3594,11 @@ def test_eol_checkout():
             before = _tree(b)
             check("CRLF 检出＋真改一份：verify 只点名那一份", _named(cr.verify(b)), [(victim, True)])
             report = _gen(b, EOL_V)
-            check("CRLF 检出＋真改一份：角色文件里只跳过那一份、其余不写",
-                  _acts_of(report, role_rels), sorted((r, "skipped" if r == victim else "unchanged") for r in role_rels))
-            check("CRLF 检出＋真改一份：config.toml 是 unchanged", _acts_of(report, [cfg_rel]), [(cfg_rel, "unchanged")])
+            # 真改一份 → 写前拒绝、整批不写（只差行尾的其余几份不算冲突，拒绝文案只点名被改的那一份）
+            check("CRLF 检出＋真改一份：写前拒绝（整批不写）",
+                  [(r[0], r[1]) for r in report], [("<raised>", "PreflightError")])
+            check("CRLF 检出＋真改一份：拒绝文案只点名那一份",
+                  [r for r in role_rels if report and r in report[0][2]], [victim])
             check("CRLF 检出＋真改一份：项目树一个字节不变（被改那份原样保留）", _changed(before, _tree(b)), [])
         # (c) 段内只改一行：预检拒绝，文案恰好点名那一行——`_extract_block` 的行尾归一在这里承重
         b, ok = _eol_clone(a, env, "B-block")
@@ -3585,7 +3746,9 @@ def _test_eol_bytes(roles, role_rel, led_rel):
             before = _tree(proj)
             check(f"{label}：verify 仍判被手改、只点名那一份", _named(cr.verify(proj)), [(victim, True)])
             report = _gen(proj, "1.1.0")
-            check(f"{label}：重跑只跳过那一份、不写", (_acts(report, "skipped"), _acts(report, "written")), ([victim], []))
+            check(f"{label}：重跑写前拒绝、只点名那一份",
+                  ([(r[0], r[1]) for r in report], [r for r in role_rel.values() if report and r in report[0][2]]),
+                  ([("<raised>", "PreflightError")], [victim]))
             check(f"{label}：项目树一个字节不变", _changed(before, _tree(proj)), [])
         finally:
             rm(dd)
@@ -3632,6 +3795,7 @@ def main():
     test_preflight()
     test_eol_checkout()
     test_do_codex_order()
+    test_do_codex_codex_timeouts()
     test_enable_layers()
     test_marketplace_add_name_taken()
     test_upgrade_source_routing()
@@ -3643,6 +3807,7 @@ def main():
     test_guard_hooks_list()
     test_guard_do_codex()
     test_guard_check_static()
+    test_check_static_role_conflicts()
     test_wrote_truthful()
     test_hook_source_guard()
     test_fix_round_wording()

@@ -186,6 +186,16 @@ related: []                              # PM 补(跨模块依赖 wikilink);研�
 - 本仓：自动 `git rev-parse HEAD` 取当前 commit（跨平台用 `Bash` 或 fallback）
 - 跨仓：用户输入或从 `dev_paste_path/source-meta.txt` 读取
 
+**未编写字段 `unwritten`**：骨架文件 frontmatter 里带它（值是建骨架时的正文摘要），上面的完整 frontmatter
+不含它。正文**写入成功之后**按实际写了哪一件逐件删掉——这次只写了 `code-map.md` 就只删那一件，没写的
+保持未编写（dev-paste 传入与豁免路径同理）：
+
+```bash
+python "$WF_PLUGIN_ROOT/scripts/module_init.py" --project . --unstamp <写过的文件…>
+```
+
+不删也不会误判（正文一改字段即失效），只为整洁；写入失败的不删。
+
 ### Step 4.5: 相关模块段（regen-safe 横向关联）
 
 每次生成/重写 `architecture.md` 时，在正文末尾维护 `## 相关模块` 段：
@@ -214,7 +224,7 @@ sync_method: auto                        # 或 manual / dev-paste
 
 调 `module-index-refresh` skill 限定路径 `<basic>/<sub>` 同步：
 
-- 重建 `<sub>/overview.md` 的 `current-state-summary` 机器维护段（基于 4 个 current-state/*.md 的 frontmatter `updated` / `confidence` / `source_paths` + 第一个 H2 段首句）
+- 重建 `<sub>/overview.md` 的 `current-state-summary` 机器维护段（基于 4 个 current-state/*.md 的 frontmatter `updated` / `confidence` / `source_paths` + `description`）
 - 段外人写部分（positioning / 中间内容）零接触
 - 触发依据 skill: `document-norms` §4.2（current-state 写入是触发同步的场景）
 
@@ -224,7 +234,7 @@ sync_method: auto                        # 或 manual / dev-paste
 手工 Edit 既持不住文件锁也不是原子写：
 
 ```bash
-python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" \
+python "$WF_PLUGIN_ROOT/scripts/check-stale-modules.py" \
     clear-stale "<basic>/<sub>" --reason "<一句话处置理由，如：code-map 已随本次改动更新>"
 ```
 

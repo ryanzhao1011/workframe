@@ -30,11 +30,21 @@ marketplace; a project declaration alone does not establish that binding.
 `snapshot_id` also binds the frozen context. Neither digest includes current
 trust status, and neither digest is an authorization credential.
 
-The measured runtime adapter supports exactly codex-cli 0.167.2. Other versions
-return `unverified` with `side_effect_scope_unknown` and do not start a server.
+The guarded query and recovery adapter supports codex-cli 0.167.2. Other versions
+return `unverified` with `side_effect_scope_unknown` on these entry points
+without starting a server.
 `--capabilities` lists supported recovery versions. Project/configuration parse
 failures exit 1. An unsupported query schema exits 1 with `schema_unsupported`
 and `detail.supported`; invalid arguments exit 2. An unsupported recovery schema exits 2.
+
+The desktop launch observation additionally supports Windows codex-cli 0.169.0
+when the user opens or resumes a session. It uses the session's final environment
+and arguments. It checks known log, control, database and redirected paths against
+the project, Workframe state and actual plugin installation. Codex can write
+its own logs, caches, databases and temporary files during this observation.
+The desktop path reports an unverified result if the observed service's exit
+cannot be confirmed or the checked paths intersect a protected location.
+Version 0.169.0 observations do not authorize trust writes.
 
 ## Recovery
 
@@ -79,7 +89,21 @@ process without output requires a read-only recheck, without blind retries.
 ## File effects
 
 `side_effects: ["codex_app_server_logs"]` declares Codex's own log/runtime
-writes. For 0.167.2 the checked allowance includes `log/`, `logs_*.sqlite` and
+writes.
+
+Each query compares, before and after, only the trust inputs it reads: the
+user `config.toml` (by its target bytes), `CODEX_HOME/.hook-trust/`, and every
+marketplace's installed `plugins/cache/<marketplace>/core/` tree. Links on the way to or inside these inputs are followed: the link
+itself and the bytes behind it are both compared. Any change there, by this query or by another process, makes the result
+`unverified` with `side_effect_scope_unknown`. Recovery uses the same
+comparison, on top of its exact field and baseline readback. A plugin root
+outside `plugins/cache/<marketplace>/core/` (one loaded directly from a local
+marketplace directory, inside `CODEX_HOME` or not) is not compared. The rest of the home (sessions, databases,
+caches, logs, other plugins, authentication) is written by whichever Codex
+process is running and is not compared per query, so a write there by this
+query's own service is not detected at run time. What a registered build's
+service writes there is bounded once per version by an isolated measurement;
+the allowance below records that measurement. For 0.167.2 the checked allowance includes `log/`, `logs_*.sqlite` and
 its WAL/shared memory, temporary `tmp/arg0*/codex-arg0*` and `.tmp/git-*`
 directories, and `.sandbox/sandbox.*.log`. Other `*.sqlite-shm` files are
 allowed only while the corresponding database and WAL bytes remain unchanged.
@@ -96,9 +120,8 @@ effective plugins switch is known to be off: the user config says so, no
 profile is selected, no other configuration layer mentions the switch, and the
 ordered `--codex-config` overrides leave it off. Anything else counts as on.
 
-Queries do not permit `config.toml`, authentication, plugin-cache, session or
-history content changes. Recovery additionally permits only its exact trust
-hash edits. In 0.167.2 recovery also allows Codex to add or update its one corresponding
+Queries do not permit changes to the trust inputs above. Recovery additionally
+permits only its exact trust hash edits. In 0.167.2 recovery also allows Codex to add or update its one corresponding
 `CODEX_HOME/.hook-trust/` file. The filename is the lowercase SHA-256 of two
 UTF-8 byte strings: the actual native user-layer `config.toml` path returned by
 the frozen server, then the plugin ID. Each string is preceded by its byte

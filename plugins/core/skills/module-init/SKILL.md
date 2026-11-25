@@ -130,8 +130,8 @@ modules/ 体系下三类骨架的唯一创建入口：
 把采集到的值写成树 JSON（schema 见脚本 docstring；单建一个 basic 或 sub 也是同一结构），交给脚本一次完成：
 
 ```bash
-# 插件根从 plugin-root.txt 取（SessionStart hook 每会话刷新），不依赖环境变量
-python "$(cat .workframe/state/plugin-root.txt)/scripts/module_init.py" --project "<项目根>" --params "<tree.json>"
+# $WF_PLUGIN_ROOT = 会话开场注入的「本会话插件根」，执行前换成那个路径
+python "$WF_PLUGIN_ROOT/scripts/module_init.py" --project "<项目根>" --params "<tree.json>"
 ```
 
 脚本承包：骨架复制 + 占位符替换（**断言零残留**）+ `positioning` 写入定位段 + `code_paths` 写入 submodule.yaml + 反向索引初始化（内部调 `check-stale-modules.py init-submodule`，复用其文件锁与原子写）+ global `basic-modules-index` 与 basic `submodules-index` 两层索引段重建。**幂等**：已存在文件一律跳过，重跑索引无变化。
@@ -142,10 +142,15 @@ python "$(cat .workframe/state/plugin-root.txt)/scripts/module_init.py" --projec
 
 #### 2b. 需求资产包：模型按下列步骤执行（暂不脚本化）
 
-1. 从 `<插件根>/templates/modules-template/requirement/`（插件根 = `cat .workframe/state/plugin-root.txt`）用 Read + Write 逐文件复制 → `<sub>/requirements/<req_slug>/`（含 `meta.yaml` + `overview.md` + `main/` 子目录及其下文件），保持 .gitkeep
+1. 从 `<插件根>/templates/modules-template/requirement/`（插件根 = `$WF_PLUGIN_ROOT`）用 Read + Write 逐文件复制 → `<sub>/requirements/<req_slug>/`（含 `meta.yaml` + `overview.md` + `main/` 子目录及其下文件），保持 .gitkeep
 2. 用户给定的 `sub_req_name` 不是默认值 `main` 时，把 `<req_slug>/main/` 重命名为 `<req_slug>/<sub_req_name>/`
 3. 逐文件替换 `{{XXX}}` 占位符（表见 `templates/modules-template/README.md`；`{{SUB_REQ_SLUG}}` 无论目录是否重命名都要替换）。`{{NOW_ISO}}` = ISO-8601 带时区时间戳（格式见 `document-norms` §2.7）；`{{TODAY}}` = `YYYY-MM-DD`
-4. 调 `module-index-refresh` skill 同步需求层索引段：`<sub>/overview.md`（requirements-index）+ `<sub>/requirements/overview.md`（requirements-by-status）+ `<req_slug>/overview.md`（sub-requirements-index，初次同步含 `main/` 一行）
+4. 给子需求的 `prd.md` 盖未编写戳——必须在**最终路径上、占位符替换之后、下一步刷新导航之前**（模板里的 `unwritten: true` 只说明「从模板来」；漏盖则停在 `unstamped`，按已编写展示、收口闸报 warn）：
+   ```bash
+   python "$WF_PLUGIN_ROOT/scripts/module_init.py" --project . --mark-unwritten "<sub>/requirements/<req_slug>/<sub_req_name>/prd.md"
+   ```
+   报 `refused` 时把原因原样转述，不要手改该字段
+5. 调 `module-index-refresh` skill 同步需求层索引段：`<sub>/overview.md`（requirements-index）+ `<sub>/requirements/overview.md`（requirements-by-status）+ `<req_slug>/overview.md`（sub-requirements-index，初次同步含 `main/` 一行）
 
 ### Step 3: frontmatter 校验 + 报告
 
@@ -167,7 +172,7 @@ python "$(cat .workframe/state/plugin-root.txt)/scripts/module_init.py" --projec
     - submodule.yaml 的 tech_stack（数组对象）
 
   下一步建议：
-    - 配置 code_paths 后跑 `python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" init-submodule <basic>/<sub>` 触发反向索引重建（或 `... rebuild-index` 全量重建）
+    - 配置 code_paths 后跑 `python "$WF_PLUGIN_ROOT/scripts/check-stale-modules.py" init-submodule <basic>/<sub>` 触发反向索引重建（或 `... rebuild-index` 全量重建）
     - 调 `code-to-doc` skill 解析现有代码生成 current-state/
   ```
 
@@ -189,7 +194,7 @@ python "$(cat .workframe/state/plugin-root.txt)/scripts/module_init.py" --projec
 - [ ] frontmatter `updated` = 当前 ISO 时间
 - [ ] `module` 字段二段式（子模块/需求）
 - [ ] 上级 overview 机器维护段已重建（basic/sub 两层由脚本收尾自动做；需求层已调 module-index-refresh）
-- [ ] 反向索引段已初始化（子模块且 code_paths 非空时——脚本自动，⚠ 警告已转述）
+- [ ] 反向索引已按全部声明重建（子模块且 code_paths 非空时——脚本自动，⚠ 警告已转述）
 - [ ] HTML 注释边界格式正确（§3.3）
 - [ ] 报告末尾未输出"本项目可能不该启用 modules/"的盲目警告（前提校验已合规时；§对话流总则 第 6 条）
 - [ ] 询问 `name` 时按 §对话流总则 第 7 条文案模板：核心问题独占一行 + 粗体 / ❓ 突出，命名约束折叠到 `>` 引用块小字，可选项明确标注"不答即用默认"
@@ -230,8 +235,8 @@ python "$(cat .workframe/state/plugin-root.txt)/scripts/module_init.py" --projec
 | 失败 | 降级 |
 |---|---|
 | `module_init.py` 退出码 2（参数/命名校验） | 转述 stderr 原文，修正输入后重跑；不手工补文件 |
-| `module_init.py` 退出码 1（异常） | 转述报错；确认 `plugin-root.txt` 指向的插件根有效后重试 |
-| 反向索引初始化失败（脚本 ⚠ 警告） | 转述警告 + 提示用户事后跑 `python "$(cat .workframe/state/plugin-root.txt)/scripts/check-stale-modules.py" rebuild-index` |
+| `module_init.py` 退出码 1（异常） | 转述报错；确认 `$WF_PLUGIN_ROOT`（会话开场注入的「本会话插件根」）指向的插件根有效后重试 |
+| 反向索引初始化失败（脚本 ⚠ 警告） | 转述警告 + 提示用户事后跑 `python "$WF_PLUGIN_ROOT/scripts/check-stale-modules.py" rebuild-index` |
 | 需求模式模板复制失败 | 报错 + 不写部分文件；用户重试 |
 | 需求模式占位符替换不完全 | 报告未替换的占位符位置，请用户手动填充 |
 | 需求层索引同步失败 | 报告"骨架已建但索引未同步"，提示手动 `/core:module-index-refresh` |

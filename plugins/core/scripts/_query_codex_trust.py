@@ -74,8 +74,11 @@ def protected_overlap(project, home, plugin_root=PLUGIN_ROOT, control_dirs=(), d
     subtrees cannot contain or lie inside protected trees. Existing linked log
     files and directories are checked individually without following the walk.
     """
-    protected = [Path(project).resolve(), state_dir_of(project).resolve(), Path(plugin_root).resolve()]
+    from _query_codex_runtime import REMOTE_PLUGIN_DIRS, _real_launch_path, protected_install_roots
+
     home = Path(home)
+    protected = [Path(path).resolve() for path in
+                 (project, state_dir_of(project), *protected_install_roots(project, home, plugin_root))]
     if any(_inside(home, path) for path in protected):
         return True
     storage = home / ".hook-trust"
@@ -97,10 +100,17 @@ def protected_overlap(project, home, plugin_root=PLUGIN_ROOT, control_dirs=(), d
     for target in targets:
         if any(_inside(target, path) or (target.is_dir() and _inside(path, target)) for path in protected):
             return True
+    for target in REMOTE_PLUGIN_DIRS:
+        directory = _real_launch_path(home / target, directory=True)
+        if any(_inside(directory, path) or _inside(path, directory) for path in protected):
+            return True
+    model_cache = _real_launch_path(home / "models_cache.json", directory=False)
+    if any(_inside(model_cache, path) for path in protected):
+        return True
     return False
 
 
-def resolve_entry(requested, env):
+def resolve_entry(requested, env, *, unambiguous=False):
     """Accept native executables or resolve a known npm entry without a shell."""
     raw = requested if requested is not None else cas.find_codex_exe(env)
     if not isinstance(raw, str) or not raw:
@@ -113,6 +123,8 @@ def resolve_entry(requested, env):
         candidates = sorted(base.glob("codex-*/vendor/*/bin/codex.exe"))
         candidates += sorted(base.glob("codex-*/vendor/*/bin/codex"))
         if candidates:
+            if unambiguous and len(candidates) != 1:
+                return None
             path = candidates[0]
     with path.open("rb") as stream:
         magic = stream.read(4)
@@ -146,10 +158,15 @@ def launch_context(project, options, env=None):
     return context, env, overrides, timeout_ms
 
 
-def runtime_adapter(context):
+def runtime_adapter(context, *, active_launch=False):
     """Select only the exact measured build; there is no enabling override."""
-    from _query_codex_runtime import Codex01672, VERSION
-    return Codex01672() if context.get("codex_version") == VERSION else None
+    from _query_codex_runtime import Codex01672, Codex01690, VERSION, LAUNCH_OBSERVATION_VERSION
+    version = context.get("codex_version")
+    if version == VERSION:
+        return Codex01672()
+    if active_launch and os.name == "nt" and version == LAUNCH_OBSERVATION_VERSION:
+        return Codex01690()
+    return None
 
 
 def _read_version(context, env, deadline):
@@ -158,6 +175,49 @@ def _read_version(context, env, deadline):
                             capture_output=True, timeout=max(0.001, deadline - time.monotonic()))
     match = re.fullmatch(rb"codex-cli ([0-9]+\.[0-9]+\.[0-9]+)\s*", result.stdout)
     return match[1].decode("ascii") if result.returncode == 0 and match else None
+
+
+def _entry_identity(executable):
+    """Metadata invalidates a discovery. It never certifies hook trust."""
+    with open(executable, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        changed = _windows_change_time(stream) if os.name == "nt" else info.st_ctime_ns
+    if not info.st_ino or not changed:
+        return None
+    return digest([executable, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, changed])
+
+
+def _windows_change_time(stream):
+    # Python's Windows st_ctime currently reports creation time. FileBasicInfo
+    # also reports an NTFS metadata change, including a restored last-write time.
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    class FileBasicInfo(ctypes.Structure):
+        _fields_ = [(field, ctypes.c_int64) for field in ("creation", "access", "write", "change")] + [
+            ("attributes", wintypes.DWORD)]
+
+    query = ctypes.WinDLL("kernel32", use_last_error=True).GetFileInformationByHandleEx
+    query.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+    query.restype = wintypes.BOOL
+    result = FileBasicInfo()
+    if query(msvcrt.get_osfhandle(stream.fileno()), 0, ctypes.byref(result), ctypes.sizeof(result)):
+        return result.change
+    return None
+
+
+def _launch_version(context, env, deadline, hint, metadata):
+    executable = context["resolved_exe"]
+    identity = _entry_identity(executable)
+    version = hint.get("version") if identity and isinstance(hint, dict) and hint.get("identity") == identity else None
+    if not isinstance(version, str) or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
+        version = _read_version(context, env, deadline)
+    if identity and identity != _entry_identity(executable):
+        raise OSError("Codex executable changed during discovery")
+    if identity and version is not None:
+        metadata["_version_hint"] = {"identity": identity, "version": version}
+    return version
 
 
 def _plugin_enable_paths(plugin_id):
@@ -290,20 +350,72 @@ def inspect(context, plugin_id, listing, config, source, *, project_trusted,
 
 
 def query(project, options, *, reader=None, operation=None):
+    return _query(project, options, reader=reader, operation=operation)
+
+
+def launch_preflight(project, options, *, reader=None, version_hint=None, require_sandbox=True):
+    """Private active-session observation. Only the guarded query accepts writes."""
+    return _query(project, options, reader=reader, launch=True, version_hint=version_hint,
+                  require_sandbox=require_sandbox)
+
+
+def _observe_launch(server, context, project, adapter, guard, require_sandbox, metadata):
+    data = empty(context)
+    try:
+        config = server.config_read(True, cwd=context["cwd"])
+        effective = config["config"]
+        windows = effective.get("windows")
+        sandbox = windows.get("sandbox") if windows is not None else None
+        if sandbox is not None and sandbox not in ("unelevated", "elevated"):
+            raise ValueError("Unknown effective Windows sandbox")
+        guard.effective(effective)
+        if guard.overlaps():
+            return reject(data, "protected_path_overlap", "Effective Codex paths overlap a protected project, state or plugin directory")
+        metadata["_launch_can_authorize"] = adapter.supports_recovery
+        if require_sandbox and sandbox is None:
+            metadata["_sandbox"] = None
+            return data
+        listing = server.hooks_list([context["cwd"]])
+        # The observed installation can differ from the copy running this query.
+        from _query_codex_runtime import _launch_path
+        roots = {_launch_path(hook["sourcePath"]).parent.parent for hook in cas.hooks_of(listing)
+                 if isinstance(hook.get("pluginId"), str) and hook["pluginId"].startswith("core@")}
+        if guard.overlaps(roots):
+            return reject(data, "protected_path_overlap", "Effective Codex paths overlap a loaded plugin directory")
+        metadata["_sandbox"] = sandbox
+        return adapter.observe(server, context, project, config=config, listing=listing)
+    except cas.AppServerError:
+        raise
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError):
+        return reject(data, "side_effect_scope_unknown", "Effective Codex side-effect paths or sandbox could not be verified")
+
+
+def _query(project, options, *, reader=None, operation=None, launch=False,
+           version_hint=None, require_sandbox=True):
     """Preflight, version probe, owned server, optional operation, then audit.
 
     The internal operation runs on the same frozen connection. Its result is
     retained in metadata even if the final file audit fails after a write.
     Unknown builds never start an app-server.
     """
-    from _query_codex_runtime import CONTROL_DIRS, runtime_paths_known, tree_snapshot, config_bytes, side_effect_violations, trust_only_config_change, trust_config_readback
-    context, env, overrides, timeout_ms = launch_context(project, options)
+    from _query_codex_runtime import CONTROL_DIRS, LaunchPathGuard, runtime_paths_known, trust_input_snapshot, presence_rows, config_bytes, side_effect_violations, trust_only_config_change, trust_config_readback
+    try:
+        context, env, overrides, timeout_ms = launch_context(project, options)
+    except (OSError, RuntimeError):
+        if not launch:
+            raise
+        data = empty({})
+        return reject(data, "side_effect_scope_unknown", "Codex home or working directory could not be resolved"), {}
     deadline = time.monotonic() + timeout_ms / 1000.0
     data = empty(context)
     meta = {"external_depends_on": [{"kind": "codex_config", "path": (Path(context["codex_home"]) / "config.toml").as_posix()}]}
+    if launch and sys.version_info < (3, 11):
+        return reject(data, "protocol_unsupported", "Codex trust requires Python 3.11 or later", "version_unsupported"), meta
     try:
-        overlap = protected_overlap(project, context["codex_home"], control_dirs=CONTROL_DIRS, deadline=deadline)
-    except (OSError, RuntimeError):
+        guard = LaunchPathGuard(project, PLUGIN_ROOT, context, env, overrides) if launch else None
+        overlap = guard.overlaps() if guard else protected_overlap(
+            project, context["codex_home"], control_dirs=CONTROL_DIRS, deadline=deadline)
+    except (OSError, RuntimeError, ValueError, TypeError, AttributeError):
         return reject(data, "side_effect_scope_unknown", "Codex side-effect paths could not be resolved"), meta
     if overlap:
         return reject(data, "protected_path_overlap", "Codex paths overlap a protected project, state or plugin directory"), meta
@@ -316,29 +428,34 @@ def query(project, options, *, reader=None, operation=None):
     if not _inside(context["cwd"], project):
         return reject(data, "context_unverifiable", "Codex cwd is outside the requested project"), meta
     try:
-        resolved = resolve_entry(options.get("codex_exe"), env)
+        resolved = (resolve_entry(options.get("codex_exe"), env, unambiguous=True) if launch
+                    else resolve_entry(options.get("codex_exe"), env))
     except OSError:
         resolved = None
     if resolved is None:
         return reject(data, "entry_unresolved", "Codex entry cannot be resolved to a native executable"), meta
     context["resolved_exe"] = resolved
-    if not runtime_paths_known(context, env, overrides):
+    if not launch and not runtime_paths_known(context, env, overrides):
         return reject(data, "side_effect_scope_unknown", "Custom Codex log/database locations have no measured side-effect boundary"), meta
     home, adapter = Path(context["codex_home"]), None
     try:
-        before = tree_snapshot(home, deadline)
+        before = trust_input_snapshot(home, deadline)
         config_before = config_bytes(home)
     except (OSError, RuntimeError):
         return reject(data, "side_effect_scope_unknown", "Codex side-effect baseline could not be read"), meta
     try:
-        context["codex_version"] = _read_version(context, env, deadline)
+        context["codex_version"] = (_launch_version(context, env, deadline, version_hint, meta) if launch
+                                    else _read_version(context, env, deadline))
         context["context_id"] = digest({"context": {key: value for key, value in context.items() if key != "context_id"},
                                         "config": overrides, "env": env})
         data["context"] = dict(context)
-        adapter = runtime_adapter(context)
+        adapter = runtime_adapter(context, active_launch=True) if launch else runtime_adapter(context)
         if adapter is None:
             return reject(data, "side_effect_scope_unknown", "Codex version has no registered runtime adapter"), meta
-        if adapter.uninitialised(before, context, env, overrides, config_before):
+        presence = presence_rows(home, adapter.initialised_files + (adapter.plugin_sync_lock,))
+        uninitialised = (adapter.uninitialised(presence, context, env, overrides, config_before, launch=True)
+                         if launch else adapter.uninitialised(presence, context, env, overrides, config_before))
+        if uninitialised:
             # Its own first start would create files outside the registered allowance.
             return reject(data, "side_effect_scope_unknown",
                           "Codex home is not initialised by this Codex build; starting the service there would write outside the registered allowance"), meta
@@ -346,9 +463,12 @@ def query(project, options, *, reader=None, operation=None):
         with cas.AppServer(exe=resolved, codex_home=context["codex_home"], cwd=context["cwd"],
                            env=env, profile=context["profile"], config_overrides=overrides,
                            timeout=timeout_ms / 1000.0, deadline=deadline) as server:
-            data = adapter.observe(server, context, project)
+            data = (_observe_launch(server, context, project, adapter, guard, require_sandbox, meta)
+                    if launch else adapter.observe(server, context, project))
             if operation is not None:
                 meta["_operation_result"] = operation(data, adapter, server)
+    except cas.AppServerCloseError:
+        meta["_audit_error"] = "Codex app-server exit could not be confirmed before the deadline"
     except cas.AppServerRpcError:
         reject(data, "protocol_unsupported", "Codex does not support the required observation protocol", "version_unsupported")
     except (cas.AppServerError, OSError, subprocess.TimeoutExpired):
@@ -356,7 +476,7 @@ def query(project, options, *, reader=None, operation=None):
         reject(data, code, "Codex app-server could not complete the observation")
     finally:
         try:
-            after = tree_snapshot(home, deadline)
+            after = trust_input_snapshot(home, deadline)
             config_after = config_bytes(home)
             allowed_config = bool(adapter and adapter.attempted and trust_only_config_change(
                 config_before, config_after, adapter.attempted))

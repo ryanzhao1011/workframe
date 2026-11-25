@@ -1,6 +1,7 @@
 ---
 type: prd
 status: draft
+unwritten: true                          # 未编写标识：建骨架时换成正文摘要，正文一改即自动失效
 owner_role: pm
 updated: "{{NOW_ISO}}"
 module: "{{MODULE_PATH}}"
@@ -86,7 +87,7 @@ flowchart TD
 
 | 编号 | 验收标准 | 对应模块 |
 |---|---|---|
-| AC-01 |  |  |
+| AC-01 | _（未编写）_ |  |
 
 ## 七、待确认项（按需；无用户提出的未决事项时删除本章）
 

@@ -31,4 +31,4 @@ supersedes:
 - `projects/board.yaml`：**仅 P0 单条紧急任务**（安全 / 线上故障类）允许在用户确认后直接追加 `status: pending` + `tags: [auto-update]`；其他场景（批量任务、需求拆分产生的任务）一律走 `task-management` skill 或由主会话落盘
 - **需求文档（PRD）**：**默认只输出草稿到响应**，由 @pm 或用户确认后落盘；非 PM 角色触发「需求变更」信号时只输出变更摘要 + 落盘草稿到响应，不直接写需求文件。落盘走 `prd-writer` skill；首次需求先调 `module-init` 建子模块/需求资产包
 
-**受保护资产例外**：`.claude/settings*.json`、用户级 settings 与用户级插件市场注册表**只有两个豁免写入入口：`/core:onboard` 与装机链路**，其余任何路径都不得写（装机链路在装了 `codex` 的机器上还写用户级 `config.toml` 与项目 `.codex/`；`workframe-door --upgrade` 重种 hook 信任同样写那份 `config.toml`，它是用户亲手跑的命令，不是模型的写入路径）。两个入口各自的前提、授权形态与写入面见 skill `onboard` §受保护资产例外。
+**受保护资产例外**：`.claude/settings*.json`、用户级 settings 与用户级插件市场注册表**只有一个豁免写入入口：装机链路**，其余任何路径都不得写（装机链路在装了 `codex` 的机器上还写用户级 `config.toml` 与项目 `.codex/`；`workframe-door --upgrade` 重种 hook 信任同样写那份 `config.toml`，它是用户亲手跑的命令，不是模型的写入路径）。装机链路的前提、两个面的授权形态与写入面见插件根 `reference/settings-write-boundary.md`。

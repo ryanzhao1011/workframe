@@ -1,6 +1,7 @@
 ---
 type: current-state
 status: draft
+unwritten: true                          # 未编写标识：建骨架时换成正文摘要，正文一改即自动失效
 owner_role: dev
 updated: "{{NOW_ISO}}"
 module: "{{MODULE_PATH}}"

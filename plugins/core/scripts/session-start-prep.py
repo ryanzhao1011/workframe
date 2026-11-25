@@ -4,10 +4,11 @@ SessionStart Hook — 会话启动准备（v0.2.1 修订版）
 
 与 heartbeat-check.py 串联，职责：
   1. session_counter +1 并更新 last_session_at / active_sessions_30
-  2. 读 activity-state.json 判 dormant / wake_up_pending（双字段语义）
-  3. 读 session-digest-latest.md 打印简短上下文（非 dormant/wake_up 时）
-  4. pending_maintenance GC：移除 status=closed 且 closed_at 早于
+  2. 按配置的活动档位（`_state_io.dormant_profile_of`）判 dormant / wake_up_pending（双字段语义）
+  3. pending_maintenance：不再产出的种类转 retired；GC 移除 status=closed / retired 且 closed_at 早于
      PM_CLOSED_RETENTION_DAYS 天前的条目
+  4. 看板 summary 漂移自动修复：修好了不出声，修不了才提示
+  5. 正常激活的会话里提逾期任务（`_overdue`：只把列出来的记为已提醒）
 
 v0.2.1 修订：
   - 修复状态机反转（v0.2.0：首次超阈值直接写 dormant=true 导致 wake-up 推迟一次）
@@ -40,8 +41,8 @@ if _SCRIPTS_DIR not in sys.path:
 import _harness  # noqa: E402
 from _harness import project_dir as _project_dir  # noqa: E402
 from _state_io import (  # noqa: E402
-    append_line, event_json, legacy_present, legacy_rel, load_activity, memory_dir_of, merge_spills,
-    save_activity,
+    DORMANT_THRESHOLDS_DAYS, append_line, dormant_profile_of, event_json, legacy_present, legacy_rel,
+    load_activity, memory_dir_of, merge_spills, retire_pending, save_activity,
     state_dir_of, update_activity,
 )
 
@@ -83,29 +84,16 @@ _SESSION_ID_SAFE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 PENDING_WORK_WINDOW = 3
 STATE_DIR = state_dir_of(PROJECT_DIR)
 ACTIVITY_FILE = STATE_DIR / "activity-state.json"
-DIGEST_FILE = STATE_DIR / "session-digest-latest.md"
 EVENTS_FILE = STATE_DIR / "events.jsonl"
 BOARD_FILE = PROJECT_DIR / "projects" / "board.yaml"
 
-DORMANT_THRESHOLDS_DAYS = {
-    "high-frequency": 30,
-    "normal": 60,
-    "low-frequency": 90,
-    "archive": 0,
-}
-
 # 关闭后保留天数，到期由本脚本的 gc_pending_maintenance 清理。
 # **不是自由参数**：那条 closed 条目同时是「驳回抑制」的唯一载体，被 GC 删掉抑制即失效，
-# 所以本常量也就是抑制能维持多久。两条约束由 validate 的
-# `pm_retention_matches_events_window` 对账（改这里之前先读那道闸的红灯文案）：
-#   == check-iteration-trigger.EVENTS_WINDOW_DAYS —— 基线消失与旧事件出窗同刻，交接无缝
-#   >= check-iteration-trigger.CADENCE_DAYS       —— 否则驳回 cadence 后条目先被删、
-#                                                    天数还超标，提醒当场复活
+# 所以本常量也就是抑制能维持多久（check-iteration-trigger 的 `dismissal_baseline()`）。
 PM_CLOSED_RETENTION_DAYS = 7
 
 # C+ drift check（v0.2.2 起）
-DRIFT_HISTORY_DAYS = 30        # recent_drift_repairs 只保留最近 30 天
-DRIFT_ALERT_THRESHOLD = 3      # 30 天内 ≥3 次 drift 修复 → 启动摘要提示
+DRIFT_HISTORY_DAYS = 30        # recent_drift_repairs 只保留最近 30 天（/core:audit 读它看修复频次）
 
 
 def load_state():
@@ -115,19 +103,6 @@ def load_state():
 
 def save_state(state):
     save_activity(STATE_DIR, state)
-
-
-def check_onboarding_notice():
-    """v0.2.1+ 只读检查：未 onboarded 的项目打印一行温和提示。
-
-    设计原则：
-    - 零写入副作用——hook 永不创建 marker、改 settings 或动 .gitignore
-    - 所有 onboarding 状态变更走 /core:onboard 唯一入口
-    - 用户主动 skip 也会写 onboarded.json，本函数随即静默
-    """
-    onboarded_file = STATE_DIR / "onboarded.json"
-    if not onboarded_file.exists():
-        print("[workframe] 可运行 /core:onboard 查看可选配置；选择跳过后将不再提示。")
 
 
 def parse_iso(ts):
@@ -175,7 +150,7 @@ def check_summary_drift_and_repair(state, now):
     C+ 三个保护条件：
     1. 只修 summary 段，不改 tasks（recompute_board_summary 本身保证）
     2. 本函数严格保持轻量（只读 board / 比对 / 调 recompute / 写事件，不做记忆/提案/重活）
-    3. 30 天内 ≥3 次 drift 修复时启动摘要提示用户检查
+    3. 修复成功不出声；30 天修复历史记进 `recent_drift_repairs`，频次由 /core:audit 展示
     """
     if not BOARD_FILE.exists():
         return
@@ -319,7 +294,7 @@ def check_summary_drift_and_repair(state, now):
         likely_cause="SessionEnd hook skipped or timed out in previous session",
     )
 
-    # C+ 保护 3：维护 30 天 drift 修复历史 + 频繁 drift 提示。
+    # C+ 保护 3：维护 30 天 drift 修复历史（/core:audit 据此展示修复频次）。
     # 列表 GC + append 属「基于当前值计算」，按 `_state_io` 契约必须走 update_activity
     # 的锁内读改写——在锁外算完再靠 save_state 的三方合并写回，两个并发会话会各自基于
     # 旧列表计算，后写的把对方那次修复记录抹掉（与 session_counter 递增同型）。
@@ -340,22 +315,13 @@ def check_summary_drift_and_repair(state, now):
 
     # 必须检查返回值：update_activity 在锁超时 / 状态读不出来 / 写失败时返回 None
     # 且**不落盘**。不检查就会出现「summary 确实修好了，但 recent_drift_repairs 没记上」
-    # 而日志照样宣布成功——频繁 drift 的告警阈值（30 天 ≥3 次）因此永远攒不够数。
+    # 而日志照样宣布成功——/core:audit 看到的 30 天修复频次因此偏低。
     if update_activity(STATE_DIR, _record_repair) is None:
         print("[drift-check] board summary 已修复，但 drift 历史未能落盘"
               "（activity-state 写入失败，原因见上一条 [warn]）——本次不计入 30 天频次统计。",
               file=sys.stderr)
         return
-
-    print(f"[drift-check] 自动修复 board summary {len(drift_fields)} 项 drift。")
-    if kept["n"] >= DRIFT_ALERT_THRESHOLD:
-        print(
-            f"  ⚠ 最近 {DRIFT_HISTORY_DAYS} 天内已触发 {kept['n']} 次 drift 修复——"
-            "可能是 SessionEnd hook 频繁未执行或超时。"
-        )
-        print(
-            "  大项目可设环境变量 CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS=5000（或更高）缓解。"
-        )
+    # 修好了不出声：事件与 30 天历史已记，频次在 /core:audit 的「近 30 天修复历史」里看
 
 
 def run_first_session_acceptance():
@@ -477,7 +443,7 @@ def check_pending_work(session_counter=None):
 
 
 def gc_pending_maintenance(items, now):
-    """移除 status=closed 且 closed_at 早于 PM_CLOSED_RETENTION_DAYS 天前的条目。
+    """移除 status=closed / retired 且 closed_at 早于 PM_CLOSED_RETENTION_DAYS 天前的条目。
 
     就地返回新列表。
     """
@@ -488,8 +454,10 @@ def gc_pending_maintenance(items, now):
     for item in items:
         if not isinstance(item, dict):
             continue  # 旧版字符串条目直接丢弃（v0.2.0 → v0.2.1 自清理）
-        if item.get("status") == "closed":
+        if item.get("status") in ("closed", "retired"):
             closed_at = parse_iso(item.get("closed_at"))
+            if closed_at and closed_at.tzinfo is None:
+                closed_at = closed_at.replace(tzinfo=timezone.utc)   # 无时区按 UTC；否则比较抛错、整个事务不落盘
             if closed_at and closed_at < cutoff:
                 continue
         kept.append(item)
@@ -584,17 +552,18 @@ def write_plugin_root():
     （scripts/ 的上一级即插件根），每次 SessionStart 刷新——插件升级导致缓存路径变化时
     自动跟上（官方文档明确 PLUGIN_ROOT 随版本更新而变化，不能持久化假设不变）。
 
-    消费方统一配方（Git Bash / macOS 通用）：
-        python "$(cat <状态目录>/plugin-root.txt)/bin/workframe-xxx"
-    `<状态目录>` 即 `_state_io.state_dir_of(项目根)`；skill / reference 里的字面配方
-    写的是出厂形态的状态目录（`_state_io.new_rel("state")`）。
+    **会话里的模型不读这几份文件**：skill 配方写 `"$WF_PLUGIN_ROOT/bin/workframe-xxx"`，值来自会话开场与子 agent
+    启动时注入的「本会话插件根」一行（`_harness.plugin_root_line`，按 `__file__` 现算）。这几份文件留给会话外的
+    人工命令与 doctor。**有意不写进 `CLAUDE_ENV_FILE`**：从 CC 的 Bash 里启动的 Codex 会继承那个变量，原样执行
+    的配方就会静默跑到 CC 那一份安装；不设变量时原样执行展开为空、当场报错。
 
     **按门分文件 ＋ 兼容位**：两扇门各有自己的安装缓存根（CC 在 `~/.claude/plugins/cache/…`，
     Codex 在 `<CODEX_HOME>/plugins/cache/…`），同一个项目同时挂两扇门时，单文件会被轮流覆盖
     写成「最后一个起会话的那扇门」的根——一边升级一边没升时，另一门的 skill 配方会静默执行
     另一个安装里的旧脚本。所以本门的根另写一份 `plugin-root.<门>.txt`（门标识来自命令行
-    `--harness`，取不到就不写这份）；`plugin-root.txt` 保留为「最后一个写的」兼容位，存量
-    `$(cat …/plugin-root.txt)` 配方零改动。doctor 读两份分文件、断言两根的插件版本相等。
+    `--harness`，取不到就不写这份）；`plugin-root.txt` 保留为「最后一个写的」兼容位（旧接口：
+    项目自有 skill 里存量的 `$(cat …/plugin-root.txt)` 配方仍能跑，只是两门版本不同时可能指错）。doctor 读两份
+    分文件、断言两根的插件版本相等。
 
     写 bytes 避免 Windows 文本模式把 LF 改写成 CRLF。失败不阻塞会话启动。
     """
@@ -794,8 +763,7 @@ def main():
 
     # 累加型更新走**锁内事务**：counter / active_sessions_30 是「读当前值再 +1」，
     # pending GC 是列表读改写——这三样在锁外算完再写，两个并发会话就会各少算一次
-    # （实测：counter 期望 2 实得 1）。幂等赋值型字段（dormant / 各种标记）
-    # 仍走后面的 save_state 三方合并即可。
+    # （实测：counter 期望 2 实得 1）。dormant / wake_up_pending 两个标记在收尾另开一次锁内写。
     tick = {}
 
     def _session_tick(s):
@@ -809,6 +777,7 @@ def main():
             s["active_sessions_30"] = int(s.get("active_sessions_30", 0)) + 1
         else:
             s["active_sessions_30"] = 1
+        retire_pending(s.get("pending_maintenance"), now_iso)
         s["pending_maintenance"] = gc_pending_maintenance(
             s.get("pending_maintenance", []), now
         )
@@ -823,8 +792,8 @@ def main():
     was_dormant = tick["was_dormant"]
     last_ts = tick["last_ts"]
 
-    # dormant / wake_up 判定
-    profile = state.get("dormant_profile", "normal")
+    # dormant / wake_up 判定：档位只认配置（运行态里旧的 dormant_profile 不再读）
+    profile = dormant_profile_of(PROJECT_DIR)
     threshold = DORMANT_THRESHOLDS_DAYS.get(profile, 60)
     over_threshold = last_ts is not None and (now - last_ts).days > threshold
 
@@ -851,15 +820,7 @@ def main():
         # 场景 C：正常激活
         state["dormant"] = False
         state["wake_up_pending"] = False
-        if DIGEST_FILE.exists():
-            try:
-                content = DIGEST_FILE.read_text(encoding="utf-8").strip()
-                if content:
-                    first_lines = "\n".join(content.splitlines()[:5])
-                    print("[last-session-digest]")
-                    print(first_lines)
-            except Exception:
-                pass
+    flags = {"dormant": state["dormant"], "wake_up_pending": state["wake_up_pending"]}
 
     # C+ drift check：仅在非 dormant 非 wake_up_pending 状态下执行
     # （archive / wake-up / still-dormant 时不动 board.yaml）
@@ -869,6 +830,17 @@ def main():
         except Exception as e:
             # drift check 失败不阻塞 SessionStart 整体流程
             print(f"[warn] drift check failed: {type(e).__name__}: {e}", file=sys.stderr)
+
+    # 逾期任务提醒：只在本次判定为正常激活之后提（档位来自配置、唤醒按本次 tick 现判），
+    # 所以放在这里而不在 heartbeat-check——两个 SessionStart hook 的先后不定
+    if not state.get("dormant") and not state.get("wake_up_pending"):
+        try:
+            import _overdue
+            line = _overdue.reminder_line(PROJECT_DIR)
+            if line:
+                print(line)
+        except Exception as e:
+            print(f"[warn] overdue check failed: {type(e).__name__}: {e}", file=sys.stderr)
 
     # 角色域记忆地图（A0a）——与 drift check 同守卫：dormant / wake_up_pending /
     # archive 时不打印（归档态项目没人直做，纯噪音）
@@ -903,17 +875,11 @@ def main():
     except Exception as e:
         print(f"[warn] pending intake check failed: {type(e).__name__}: {e}", file=sys.stderr)
 
-    # v0.2.1+: onboarding 提示（零副作用——只检查文件存在性 + 一行打印）
-    try:
-        check_onboarding_notice()
-    except Exception as e:
-        # onboarding check 失败不阻塞 SessionStart 整体流程
-        print(f"[warn] onboarding check failed: {type(e).__name__}: {e}", file=sys.stderr)
-
-    try:
-        save_state(state)
-    except Exception as e:
-        print(f"[warn] failed to save activity-state: {e}", file=sys.stderr)
+    # 收尾只提交本脚本自己判定的两个标记，锁内写。不用 save_state(state)：开场期间别的 hook
+    # （首问维护提醒、drift 历史）可能已在锁内改过别的键，这份 state 是更早读的，三方合并的
+    # 基线又会被中途的 update_activity 换掉——整份回写会把别人刚写的值盖回旧值。
+    if update_activity(STATE_DIR, lambda s: s.update(flags)) is None:
+        print("[warn] failed to save activity-state flags (见上一条 [warn])", file=sys.stderr)
 
     from _selfiter_hooks import on_hook
     selfiter_notice = on_hook(PROJECT_DIR, _harness.harness(), 'SessionStart', _harness.session_id(PAYLOAD))

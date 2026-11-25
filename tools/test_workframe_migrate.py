@@ -997,6 +997,61 @@ def test_code_paths_parser_loud():
         rm(tmp)
 
 
+def test_index_report():
+    print("[index] 反向索引报告：计数按索引语义去重；缓存新旧另起一条，不依赖旧前缀当前还有命中")
+
+    def lines_of(P):
+        x = [i for i in wm.compute_plan(P)["items"] if i["id"] == "L-report" and "反向索引缓存" in i["title"]]
+        return x[0]["lines"] if x else None
+
+    with Proj(mirror=False) as P:
+        y = P / "projects" / "modules" / "a" / "b" / "submodule.yaml"
+        put(y, 'name: b\ncode_paths:\n  - ".claude/skills/x/**"\n  - ".claude/skills/x/**"\n')
+        git(P, "add", "-A")
+        git(P, "commit", "-q", "-m", "modules")
+        prefix = _harness_skills_prefix()
+        check("缓存不存在 ⇒ 报不存在；同一模块重复声明同一 pattern 按索引去重计 1 条", lines_of(P),
+              ["磁盘缓存：不存在（读者首次查询时自动构建）",
+               f"会随声明改口：按当前声明有 1 条 {prefix} 开头的 (code_paths, 子模块) 映射"])
+        idx = wm._located_dir(P, "state") / "code-paths-index.json"
+        csm = wm._stale_modules()
+        mdir = P / "projects" / "modules"
+        stamp, pairs, _errors = csm.declared_snapshot(mdir)
+        before = None
+
+        def write_cache(data):
+            idx.parent.mkdir(parents=True, exist_ok=True)
+            idx.write_bytes(json.dumps(data).encode("utf-8"))
+            return idx.read_bytes()
+
+        before = write_cache(csm.build_index(stamp, pairs))
+        check("缓存新鲜 ⇒ 报一致", (lines_of(P) or [""])[0], "磁盘缓存：与当前声明一致")
+        check("… 报告只读：缓存字节不变", idx.read_bytes(), before)
+        wrong = csm.build_index(stamp, pairs)
+        wrong["buckets"] = {"lib": {".claude/skills/x/**": ["a/b"]}}     # 戳是新的，映射放错了桶
+        write_cache(wrong)
+        check("戳对而映射不对 ⇒ 不报一致", (lines_of(P) or [""])[0],
+              "磁盘缓存：戳是新的，但映射与当前声明不一致（读者不会自动重建；迁移后跑一次 rebuild-index）")
+        idx.unlink()
+        idx.mkdir()
+        check("缓存路径是目录 ⇒ 无法判定（不是「不存在」）", (lines_of(P) or [""])[0], "磁盘缓存：无法判定——该路径不是文件")
+        idx.rmdir()
+        write_cache(csm.build_index(stamp, pairs))                     # 下一格的前提：戳新的缓存在
+        put(y, "name: b\ncode_paths:\n  - src/x.py\n")
+        check("声明已迁走、缓存独留旧前缀 ⇒ 无计数行，仍报过期", lines_of(P),
+              ["磁盘缓存：已过期，与当前声明不一致（读者下次查询时自动重建）"])
+        write_cache({"__schema__": "x", "buckets": {"src": []}})
+        check("缓存形态不合法 ⇒ 报损坏", (lines_of(P) or [""])[0], "磁盘缓存：损坏或形态不合法（读者下次查询时自动重建）")
+        put(y, b"name: b\ncode_paths:\n  - src/\xff.py\n", raw=True)
+        check("有声明读不了 ⇒ 无法判定并点名", (lines_of(P) or [""])[0].startswith("磁盘缓存：无法判定——1 份声明读不了（如 a/b/submodule.yaml）"),
+              True)
+
+
+def _harness_skills_prefix():
+    import _harness
+    return _harness.SKILLS_DIR_CC.as_posix() + "/"
+
+
 def test_mirror_unrestorable():
     print("[mirror-lost] 镜像目录里 git 找回还原不了原字节的干净文件 ⇒ plan 算进「会丢」并点名，apply 逆操作说明再点名")
     attrs = f"{MIRROR}/alpha.md text eol=crlf\n"       # 检出恒为 CRLF，而工作树是 LF、git status 干净
@@ -1608,7 +1663,7 @@ def test_codex_seal(when):
 ALL_TESTS = (test_plan_zero_write, test_apply_happy, test_conflict_and_resume, test_guards, test_terminal_hint,
              test_session_signals, test_boundaries, test_link_fail_resume, test_nested_project, test_staged_inside,
              test_reports, test_literal_boundaries, test_printed_inverse_runs, test_unfinished_exit,
-             test_residual_literals, test_code_paths_parser_loud, test_mirror_unrestorable, test_midstop_block,
+             test_residual_literals, test_code_paths_parser_loud, test_index_report, test_mirror_unrestorable, test_midstop_block,
              test_skipped_moved_path, test_link_commit_hint, test_pending_source_mismatch,
              test_located_rel_consumers, test_unknown_pending_item, test_link_hint_on_resume,
              test_doctor_legacy_state_dir, test_doctor_auto_memory_old_pointer, test_cc_native_memory,

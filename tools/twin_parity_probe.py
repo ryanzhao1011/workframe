@@ -8,9 +8,9 @@
   ① **scope 级注入指纹**：两门 inject-log（`<state>/inject-log.jsonl`）同 scope（main / sub）最近一次
      记录的 `scope_sha256` 相等。它按源文件内容算、与分片无关（CC 主片切 n 片、Codex 一条不分片，
      逐片 `sha256` 按构造永远不等——比那个会恒红）。取证面现成。
-  ② **角色记忆注入**：`subagent-memory-inject.py` 两门产出的 `additionalContext` 的 sha256 相等。
-     **该脚本不写任何 log**，所以本脚本直接以两门形态（`--harness cc` / `--harness codex`）调用它、喂同一份
-     载荷、比 stdout——这是**结构**证据（证脚本对两门产出相同），不是投递后到达相同。真实到达面要读
+  ② **角色记忆注入**：两门各按自己清单里的挂载跑 `subagent-memory-inject.py`（CC 两份分开、Codex 合一），
+     送达的「文件 → 正文」集合的 sha256 相等；段的切法与次序、说明文字不比，同一份投两遍算不等。
+     **该脚本不写任何 log**，所以本脚本直接取清单里的参数调用它、喂同一份载荷、比 stdout——这是**结构**证据（证脚本对两门产出相同），不是投递后到达相同。真实到达面要读
      Claude Code 的会话记录（`~/.claude/projects/<项目>/<会话>/subagents/*.jsonl` 里 SubagentStart 的
      hook 附件）与 Codex 子线程 rollout 的 `hooks.additional_context` 项，见 `--recipe`。
   ③ **事件类型集合**：两门各自写进 `events.jsonl` 的事件类型集合（按 `harness` 字段分门；无该字段的
@@ -21,9 +21,9 @@
        (3) 本脚本自声明的确定性事件集 S ⊆ 两门各自的产出集。S 只放固定脚本**必然**产出的：SessionEnd
            链上的 `session_ended` / `summary_recomputed` / `skill_metrics_recomputed`（三者在看板缺失、
            重算失败时仍以 skipped / error 状态写同类型的行）。**能力边界**：「必然」只在 SessionEnd 链跑完时成立——
-           Codex 门下 `codex exec` 退出时 SessionEnd 偶发没跑完（实测 5 次里 1 次 `session-end-flush` 起了却零事件、
-           会话标记残留，根因未查）。(3) 在 Codex 侧报缺 S 里的类型时，先看本轮是否残留了 `current-session-codex-*.json`
-           标记：残留即是这一态，重跑一次会话再判，别当成对等回归；比较规则不因此放宽。`skill_used` 是模型半、不进 S：零 `skill_used`
+           Codex 给它最多 3 秒、到点连进程树一起杀（清单已声明 3 秒），机器很忙时仍可能缺后面的重算两条；交互会话连着 Codex 的
+           常驻后台时，`/exit` 后会话还挂着，SessionEnd 要等它真正结束才跑。(3) 在 Codex 侧报缺 S 里的类型时，用
+           `codex exec` 在空闲机器上重跑一次再判，别当成对等回归；比较规则不因此放宽。`skill_used` 是模型半、不进 S：零 `skill_used`
            可能是模型没调，也可能是投递没到（注册表 `__delivery_established__.codex` 仍 false）——先怀疑投递。
 
 用法：
@@ -57,6 +57,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -227,28 +228,57 @@ def collect(door, project, memory_agent=MEMORY_PAYLOAD_AGENT, since=None):
 
 
 def memory_structural(door, project, agent_type):
-    """`subagent-memory-inject.py --harness <door>` 喂固定载荷，返回 (additionalContext 的 sha256, 字符数, 备注)。
+    """按该门清单的挂载逐条跑 `subagent-memory-inject.py`，返回 (「文件 → 正文」集合的 sha256, 字符数, 备注)。
     环境里剥掉 `CLAUDE_PROJECT_DIR`，让项目根按载荷 `cwd`（Codex 形态）/ 根标记解析，两门走同一条取根路径。"""
     payload = {"agent_type": agent_type, "agent_id": "twin-parity-probe", "cwd": str(project),
                "session_id": "twin-parity-probe"}
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     env.pop("CLAUDE_PROJECT_DIR", None)
-    try:
-        r = subprocess.run([sys.executable, str(SCRIPTS / "subagent-memory-inject.py"), "--harness", door],
-                           input=json.dumps(payload, ensure_ascii=False), capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", cwd=str(project), env=env, timeout=60)
-    except Exception as e:
-        return None, 0, f"记忆注入脚本跑不起来: {e}"
-    if r.returncode != 0:
-        return None, 0, f"记忆注入脚本 exit={r.returncode}: {r.stderr.strip()[:200]}"
-    text = r.stdout.strip()
-    if not text:
-        return None, 0, "记忆注入脚本零输出（该项目两份记忆都拿不出）——② 无对象"
-    try:
-        ctx = json.loads(text)["hookSpecificOutput"]["additionalContext"]
-    except Exception:
-        return None, 0, f"记忆注入脚本输出不是预期 JSON: {text[:120]!r}"
-    return _sha(ctx), len(ctx), None
+    name = "subagent-memory-inject.py"
+    manifest = {"cc": "hooks.json", "codex": "hooks.codex.json"}[door]
+    groups = json.loads((PLUGIN_ROOT / "hooks" / manifest).read_text(encoding="utf-8"))["hooks"].get("SubagentStart", [])
+    mounts = [h["command"].split(f'{name}"', 1)[1].split() for g in groups for h in g["hooks"] if name in h["command"]]
+    bodies, chars = [], 0
+    for args in mounts:
+        try:
+            r = subprocess.run([sys.executable, str(SCRIPTS / name), *args],
+                               input=json.dumps(payload, ensure_ascii=False), capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", cwd=str(project), env=env, timeout=60)
+        except Exception as e:
+            return None, 0, f"记忆注入脚本跑不起来: {e}"
+        if r.returncode != 0:
+            return None, 0, f"记忆注入脚本 exit={r.returncode}: {r.stderr.strip()[:200]}"
+        text = r.stdout.strip()
+        if not text:
+            continue
+        try:
+            ctx = json.loads(text)["hookSpecificOutput"]["additionalContext"]
+        except Exception:
+            return None, 0, f"记忆注入脚本输出不是预期 JSON: {text[:120]!r}"
+        if "**未完整加载**" in ctx.split("\n", 1)[0]:
+            return None, 0, "有一份超单段预算、只投了条目目录——两门本就不同形，② 不可比"
+        bodies += memory_bodies(ctx)
+        chars += len(ctx)
+    if not bodies:
+        return None, 0, f"记忆注入零输出（{len(mounts)} 条挂载；该项目两份记忆都拿不出，或清单没挂）——② 无对象"
+    return memory_sha(bodies), chars, None
+
+
+def memory_bodies(ctx):
+    """注入段正文 → [(文件路径, 正文)]。只认注入脚本自己的开围栏与段末闭围栏，正文里的 `=== … ===` 行照样算正文。"""
+    if not ctx.endswith("\n=== 记忆注入结束 ==="):
+        return []
+    ctx = ctx[:ctx.rindex("\n=== 记忆注入结束 ===")]
+    heads = list(re.finditer(r"^=== ([^\n]*/MEMORY\.md)（(?:跨角色权威事实|本角色高置信记忆)）===\n", ctx, re.M))
+    out = []
+    for i, m in enumerate(heads):
+        body = ctx[m.end():heads[i + 1].start() if i + 1 < len(heads) else len(ctx)]
+        out.append((m.group(1), body.rstrip("\n")))
+    return out
+
+
+def memory_sha(bodies):
+    return _sha(json.dumps(sorted(bodies), ensure_ascii=False))
 
 
 # ---- 比对 ----
@@ -361,6 +391,19 @@ def selftest():
     m = json.loads(json.dumps(base_cx)); m["scope_sha256"]["main"] = None
     r, _ = compare(base_cc, m)
     expect("M2 codex 缺 main 记录 → ①[main] 未能判定", r, dict(all_pass, **{"① scope_sha256[main]": "未能判定"}))
+    seg = lambda rel, body: (f"头\n=== {rel}（" + ("跨角色权威事实" if "shared" in rel else "本角色高置信记忆") + f"）===\n{body}")
+    end = "\n=== 记忆注入结束 ==="
+    sh, ro = seg("m/shared/MEMORY.md", "甲\n\n=== 小节 ===\n乙"), seg("m/dev/MEMORY.md", "丙\n=== 项目约定 ===\n结论A")
+    one = memory_sha(memory_bodies(sh + "\n\n" + ro.split("\n", 1)[1] + end))
+    split = lambda *parts: memory_sha([b for p in parts for b in memory_bodies(p + end)])
+    for label, got, want in (("合一与分两段相等", split(sh, ro), True), ("次序不同仍相等", split(ro, sh), True),
+                             ("少一份不等", split(sh), False), ("同一份投两遍不等", split(sh, ro, ro), False),
+                             ("尾部少一字不等", split(sh, seg("m/dev/MEMORY.md", "")), False),
+                             ("正文里的分隔行之后改一字不等", split(sh, ro[:-1] + "B"), False),
+                             ("只剩预览、没有闭围栏：取不到正文", memory_sha(memory_bodies(sh)), False)):
+        ok = (got == one) is want
+        print(f"  [{'PASS' if ok else '*** MISMATCH ***'}] 记忆正文集合：{label}")
+        fails += 0 if ok else 1
     m = json.loads(json.dumps(base_cx)); m["memory_sha256"] = "N" * 64
     r, _ = compare(base_cc, m)
     expect("M3 记忆 sha 不同 → ② FAIL", r, dict(all_pass, **{"② 记忆注入 sha256（结构）": "FAIL"}))
@@ -483,11 +526,12 @@ RECIPE = """两门固定脚本（带凭据；本节未在零凭据下实测，�
   python tools/twin_parity_probe.py --compare cc.json codex.json
 ② 的真实到达面（脚本比的是结构，这一步比投递后的到达）：
   CC：   <用户主目录>/.claude/projects/<项目键>/<会话>/subagents/*.jsonl，找 SubagentStart 的 hook 附件里
-         以「[workframe] 角色记忆注入」起头的那段，sha256 与 cc.json 的 memory_sha256 比
+         以「[workframe] 共享记忆注入」「[workframe] 角色记忆注入」起头的两段（正文须是全文而不是落盘预览），
+         用本文件的 `memory_bodies` 取出各段、`memory_sha` 合算后与 cc.json 的 memory_sha256 比
   Codex：<CODEX_HOME>/sessions/<日期>/rollout-*.jsonl，子线程里 content_item_kinds 含
          hooks.additional_context 的项，取其正文同法比
-③(3) 在 Codex 侧报缺 SessionEnd 那三类时：先看运行态目录里本轮的 current-session-codex-*.json 是否残留——
-  残留即是「codex exec 退出时 SessionEnd 没跑完」这一已知态（见文件头 ③(3) 的能力边界），重跑一次 Codex 会话再判。
+③(3) 在 Codex 侧报缺 SessionEnd 那三类时：先看 hook 是否受信、机器是否忙到 3 秒不够（见文件头 ③(3) 的能力边界），
+  用新的 T0 在空闲机器上重跑一次 codex exec 再判。没按上面用 codex exec 而是开了交互会话的，/exit 后 SessionEnd 可能还没到时候。
 失败方式打一遍：往 plugins/core/context/sub/ 加一个只让一门读到的文件（例如只在一门的插件根副本里加），
   重跑两门 → ①[sub] 必 FAIL。
 """

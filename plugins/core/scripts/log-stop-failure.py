@@ -3,8 +3,8 @@
 StopFailure Hook — turn 因 API 错误终止时的审计日志（v0.4 M5）
 
 CC 2.1.78 新增 StopFailure 事件：turn 因 rate limit / auth 失败等 API 错误结束时触发。
-本 hook 只做一件事：向 events.jsonl append 一条 `turn_failed` 事件，为 audit /
-session-digest 提供 "SessionEnd 链路可能没拿到完整状态" 的旁证。
+本 hook 只做一件事：向 events.jsonl append 一条 `turn_failed` 事件，为 audit
+提供 "SessionEnd 链路可能没拿到完整状态" 的旁证。
 
 设计约束（与其余 workframe hooks 一致）：
   - 纯 best-effort：任何异常都吞掉，永远 exit 0，绝不阻塞会话

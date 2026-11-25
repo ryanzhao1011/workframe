@@ -32,7 +32,7 @@ Codex 侧目前不把 launcher 装成 Codex 插件（那个形态还没在真机
 
 Codex 门怎么接：**走 launcher 装 / 接入项目时它已经替你跑完了**（这台机器上装了 `codex` 就是装机的一部分，确认页会单独列一行告诉你它要改什么）。要**单独跑**——补装到上一版装的老项目、或换了台机器——在项目目录里跑一次 `workframe-door --codex`（core 插件 `bin/` 下的命令），它替你注册市场、装插件、生成角色、写 hook 信任与项目 trust，并让插件只在跑过它的项目里加载（你用户配置里本插件的 `enabled` 改为 `false`、项目里写启用表）；见 [setup-guide.md](./setup-guide.md) §Codex 门。跑完**重开这个项目的 Codex 会话**才生效。
 
-`workframe-door` 这个命令名**只在 Claude Code 会话的 Bash 工具里在 PATH 上**——在会话里让 Claude 替你跑即可。普通终端（PowerShell / bash）里写成 `python "<core插件根>/scripts/workframe_door.py" --codex`，参数与本文各处的 `workframe-door …` 相同。`<core插件根>` 怎么找：开过会话的项目记在 `.workframe/state/plugin-root.txt`；否则，Claude Code 装过 core 的机器在 `~/.claude/plugins/cache/<市场名>/core/<版本号>/`（与 setup-guide「已装项目迁移」步骤 2 说的是同一处），Codex 装过的在 `<CODEX_HOME>/plugins/cache/<市场名>/core/<版本号>/`（`CODEX_HOME` 未设时是 `~/.codex`）。
+`workframe-door` 这个命令名**只在 Claude Code 会话的 Bash 工具里在 PATH 上**——在会话里让 Claude 替你跑即可。普通终端（PowerShell / bash）里写成 `python "<core插件根>/scripts/workframe_door.py" --codex`，参数与本文各处的 `workframe-door …` 相同。`<core插件根>` 怎么找：开过会话的项目按门记在 `.workframe/state/plugin-root.cc.txt` / `plugin-root.codex.txt`（要操作哪扇门就取哪一份；`plugin-root.txt` 是旧接口，记的是最后起会话的那扇门）；否则，Claude Code 装过 core 的机器在 `~/.claude/plugins/cache/<市场名>/core/<版本号>/`（与 setup-guide「已装项目迁移」步骤 2 说的是同一处），Codex 装过的在 `<CODEX_HOME>/plugins/cache/<市场名>/core/<版本号>/`（`CODEX_HOME` 未设时是 `~/.codex`）。
 
 **上一版装的、只接了一扇门的老项目**：在项目目录里跑 `workframe-door --backfill`，它先看两扇门此刻各是什么状态，**只补缺的那扇**——两扇都在就一个字节不写，你自己关掉的 Codex 门它不替你改回来。「都在」只看项目文件：这台机器上 Codex 门的信任与启用它不核，收尾会让你跑 `workframe-door --check` 核一次。补完之后，补了哪扇门就**重开这个项目在那扇门里的会话**才生效。
 
@@ -92,7 +92,7 @@ launcher 会**就地分析**（有没有代码、有没有存量文档、git 贡
    python "<core插件根>/scripts/workframe_doctor.py" --project "<项目>" --group install
    ```
 
-   `<core插件根>` 记录在项目的 `.workframe/state/plugin-root.txt`。error 为 0 即通过。
+   `<core插件根>` 记录在项目的 `.workframe/state/plugin-root.cc.txt`（Codex 门是 `plugin-root.codex.txt`）。error 为 0 即通过。
 
 ## 升级框架
 

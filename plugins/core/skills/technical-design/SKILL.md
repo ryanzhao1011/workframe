@@ -56,7 +56,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 
 > **入口前置阅读**：进入完整路径前，先读 `reference/engineering-discipline.md`（工程纪律：DRY / 副作用边界 / 异常处理 / 文档同步等），把其中的判断标准带入第 2-3 步的方案设计与风险评估。轻量路径不强制读，但若涉及架构敏感修改也建议参考。
 >
-> **路径写法**：Read 按**会话工作目录**解析相对路径，不按 skill 所在目录——照抄 `./reference/…` 必然报「File does not exist」。要读的是 `"$(cat .workframe/state/plugin-root.txt)/skills/technical-design/reference/engineering-discipline.md"`；插件目录在项目外时可能读不到，那就按本 skill 正文的判断标准推进，别卡在取文件上。
+> **路径写法**：Read 按**会话工作目录**解析相对路径，不按 skill 所在目录——照抄 `./reference/…` 必然报「File does not exist」。要读的是 `"$WF_PLUGIN_ROOT/skills/technical-design/reference/engineering-discipline.md"`（`$WF_PLUGIN_ROOT` 换成会话开场注入的「本会话插件根」）；插件目录在项目外时可能读不到，那就按本 skill 正文的判断标准推进，别卡在取文件上。
 
 ### 第 1 步：需求理解
 
@@ -122,7 +122,7 @@ step_2:
 >
 > 档 1 只验主路径与一致性；每升一档累加：引用面核对 → 跑真实消费方并排对照 + 边界矩阵 → 用它自己的失败方式打一遍。**档位是爆炸半径，不是用心程度**——判在档 1 就按档 1 交付。
 >
-> 详表、反例与非代码场景对照在 `test-scoping.md`（若能读到插件目录：`"$(cat .workframe/state/plugin-root.txt)/skills/test-case-design/reference/test-scoping.md"`）。**插件目录在项目外，读不到是常态**——上面三问已够定档，别卡在取文件上。
+> 详表、反例与非代码场景对照在 `test-scoping.md`（若能读到插件目录：`"$WF_PLUGIN_ROOT/skills/test-case-design/reference/test-scoping.md"`）。**插件目录在项目外，读不到是常态**——上面三问已够定档，别卡在取文件上。
 
 #### 双检的时点
 

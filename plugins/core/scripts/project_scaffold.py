@@ -17,7 +17,7 @@ launcher 调它，无人值守 / CI 场景也直接调它。
     # 只读预演（确认页的动作清单取它的输出，逐字贴）：把上面任意一条原样加 --print-plan
     python "<插件根>/scripts/project_scaffold.py" --project "<目标>" \
         --params params.json --create-missing --require-empty --write-subscription --print-plan
-    # 插件根见目标项目运行态状态目录下的 plugin-root.txt（SessionStart hook 维护）
+    # 插件根：会话里是开场注入的「本会话插件根」；会话外见目标项目运行态状态目录下的 plugin-root.<门>.txt
 
 行为：
     - merge 模式写 .workframe-config.json（框架字段刷新，用户字段保留，损坏不覆盖）
@@ -1090,9 +1090,6 @@ def scaffold_targets(project_dir: Path):
          proj_dir / "issues" / "TEMPLATES.md"),
         (SCAFFOLD_TEMPLATES_DIR / "project-changelog-template.md",
          proj_dir / "changelog.md"),
-        # evals/ 下只有 3 个空目录，不给说明用户不知道那是干什么的
-        (SCAFFOLD_TEMPLATES_DIR / "evals-template" / "README.md",
-         proj_dir / "evals" / "README.md"),
     ]]
 
     # projects/ — 含占位符的模板走渲染写入
@@ -1123,9 +1120,6 @@ def scaffold_targets(project_dir: Path):
     # 兜底只有 `workframe_doctor.SCAFFOLD_OPTIONAL_FILES`，那是**装机落盘验收的 warn 档**。
     # 写在这里是因为「判过没有闸」与「没查过」在读者眼里同形。
     proj_gitkeep_dirs = [
-        proj_dir / "evals" / "agents-md",
-        proj_dir / "evals" / "skills",
-        proj_dir / "evals" / "agents",
         proj_dir / "proposals" / "pending",
         proj_dir / "proposals" / "applied",
         proj_dir / "proposals" / "rejected",
@@ -1212,7 +1206,6 @@ def ensure_project_scaffold(project_dir: Path, params=None):
 
 PARAM_REQUIRED = ("project_name", "one_line_goal", "business_context")
 PARAM_DEFAULTS = {
-    "project_type": "product-work",
     "dormant_profile": "normal",
     "role_profile": "software-team",
     "project_level_roles": "_（暂无项目级角色；需要时按 `role-customization-guide.md` 新增）_",
@@ -1229,7 +1222,10 @@ PARAM_DEFAULTS = {
         "required_fields": ["模块", "背景与根因", "改动", "连带", "验证", "提交", "遗留"],
     },
 }
-CONFIG_USER_FIELDS = ("project_type", "dormant_profile", "role_profile", "close_check")
+CONFIG_USER_FIELDS = ("dormant_profile", "role_profile", "close_check")
+# 可选字段：**显式给了才校验并写入**（缺失才写，已有值不覆盖），缺省不写、不补默认值。`project_type`
+# 是历史兼容字段，取值单一、读取方不据此分支；新装不再强填，旧项目里的值照读。
+CONFIG_OPTIONAL_FIELDS = ("project_type",)
 
 # 模块级自检：`CONFIG_USER_FIELDS` 的成员会在 main() 里被 `source[k]` 无兜底取值
 # （`source` 是 params 或 PARAM_DEFAULTS，而 `load_params` 以 PARAM_DEFAULTS 打底——
@@ -1286,6 +1282,8 @@ def preflight_params(params: dict):
     校验失败即抛 ParamError，调用方在写盘前就退出，目标目录保持原样。
     """
     for field, allowed in CONFIG_FIELD_ENUM.items():
+        if field not in params and field in CONFIG_OPTIONAL_FIELDS:
+            continue                      # 可选字段缺省 = 不写；显式给了（含 null）就照枚举校验
         val = params.get(field)
         if val not in allowed:
             raise ParamError(
@@ -1520,7 +1518,8 @@ def load_params(params_path: Path) -> dict:
     if missing:
         raise ParamError(f"params missing required field(s): {', '.join(missing)}")
     params = dict(PARAM_DEFAULTS)
-    params.update({k: v for k, v in raw.items() if v is not None})
+    # null 按「没给」处理、落回默认值；可选字段没有默认值，显式 null 留着交给 preflight 拒绝
+    params.update({k: v for k, v in raw.items() if v is not None or k in CONFIG_OPTIONAL_FIELDS})
     return params
 
 
@@ -1732,7 +1731,6 @@ def project_docs_targets(project_dir: Path, params: dict, skills_rel=None):
           {
               "PROJECT_NAME": params["project_name"],
               "FRAMEWORK_VERSION": read_framework_version(),
-              "PROJECT_TYPE": params["project_type"],
               "CREATED_DATE": today,
           },
           "claude-md-template.md", "claude-md-template.md")),
@@ -1788,8 +1786,8 @@ def write_workframe_config(project_dir: Path, framework_path=None, user_fields=N
     """写 .workframe-config.json — 框架字段刷新 + 用户字段保留（merge 模式）。
 
     Merge 行为：
-      - read existing → 仅刷新框架管理字段（project_name / framework_version /
-        framework_path）→ 写回；用户配置字段（project_type / dormant_profile /
+      - read existing → 仅刷新框架管理字段（project_name / framework_path；framework_version
+        只在缺键时写入，是创建史）→ 写回；用户配置字段（project_type / dormant_profile /
         role_profile 及任何其他用户加的字段）保留不动
       - 损坏 / 非 dict 时**不破坏用户文件**，返回 warning 让调用方处理
 
@@ -1829,10 +1827,12 @@ def write_workframe_config(project_dir: Path, framework_path=None, user_fields=N
     # project_name 是**展示名**（启动横幅与报告用），目录名只是存放位置，两者可以不同。
     # 取值优先级：本次显式传入 > 项目里已有的 > 目录名兜底。
     # 中间那档不能省——没有它，一次不带 --params 的重跑（修骨架 / 无人值守流程）会把用户
-    # 设过的展示名**静默冲回目录名**（2026-08-10 实测确认）。framework_version 则相反，
-    # 它是框架自己的字段，每次都该刷新到最新。
+    # 设过的展示名**静默冲回目录名**（2026-08-10 实测确认）。
+    # framework_version 只作**创建史**：缺键时写入当时的版本，已有值一律不动——它不是「当前版本」，当前版本
+    # 按各门实际加载的插件读（插件根下 `.claude-plugin/plugin.json`）。重跑时刷新它会让一个说不清来历的数字
+    # 冒充当前状态（实测两个项目都停在 1.0.0、实际 1.3.0：升级从不重跑 scaffold，刷新也只是偶发）。
     existing["project_name"] = project_name or existing.get("project_name") or project_dir.name
-    existing["framework_version"] = read_framework_version()
+    existing.setdefault("framework_version", read_framework_version())
     if framework_path:
         existing["framework_path"] = str(framework_path).replace("\\", "/")
 
@@ -2046,8 +2046,8 @@ def plan_entries(project_dir: Path, params, subscription, home_dir=None):
     # .workframe-config.json —— 恒写（merge），不是 *_if_absent
     cfg = project_dir / ".workframe-config.json"
     if cfg.exists():
-        buckets[PLAN_BUCKET_MOD].append((rel(cfg), "merge：刷新框架字段（project_name / "
-                                                   "framework_version），你已有的字段一个不动；本项不落备份"))
+        buckets[PLAN_BUCKET_MOD].append((rel(cfg), "merge：刷新框架字段（project_name），"
+                                                   "你已有的字段一个不动（framework_version 已有就保留）；本项不落备份"))
     else:
         buckets[PLAN_BUCKET_NEW].append((rel(cfg), "项目身份与运行档位配置"))
 
@@ -2368,12 +2368,13 @@ def main():
         print(f"[scaffold] created target directory {project_dir}")
 
     # CONFIG_USER_FIELDS 总是写（缺失才写，已有值绝不覆盖）。不带 --params 时取 PARAM_DEFAULTS——
-    # 无人值守 / CI 场景没有对话可采集，但配置不能是残缺的：doctor 第 0 组把三个枚举字段缺失
+    # 无人值守 / CI 场景没有对话可采集，但配置不能是残缺的：doctor 第 0 组把必填的枚举字段缺失
     # 判为 error，留空等于让每个非对话安装出来就是红的。默认值本身也正是 launcher 推不出来时
     # 会填的。`source[k]` 无兜底取值的安全性由模块顶部的 CONFIG_USER_FIELDS ⊆ PARAM_DEFAULTS
-    # 自检保证。
+    # 自检保证。`CONFIG_OPTIONAL_FIELDS` 只在 params 显式给了时写。
     source = params or PARAM_DEFAULTS
     user_fields = {k: source[k] for k in CONFIG_USER_FIELDS}
+    user_fields.update({k: params[k] for k in CONFIG_OPTIONAL_FIELDS if params and params.get(k) is not None})
     config_path, config_warning = write_workframe_config(
         project_dir,
         user_fields=user_fields,

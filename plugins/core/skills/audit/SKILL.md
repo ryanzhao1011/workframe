@@ -1,6 +1,6 @@
 ---
 name: audit
-description: 审计最近一段时间的自动维护活动（events / proposals / decay / digest），给用户汇总报告
+description: 审计最近一段时间的自动维护活动（events / proposals / decay / drift），给用户汇总报告
 user-invocable: true
 disable-model-invocation: true
 allowed-tools: [Read, Glob, Grep, Bash]
@@ -8,7 +8,7 @@ allowed-tools: [Read, Glob, Grep, Bash]
 
 # /core:audit 审计维护活动
 
-后台自迭代另读 `workframe-selfiter status --project <项目根>` 的 job/操作结果与 AUTO 待批记录，按作业编号串起来源、改动、延期/失败与复测；人类可读摘要在状态目录 `selfiter/history.md`。inconclusive 单列，不算成功或失败；模型建议不计为实际写入。发现恢复中的 journal 要说明，不以存在 result 文件推断整个变更闭环。审计不批准提案、不启动模型、不改待批状态。
+后台自迭代另读 `workframe-selfiter status --project <项目根>` 的采证漏斗、作业的逐主题结论与旧 AUTO 待批记录，按作业编号串起来源、建议、延期/失败与复测；人类可读摘要在状态目录 `selfiter/history.md`。inconclusive 单列，不算成功或失败；模型建议不计为实际写入。发现恢复中的 journal 要说明，不以存在 result 文件推断整个变更闭环。审计不批准提案、不启动模型、不改待批状态。
 
 ## 用途
 
@@ -38,11 +38,10 @@ allowed-tools: [Read, Glob, Grep, Bash]
 3. 读取 `.workframe/state/events.jsonl` 近 N 天 — 按 type 分组统计（含 summary_drift_repaired / summary_drift_repair_skipped）
 4. Glob `projects/proposals/pending/*.yaml` — 列出待审批提案
 5. Glob `projects/proposals/applied/*.yaml` 过滤 `verified: null` — 列出待闭环验证
-6. Read `.workframe/state/session-digest-latest.md` — 上次会话摘要
-7. **Board summary drift check**（**只读不改**）：
-   - 调用只读检查命令（插件根路径从 `plugin-root.txt` 取，不依赖 PATH）：
+6. **Board summary drift check**（**只读不改**）：
+   - 调用只读检查命令（插件根取 `$WF_PLUGIN_ROOT`，即会话开场注入的「本会话插件根」，不依赖 PATH）：
      ```bash
-     python "$(cat .workframe/state/plugin-root.txt)/bin/workframe-audit-board-drift"
+     python "$WF_PLUGIN_ROOT/bin/workframe-audit-board-drift"
      ```
    - 输出文本格式：
      ```
@@ -51,8 +50,8 @@ allowed-tools: [Read, Glob, Grep, Bash]
      drift: <empty | field1=summary→actual, field2=...>
      ```
    - audit 只解析 `drift:` 行决定是否展示 drift 状态；不调用 `workframe-recompute-board-summary`（那个会写文件，违反 audit 默认只读的约束）。修复路径走 SessionStart drift check 自动 / `workframe-recompute-board-summary` 兜底命令
-   - 调用方式说明：`${CLAUDE_PLUGIN_ROOT}` 在 agent Bash 上下文不可用，CC 官方的 plugin `bin/` PATH 注入在部分环境也不生效（Windows + directory 订阅实测未注入），故统一走 `plugin-root.txt` 配方——该文件由 SessionStart hook 每次会话刷新为当前插件根（正斜杠绝对路径）。若环境里 `workframe-audit-board-drift` 恰好已在 PATH，裸调等价
-8. **纪律抽查**：按下方「纪律抽查」一节抽样、判定，结果进报告的「纪律抽查」段；**只有用户这次带了 `--record`**，才执行该节最后一步的写入
+   - 调用方式说明：`${CLAUDE_PLUGIN_ROOT}` 在 agent Bash 上下文不可用，CC 官方的 plugin `bin/` PATH 注入在部分环境也不生效（Windows + directory 订阅实测未注入），故统一走 `$WF_PLUGIN_ROOT` 配方——它是会话开场注入的「本会话插件根」（正在执行的这扇门的那一份，正斜杠绝对路径），执行前换成那个路径。若环境里 `workframe-audit-board-drift` 恰好已在 PATH，裸调等价
+7. **纪律抽查**：按下方「纪律抽查」一节抽样、判定，结果进报告的「纪律抽查」段；**只有用户这次带了 `--record`**，才执行该节最后一步的写入
 
 ## 纪律抽查
 
@@ -79,7 +78,7 @@ allowed-tools: [Read, Glob, Grep, Bash]
 
 ### 带 `--record` 时的写入（唯一的写入）
 
-报告输出完之后执行一次（插件根的取法与步骤 7 相同）：
+报告输出完之后执行一次（插件根的取法与步骤 6 相同）：
 
 ```bash
 python "<插件根>/bin/workframe-event" discipline-spotcheck --sessions-sampled cc=<场数>,codex=<场数> --criterion S1=<适用次数>/<违规次数> --criterion S2=<适用次数>/<违规次数> --criteria-version 1 --role main --harness <当前门 cc|codex>
@@ -119,7 +118,9 @@ Codex 的 `PostToolUse` 对**失败的**工具调用不触发，任何以它为�
 > 判 `full` 但投递未确立（该门零计数同样可能是结构性的）：<full_but_delivery_unverified.codex>。
 
 ### 📊 事件统计
-- skill_used: X 次（top: librarian ×5 / task-management ×3）
+- skill_used（模型自报）: X 次（top: core:librarian ×5 / core:task-management ×3）
+- skill_invoked（hook 记的调起，不与上一行相加；Codex 门不采集）: Y 次
+  > 技能名按 skill-metrics.yaml 的键照抄（已把裸名与 `core:` 名归一）；两行差多少不说明谁漏记——计数单位与覆盖的门都不同
 - rule_triggered: N/A（无 deterministic producer，字段保留仅为兼容；见 event-schema.json）
 - user_correction: Z 次（problem 信号）
 - task_blocked: W 次
@@ -134,15 +135,14 @@ Codex 的 `PostToolUse` 对**失败的**工具调用不触发，任何以它为�
 ### 🏁 活动指标
 - session_counter: xxx
 - active_sessions_30: yy
-- dormant: false (profile=normal)
+- dormant: false (profile=normal，取自 `.workframe-config.json`)
 - wake_up_pending: false
-- last_digest_at: <ISO>
 
 ### ⚠️ pending_maintenance（按 severity 排序）
-- 总数：N 条（open: N1 / closed: N2）
+- 总数：N 条（open: N1 / closed: N2 / retired: N3；明细只列 `memory_backlog` / `close_check_due`，`problem_threshold` / `activity_threshold` / `completed_delta` / `cadence_timeout` 已不再产出、会自动退役清理，不论状态都不列、不建议关闭）
 - critical: ...
 - warn: ...
-  - [PM-20260424-003] cadence_timeout — 距上次自迭代 10 天
+  - [PM-20260424-003] close_check_due — 2 个模块有 stale 标记未清
 - info: ...
 
 > 关闭指定条目请使用 `/core:maintenance-review --dismiss <PM-ID>`（audit 默认只读，唯一的写入是 `--record` 追加的那条抽查事件；修改状态的写操作归 maintenance-review）。

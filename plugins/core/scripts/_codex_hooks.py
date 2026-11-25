@@ -12,13 +12,15 @@
      （`CC_ONLY_SCRIPTS`），去完为空的组与事件整段不出现；
   2. 每条命令的 `--harness cc` 换成 `--harness codex`（恰好一处，多一处少一处都报错）；
   3. 打包器的分片挂载（`inject-context.py … --shard i/n`）同一 (事件, scope) 合成**一条**
-     `--shard all`，位置取第一片所在位置；
+     `--shard all`，位置取第一片所在位置；角色记忆的 `--part` 挂载同样合成一条、去掉该参数
+     （分份只为 CC 的单条上限，Codex 这一门不限长）；
   4. 每条补 `commandWindows`（Windows + PowerShell 专用形态：`& "<launcher>.cmd" …`，
      正斜杠、`.cmd` 必加、不写解释器绝对路径——三条硬约束由 validate 钉）；
   5. 注入类事件（`CODEX_INJECTOR_EVENTS`）每条 `additionalContextLimit: 0`（不限 spill）；
      工具事件（`CODEX_TOOL_EVENTS`）每条 `additionalContextLimit: CODEX_TOOL_CONTEXT_LIMIT`（正整数上限）；
      其他事件不带该键——`Stop` / `SubagentStop` / `SessionEnd` 带它实测只是 `hooks/list`
      报 warning 并忽略该字段（条目保留）；本规则严于实测、方向 fail-safe；
+     `SessionEnd` 每条带 `timeout: CODEX_SESSION_END_TIMEOUT`——不写时 Codex 只给 1 秒、到点连进程树一起杀；
   6. `UserPromptSubmit` 首组末尾追加 Codex 专用纪律 hook（`--scope prompt`，`CODEX_EXTRA`）。
      **首组而不是最后一组**：一个事件下有多个组时（如 `SessionStart` 还有 matcher `compact` 的补投组），
      追加到最后一组会让追加的那条换组、换 key，也只在那一组的 matcher 命中时才跑。
@@ -61,6 +63,11 @@ CODEX_INJECTOR_EVENTS = ("SessionStart", "UserPromptSubmit", "SubagentStart")
 # 按 UTF-16 码元计、中文每个 3 字节，故上限 ≥ 9500 × 3 ÷ 4 ≈ 7125；取 8000 留余量。validate 从加载器的预算现算下限。
 CODEX_TOOL_EVENTS = ("PreToolUse", "PostToolUse")
 CODEX_TOOL_CONTEXT_LIMIT = 8000
+# `SessionEnd` 的 hook 超时（秒）：Codex 缺省 1、上限 3，超限夹回 3 并报 warning（官方 hooks 文档与 0.169.0 源码
+# `SESSION_END_DEFAULT_TIMEOUT_SEC` / `SESSION_END_MAX_TIMEOUT_SEC`；codex exec 实测：不写时约 1.0 s 被杀、写 3 时约 3.0 s）。
+# 从 PowerShell 起算的整条链在 Windows 空闲机器上就要约 1 秒，用缺省值等于每次都贴着上限跑。
+CODEX_SESSION_END_EVENT = "SessionEnd"
+CODEX_SESSION_END_TIMEOUT = 3
 # 事件 Codex 也有、但脚本防的东西只存在于 Claude Code 门的挂载：派生时整条去掉。
 # `dispatch-name-guard.py` 拦的是「带 `name` 的 Agent 派发变成 agent teams 队友」——Codex 没有
 # Agent 工具与 agent teams，挂过去只会多一条要用户批信任、永不命中的 hook。
@@ -94,6 +101,7 @@ HOOK_JSON_TOKEN = "--output hook-json"
 
 _HARNESS_CC_RE = re.compile(r"(?<!\S)--harness cc(?!\S)")
 _SHARD_RE = re.compile(r"--shard \d+/\d+")
+_PART_RE = re.compile(r"(?<=scripts/subagent-memory-inject\.py\") (--harness cc) --part (?:shared|role)$")
 _SCOPE_RE = re.compile(r"--scope (\w+)")
 
 
@@ -144,6 +152,8 @@ def hook_entry(event, command):
         entry["additionalContextLimit"] = 0
     elif event in CODEX_TOOL_EVENTS:
         entry["additionalContextLimit"] = CODEX_TOOL_CONTEXT_LIMIT
+    elif event == CODEX_SESSION_END_EVENT:
+        entry["timeout"] = CODEX_SESSION_END_TIMEOUT
     return entry
 
 
@@ -156,7 +166,7 @@ def derive(cc_data):
     for event, groups in hooks.items():
         if event in CODEX_ABSENT_EVENTS:
             continue
-        seen_scopes = set()
+        seen_scopes, seen_parts = set(), set()
         new_groups = []
         event_had_cc_only = False
         for grp in groups or []:
@@ -178,6 +188,11 @@ def derive(cc_data):
                         continue                      # 同 (事件, scope) 只留第一片的位置
                     seen_scopes.add(scope)
                     cmd = _SHARD_RE.sub(SHARD_ALL_TOKEN, cmd, count=1)
+                if _PART_RE.search(cmd):
+                    cmd = _PART_RE.sub(r" \1", cmd, count=1)
+                    if cmd in seen_parts:
+                        continue                      # 同一命令的各份只留第一份的位置
+                    seen_parts.add(cmd)
                 new_hooks.append(hook_entry(event, codex_command(cmd)))
             event_had_cc_only = event_had_cc_only or cc_only_dropped
             if new_hooks or not cc_only_dropped:
@@ -259,18 +274,20 @@ def count_hooks(data, events=None):
 def independent_count(cc_data, shard_count_of):
     """**不经生成器**、直接从 CC 清单算出的 Codex 条数：
 
-        CC 总条数 − 缺口事件的条数 − CC 专有脚本的条数 − Σ_scope (n_scope − 1) ＋ 追加的条数
+        CC 总条数 − 缺口事件的条数 − CC 专有脚本的条数 − Σ_scope (n_scope − 1) − Σ_事件 (分份挂载数 − 1) ＋ 追加的条数
 
     `shard_count_of(scope)` 由调用方给（打包器现算的片数），这样这个数与生成器的
     合成逻辑不同源——生成器少走一步（比如漏合成某个 scope）时两个数对不上。
     """
     total = count_hooks(cc_data)
     absent = count_hooks(cc_data, CODEX_ABSENT_EVENTS)
-    cc_only = 0
+    cc_only = part_dropped = 0
     scopes = []
     for event, groups in (cc_data.get("hooks") or {}).items():
         if event in CODEX_ABSENT_EVENTS:
             continue
+        part_dropped += max(sum("/subagent-memory-inject.py\" --harness cc --part " in (h.get("command") or "") for grp in groups or []
+                                for h in grp.get("hooks") or []) - 1, 0)
         for grp in groups or []:
             for h in grp.get("hooks") or []:
                 cmd = h.get("command") or ""
@@ -282,4 +299,4 @@ def independent_count(cc_data, shard_count_of):
                     if m and m.group(1) not in scopes:
                         scopes.append(m.group(1))
     collapsed = sum(max(int(shard_count_of(s)), 1) - 1 for s in scopes)
-    return total - absent - cc_only - collapsed + len(CODEX_EXTRA)
+    return total - absent - cc_only - collapsed - part_dropped + len(CODEX_EXTRA)

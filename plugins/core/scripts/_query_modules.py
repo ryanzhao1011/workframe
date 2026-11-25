@@ -4,6 +4,7 @@ import importlib
 from pathlib import Path
 
 from _coverage_probe import frontmatter_block
+from _doc_state import ABSENT, MARK_KEY, effective_state
 from _harness import is_dir_link
 from _query_board import normalized_date, parse_detail, yaml_warning
 from _query_paths import project_relative
@@ -26,6 +27,7 @@ def document_metadata(text):
 
 
 def document_text(text, rel, kind, warnings):
+    raw = text.encode("utf-8")       # 判「未编写」按原文的行，不按下面归一过换行的副本
     text = text.lstrip(chr(0xFEFF)).replace("\r\n", "\n").replace("\r", "\n")
     lines = text.splitlines()
     if frontmatter_block(text) is not None:
@@ -38,11 +40,16 @@ def document_text(text, rel, kind, warnings):
         metadata = document_metadata(text)
     except Exception as exc:
         metadata, problem = {}, f"{rel}: {type(exc).__name__}: {exc}"
+    # Only a stamped skeleton whose body is unchanged counts as unwritten; a literal
+    # `true` (unstamped) or a damaged frontmatter is shown as written, so real text is
+    # never hidden behind the flag.
+    unwritten = problem is None and effective_state(
+        raw, metadata.get(MARK_KEY, ABSENT)) == "unwritten"
     return {"kind": kind, "title": str(metadata.get("title") or heading), "path": rel,
             "type": str(metadata["type"]) if metadata.get("type") is not None else None,
             "status": str(metadata["status"]) if metadata.get("status") is not None else None,
             "updated": normalized_date(metadata.get("updated"), warnings, rel + ".updated"),
-            "meta_error": problem}
+            "unwritten": unwritten, "meta_error": problem}
 
 
 def _document(path, project, kind, warnings):
@@ -57,6 +64,7 @@ def _document_source(path, project, kind, warnings):
     except (OSError, UnicodeError) as exc:
         doc = document_text("", rel, kind, warnings)
         doc["meta_error"] = f"{rel}: {type(exc).__name__}: {exc}"
+        doc["unwritten"] = False
         return doc, None
 
 
@@ -137,7 +145,8 @@ def _requirements(sub, project, warnings, error):
             else:
                 warnings.append(doc["meta_error"])
             children.append({"slug": child.name, "prd_path": doc["path"], "status": doc["status"],
-                             "description": str(description) if description is not None else None})
+                             "description": str(description) if description is not None else None,
+                             "unwritten": doc["unwritten"]})
         out.append({"slug": req.name, "title": str(title or req.name),
                     "status": str(meta["status"]) if meta.get("status") is not None else None, "subs": children})
     return out

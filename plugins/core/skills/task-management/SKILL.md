@@ -30,7 +30,7 @@ tasks:
     assigned_to: dev         # pm | dev | qa | prompt-eng | <project-role>
     created_at: "YYYY-MM-DD"
     updated_at: "YYYY-MM-DD"
-    deadline: null           # "YYYY-MM-DD" 可选；有截止要求才填。heartbeat-check.py 会扫此字段判逾期
+    deadline: null           # "YYYY-MM-DD" 可选；有截止要求才填。会话启动时据此提醒逾期
     depends_on: []           # 依赖的任务 ID 列表
     tags: []                 # 标签（合法值见下方约定）
     estimate_hours: 4        # 预估工时（小时）
@@ -75,7 +75,7 @@ modules/ 体系下，task 字段叠加 modules 归属：
   - 信号入账的 P0「需求变更」场景捕获到上线时间
   - 迭代计划任务（QBR / 发布窗口）
 - 何时不填：常规开发任务无刚性 deadline
-- heartbeat-check.py 使用：仅当 `deadline < today` 且 `status ∉ {completed, cancelled}` 时计为逾期
+- 会话启动（`session-start-prep.py`，休眠 / 唤醒会话不提）使用：仅当 `deadline < today` 且 `status ∉ {completed, cancelled}` 时计为逾期；每个逾期任务只列一次，一次最多列 5 个，没列到的下次接着列
 
 ### 生命周期字段（到那个状态才填）
 
@@ -171,7 +171,7 @@ modules/ 体系下，task 字段叠加 modules 归属：
 - **独立验证必须写 `verifier`**——hook 只查有没有写，不判写得真不真。
 - **类别判得对不对，hook 不判**：把该独立验证的写成「自理」，没有任何机器面会说话（判据在必载片 §谁签发这次收口）。
 - **`verified_ranges`** 是下一轮增量复核的锚点。不写它，下一轮只能退回全量复核或凭印象划范围。
-- 通过时 hook 自动记一行 `self_signoff` 事件（任务、类别、验证方），不用手写。
+- 通过时 hook 不写事件，也不用手写。
 
 **查哪些、不查哪些**：`completed_at` 不早于 2026-11-01、且带签注或打了 `main-executed` /
 `needs-qa-regression` 的已完成任务。之前完成的不追溯；被拦的只限**本次新出现或改过**的签注——原样未动的
@@ -222,21 +222,21 @@ summary.last_updated = 当前日期
 - 用户在会话中途需要看到最新 summary（未等到 SessionEnd）
 - 发现 summary 数字与实际 tasks 不符（可能是 hook 跳过 / 被强制退出 / 用户手工改动 board.yaml 格式）
 
-主 Claude 通过 Bash 调用插件内兜底命令（不重新实现统计公式；插件根路径从 `plugin-root.txt` 取，不依赖 PATH）：
+主 Claude 通过 Bash 调用插件内兜底命令（不重新实现统计公式；插件根取 `$WF_PLUGIN_ROOT`，即会话开场注入的「本会话插件根」，不依赖 PATH）：
 
 ```bash
-python "$(cat .workframe/state/plugin-root.txt)/bin/workframe-recompute-board-summary"
+python "$WF_PLUGIN_ROOT/bin/workframe-recompute-board-summary"
 ```
 
-`plugin-root.txt` 由 SessionStart hook 每次会话刷新为当前插件根（正斜杠绝对路径，Git Bash / macOS 通用）。若环境里 `workframe-recompute-board-summary` 恰好已在 PATH（CC plugin `bin/` 注入生效的环境），裸调等价。
+`$WF_PLUGIN_ROOT` 是会话开场注入的「本会话插件根」（正在执行的这扇门的那一份，正斜杠绝对路径），执行前换成那个路径。若环境里 `workframe-recompute-board-summary` 恰好已在 PATH（CC plugin `bin/` 注入生效的环境），裸调等价。
 
 脚本返回 JSON 表明结果（`status: ok / skipped / error`），并在 `events.jsonl` 写一条 `summary_recomputed` 事件。
 
 **强制终止 caveat**：如果 Claude Code 被强制终止（关闭窗口 / SIGKILL / OS shutdown），SessionEnd hook 不会触发——summary 会保持上次正常 flush 的值。
 
-**自动兜底**：`session-start-prep.py` 在每次 SessionStart 时执行 drift check（对比 summary vs tasks 实际计数），发现不一致自动调用 recompute 修复并写 `summary_drift_repaired` 事件。手工兜底主要用于"用户希望立即看到最新 summary 不等下次 session"或"drift check 因 board.yaml 异常而 skip"等场景。
+**自动兜底**：`session-start-prep.py` 在 SessionStart 时（休眠与等待唤醒的会话除外）执行 drift check（对比 summary vs tasks 实际计数），发现不一致自动调用 recompute 修复并写 `summary_drift_repaired` 事件。手工兜底主要用于"用户希望立即看到最新 summary 不等下次 session"或"drift check 因 board.yaml 异常而 skip"等场景。
 
-**SessionEnd timeout caveat**：SessionEnd hook 默认 1.5 秒整体 budget，**plugin-provided hooks 的 timeout 配置不会提升整体 budget**。如果项目 board.yaml 大到 recompute 超时（耗时随文件字节数增长，不随任务条数——任务正文写得长的看板，几百条就能到 MB 级），用户可设环境变量 `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS=5000`（或更高）。SessionStart drift check 兜底机制保证即使 SessionEnd 超时，下次启动仍能修复。
+**SessionEnd timeout caveat**（Claude Code；Codex 单条 hook 最多 3 秒、没有可调的变量）：SessionEnd hook 默认 1.5 秒整体 budget，**plugin-provided hooks 的 timeout 配置不会提升整体 budget**。如果项目 board.yaml 大到 recompute 超时（耗时随文件字节数增长，不随任务条数——任务正文写得长的看板，几百条就能到 MB 级），用户可设环境变量 `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS=5000`（或更高）。SessionEnd 超时后，由之后开会话时的 drift check 补上（条件见上一段）。
 
 ## 操作规范
 

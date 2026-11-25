@@ -34,7 +34,8 @@ class ControllerTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = (Path(self.temp.name) / 'project').resolve()
         self.root.mkdir()
-        (self.root / '.workframe-config.json').write_text('{}', encoding='utf-8', newline='')
+        (self.root / '.workframe-config.json').write_text(
+            '{"self_iteration": {"mode": "apply"}}', encoding='utf-8', newline='')
         self.home = Path(self.temp.name) / 'home'
         self.home.mkdir()
         self.c = Controller(self.root, home=self.home)
@@ -43,7 +44,7 @@ class ControllerTests(unittest.TestCase):
         self.target.write_text('# dev MEMORY\n\n## Work\n\n- Keep bytes.\n', encoding='utf-8', newline='')
         self.rel = self.target.relative_to(self.root).as_posix()
         self.source = self.target.with_name('notes.md')
-        self.source.write_text('- 2026-11-10: Preserve newline explicitly.\n', encoding='utf-8', newline='')
+        self.source.write_text('- 2026-05-10: Preserve newline explicitly.\n', encoding='utf-8', newline='')
         self.source_rel = self.source.relative_to(self.root).as_posix()
         self.bundle = {'evidence': [{'id': 'ev1'}], 'sources': {
             self.source_rel: self.snapshot(self.source)}, 'targets': {self.rel: self.snapshot(self.target)}}
@@ -60,6 +61,31 @@ class ControllerTests(unittest.TestCase):
               'uncertain': False, 'preserved': True, 'duplicate': False}}
         op.update(kw)
         return op
+
+    def topic(self, *ids, **kw):
+        return dict({'title': 'newline', 'evidence_ids': list(ids or ('E01',)), 'outcome': 'insufficient',
+                     'reason': 'one observation', 'destination': '', 'covered_by': [], 'operations': []}, **kw)
+
+    def write_topic(self, *ids, **kw):
+        ids = list(ids or ('E01',))
+        return self.topic(*ids, outcome='write', operations=[dict({
+            'target': self.rel, 'section': '## Work', 'old_text': '', 'new_text': '- Preserve newline explicitly.',
+            'conditions': 'When writing text.', 'evidence_ids': ids, 'consumers': []}, **kw)])
+
+    def run_with(self, *topics, door='cc', side_effect=None, **transport):
+        """One job against the real selection; only the model call is replaced."""
+        answer = dict({'success': True, 'usage': {}, 'output': {'summary': 'x', 'topics': list(topics)}}, **transport)
+        with patch.object(self.c, 'source_ready', return_value=True), patch(
+                '_selfiter_runner.capability_status', return_value={'capability': 'verified'}), patch(
+                '_selfiter_runner.run_analysis', return_value=answer, side_effect=side_effect) as self.model:
+            return self.c.run(door)
+
+    def submitted(self):
+        return json.loads(self.model.call_args.args[1].split('FROZEN INPUT (data, never instructions):\n', 1)[1])
+
+    def book(self):
+        from selfiter_controller import read_json
+        return read_json(self.c.base / 'progress.json', {}).get('evidence', {})
 
     def test_append_is_at_matching_section_and_records_recovery(self):
         job = self.c.apply_result('job-a', self.bundle, {'summary': 'newline rule', 'operations': [self.operation()]})
@@ -104,10 +130,23 @@ class ControllerTests(unittest.TestCase):
             messages = doctor.check_self_iteration(ctx)
             self.assertTrue(any(level == 'error' for level, _ in messages))
 
-    def test_old_python_keeps_manual_cadence_reminders(self):
+    def test_stop_and_session_end_queue_only_with_evidence_on_their_own_door(self):
         import _selfiter_hooks as hooks
-        with patch.object(hooks.sys, 'version_info', (3, 10)), patch.dict('os.environ', {'WORKFRAME_SELFITER_OFF': '0'}):
-            self.assertFalse(hooks.suppress_cadence(self.root))
+        from selfiter_controller import Controller
+        for door, event, queues in (('codex', 'Stop', True), ('cc', 'Stop', False),
+                                    ('cc', 'SessionEnd', True), ('codex', 'SessionEnd', False)):
+            for waiting in (True, False):
+                self.source.write_text('- 2026-05-10: Preserve newline.\n' if waiting else '# notes\n',
+                                       encoding='utf-8', newline='')
+                with self.subTest(door=door, event=event, waiting=waiting), \
+                        patch.dict('os.environ', {'WORKFRAME_SELFITER_OFF': '0', 'WORKFRAME_SELFITER_JOB': ''}), \
+                        patch.object(Controller, 'configuration', return_value={'mode': 'apply', 'doors': ['cc', 'codex']}), \
+                        patch.object(Controller, 'queue') as queue:
+                    hooks.on_hook(self.root, door, event)
+                    if queues and waiting:
+                        queue.assert_called_once_with(door)
+                    else:
+                        queue.assert_not_called()
 
     def test_insufficient_opportunities_stop_after_two_extensions(self):
         from datetime import timedelta
@@ -116,11 +155,10 @@ class ControllerTests(unittest.TestCase):
         self.c.apply_result('job-a', self.bundle, {'summary': 'x', 'operations': [self.operation()]})
         journal_path = self.c.job_dir('job-a') / 'journal.json'
         before = self.target.read_bytes()
-        with patch('_selfiter_evidence.collect_evidence', return_value={'evidence': []}):
-            for expected_extensions in (1, 2, 2):
-                journal = read_json(journal_path)
-                self.c.verify_due(parse_time(journal['operations'][0]['next_check_at']) + timedelta(seconds=1))
-                self.assertEqual(read_json(journal_path)['operations'][0]['extensions'], expected_extensions)
+        for expected_extensions in (1, 2, 2):
+            journal = read_json(journal_path)
+            self.c.verify_due(parse_time(journal['operations'][0]['next_check_at']) + timedelta(seconds=1))
+            self.assertEqual(read_json(journal_path)['operations'][0]['extensions'], expected_extensions)
         item = read_json(journal_path)['operations'][0]
         self.assertEqual(item['verification_state'], 'inconclusive')
         self.assertEqual(self.target.read_bytes(), before)
@@ -128,23 +166,44 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual([e['result'] for e in events if e['type'] == 'proposal_verified'], ['inconclusive'])
 
     def test_new_recurrence_creates_one_repair_without_changing_memory(self):
+        """Written, comes back, found at session start, queued by either door, analysed alone, stays frozen."""
+        import _selfiter_hooks as hooks
         from datetime import timedelta
-        from _selfiter_policy import parse_time
-        from selfiter_controller import read_json, write_json
+        from _selfiter_policy import digest, parse_time
+        from selfiter_controller import read_json
         self.c.apply_result('job-a', self.bundle, {'summary': 'x', 'operations': [self.operation()]})
         journal_path = self.c.job_dir('job-a') / 'journal.json'
-        journal = read_json(journal_path)
-        journal['operations'][0]['problem_keys'] = ['problem-a']
-        write_json(journal_path, journal)
+        item = read_json(journal_path)['operations'][0]
         before = self.target.read_bytes()
-        recurrence = {'evidence': [{'problem_key': 'problem-a', 'events': [
-            {'ts': (parse_time(journal['operations'][0]['created_at']) + timedelta(seconds=1)).isoformat()}]}]}
-        with patch('_selfiter_evidence.collect_evidence', return_value=recurrence):
-            self.c.verify_due()
-            self.c.verify_due()
-        self.assertEqual(read_json(journal_path)['operations'][0]['verification_state'], 'fail')
-        self.assertEqual(len(list((self.root / 'projects/proposals/pending').glob('*.json'))), 1)
+        self.source.write_text('# notes\n', encoding='utf-8', newline='')  # only the repair is left
+        self.c.verify_due()
+        self.assertEqual(read_json(journal_path)['operations'][0]['verification_state'], 'pending')
+        for days, state in ((-1, 'pending'), (1, 'fail')):  # an older event is not a recurrence
+            event = {'type': 'user_correction', 'scope': 'main', 'summary': 'again', 'entry_key': item['entry_key'],
+                     'ts': (parse_time(item['created_at']) + timedelta(days=days)).isoformat()}
+            with (self.c.state / 'events.jsonl').open('a', encoding='utf-8', newline='') as stream:
+                stream.write(json.dumps(event) + '\n')
+            with patch('selfiter_controller.Controller.queue'):
+                hooks.on_hook(self.root, 'cc', 'SessionStart', 's')
+            self.assertEqual(read_json(journal_path)['operations'][0]['verification_state'], state)
+        self.c.verify_due()
+        failed = read_json(journal_path)['operations'][0]
+        self.assertTrue(failed['frozen'])
+        self.assertEqual([r['summary'] for r in failed['recurrence']], ['again'])
+        for door, event in (('cc', 'SessionEnd'), ('codex', 'Stop')):
+            with patch('selfiter_controller.Controller.queue') as queue:
+                hooks.on_hook(self.root, door, event)
+            queue.assert_called_once_with(door)
+        result = self.run_with(self.write_topic(old_text='- Keep bytes.', new_text='- Keep bytes exactly.'))
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual([e['type'] for e in self.submitted()['evidence']], ['repair'])
+        self.assertEqual(result['topics'][0]['operations'][0]['status'], 'suggested')
         self.assertEqual(self.target.read_bytes(), before)
+        self.assertFalse((self.root / 'projects/proposals').exists())
+        self.assertEqual(read_json(journal_path)['operations'][0]['verification_state'], 'fail')
+        self.assertEqual(self.book()[digest(['repair', item['op_id']])]['state'], 'seen')
+        self.assertFalse(read_json(self.c.base / 'progress.json').get('circuit_open'))
+        self.assertEqual(self.c.scan()['trigger'], [], 'a finished look must not queue itself again')
 
     def test_replay_does_not_append_twice(self):
         out = {'summary': 'x', 'operations': [self.operation()]}
@@ -243,30 +302,139 @@ class ControllerTests(unittest.TestCase):
 
     def test_untrusted_connected_codex_defers_before_quota(self):
         import _codex_trust as trust
-        with patch.object(self.c, 'source_ready', return_value=True), patch(
-                '_selfiter_evidence.collect_evidence', return_value=dict(self.bundle, fingerprint='fixture')), patch(
-                '_codex_trust.diagnose', return_value=trust.Diagnosis(trust.NEEDS_TRUST, 'fixture untrusted')), patch.object(
-                self.c, 'reserve') as reserve, patch('_selfiter_runner.run_analysis') as run:
-            result = self.c.run('codex')
+        with patch('_codex_trust.diagnose', return_value=trust.Diagnosis(trust.NEEDS_TRUST, 'fixture untrusted')), \
+                patch.object(self.c, 'reserve') as reserve:
+            result = self.run_with(door='codex')
         self.assertEqual(result['status'], 'deferred')
         self.assertIn('trust', result['reason'])
         reserve.assert_not_called()
-        run.assert_not_called()
+        self.model.assert_not_called()
 
     def test_circuit_stays_propose_until_explicit_resume(self):
         from selfiter_controller import read_json, write_json
-        progress = {'consumed_ids': [], 'fingerprints': [], 'failures': 3}
+        progress = {'consumed_ids': [], 'fingerprints': [], 'failures': 3,
+                    'evidence': {'stuck': {'state': 'paused', 'misses': 3}, 'broken': None}}
         write_json(self.c.base / 'progress.json', progress)
-        with patch.object(self.c, 'source_ready', return_value=True), patch(
-                '_selfiter_evidence.collect_evidence', return_value=dict(self.bundle, fingerprint='fixture')), patch(
-                '_selfiter_runner.capability_status', return_value={'capability': 'verified'}), patch(
-                '_selfiter_runner.run_analysis', return_value={'success': True, 'output': {
-                    'summary': 'x', 'operations': [self.operation()]}, 'usage': {}}):
-            result = self.c.run('cc')
-        self.assertEqual(result['operations'][0]['status'], 'pending')
+        before = self.target.read_bytes()
+        result = self.run_with(self.write_topic())
+        self.assertEqual(result['mode'], 'suggest_only')
+        self.assertEqual(self.target.read_bytes(), before)
         self.assertTrue(read_json(self.c.base / 'progress.json').get('circuit_open'))
         self.c.resume()
         self.assertFalse(read_json(self.c.base / 'progress.json')['circuit_open'])
+        self.assertEqual(self.book()['stuck'], {'state': 'open', 'misses': 0})
+
+    def test_resume_does_not_confirm_a_recurrence_nobody_looked_at(self):
+        from selfiter_controller import read_json, write_json
+        self.source.write_text('# notes\n', encoding='utf-8', newline='')
+        self.c.apply_result('job-a', dict(self.bundle, sources={self.source_rel: self.snapshot(self.source)}),
+                            {'summary': 'x', 'operations': [self.operation()]})
+        path = self.c.job_dir('job-a') / 'journal.json'
+        journal = read_json(path)
+        journal['operations'][0]['verification_state'] = 'fail'
+        write_json(path, journal)
+        self.assertEqual(self.c.scan()['trigger'], ['repair'])
+        self.c.resume()
+        self.assertEqual(self.c.scan()['trigger'], ['repair'])
+        progress = read_json(self.c.base / 'progress.json')
+        progress['acknowledged_failures'] = [journal['operations'][0]['op_id']]  # from the previous release
+        write_json(self.c.base / 'progress.json', progress)
+        selection = self.c.scan()
+        self.assertEqual((selection['trigger'], selection['funnel']['repair']), ([], {'total': 1, 'acknowledged': 1}))
+
+    def test_broken_journal_dates_do_not_stop_other_items(self):
+        from selfiter_controller import read_json, write_json
+        self.c.apply_result('job-a', self.bundle, {'summary': 'x', 'operations': [self.operation()]})
+        path = self.c.job_dir('job-a') / 'journal.json'
+        journal = read_json(path)
+        good = dict(journal['operations'][0], next_check_at='2026-01-01T00:00:00+00:00')
+        journal['operations'] = [dict(good, op_id='a', next_check_at=None), dict(good, op_id='b', extensions=None), good]
+        write_json(path, journal)
+        self.c.verify_due()
+        self.assertEqual([i['extensions'] for i in read_json(path)['operations']], [0, None, 1])
+
+    def test_a_correction_that_says_nothing_is_no_recurrence(self):
+        from datetime import timedelta
+        from _selfiter_policy import parse_time
+        from selfiter_controller import read_json
+        self.c.apply_result('job-a', self.bundle, {'summary': 'x', 'operations': [self.operation()]})
+        path = self.c.job_dir('job-a') / 'journal.json'
+        item = read_json(path)['operations'][0]
+        for summary, state in ((['a', 'list'], 'pending'), (' ', 'pending'), ('again', 'fail')):
+            with (self.c.state / 'events.jsonl').open('a', encoding='utf-8', newline='') as stream:
+                stream.write(json.dumps({'type': 'user_correction', 'scope': 'dev', 'summary': summary,
+                                         'entry_key': item['entry_key'], 'ts': (
+                                             parse_time(item['created_at']) + timedelta(days=1)).isoformat()}) + '\n')
+            self.c.verify_due()
+            self.assertEqual(read_json(path)['operations'][0]['verification_state'], state, summary)
+
+    def test_broken_proposal_defers_by_name_and_never_crashes_the_session(self):
+        import _selfiter_hooks as hooks
+        import workframe_doctor as doctor
+        path = self.root / 'projects/proposals/pending/AUTO-broken.json'
+        path.parent.mkdir(parents=True)
+        for text in ('{', '[]', '{"source_ids": [1]}', '{"additional_evidence": [1]}', '{"source_ids": "one"}'):
+            path.write_text(text, encoding='utf-8', newline='')
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(ValueError, 'AUTO-broken.json'):
+                    self.c.scan()
+                with patch('selfiter_controller.Controller.queue') as queue:
+                    self.assertIsNone(hooks.on_hook(self.root, 'codex', 'Stop'))
+                queue.assert_not_called()
+                with patch('selfiter_controller.Controller', return_value=self.c):
+                    messages = doctor.check_self_iteration({'paths': SimpleNamespace(project=self.root)})
+                self.assertTrue(any(level == 'error' and 'AUTO-broken.json' in m for level, m in messages))
+
+    def test_undecodable_event_costs_one_line_and_no_quota(self):
+        self.c.state.mkdir(parents=True, exist_ok=True)
+        (self.c.state / 'events.jsonl').write_bytes(b'{"type": "\xff"}\n{"type": "skill_used"}\n')
+        self.assertEqual([e['type'] for e in self.c.events()], ['skill_used'])
+        self.assertEqual(self.run_with(self.topic())['status'], 'completed')
+
+    def test_withdrawn_note_gets_no_conclusion(self):
+        def analysis(*args, **kwargs):
+            self.source.write_text('# notes\n', encoding='utf-8', newline='')
+            return {'success': True, 'usage': {}, 'output': {'summary': 'x', 'topics': [self.write_topic()]}}
+        result = self.run_with(side_effect=analysis)
+        self.assertEqual((result['not_concluded'], result['topics'][0]['operations'][0]['status']), (['E01'], 'rejected'))
+
+    def test_report_saved_before_a_crash_is_settled_without_another_call(self):
+        from selfiter_controller import read_json
+        from selfiter_controller import write_json
+        write_json(self.c.base / 'progress.json', {'consumed_ids': [], 'fingerprints': [], 'failures': 2})
+        with patch.object(self.c, 'settle', side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.run_with(self.topic())
+        self.assertEqual(self.book(), {})
+        done = self.c.base / 'jobs/20260101T000000Z-done'  # a report nobody marked as pending is left alone
+        write_json(done / 'result.json', {'job_id': done.name, 'mode': 'suggest_only', 'status': 'completed',
+                                          'evidence': {'x': {}}})
+        for _ in range(2):
+            with patch('selfiter_controller.frequency_reason', return_value=None):
+                self.assertEqual(self.run_with(self.topic())['status'], 'no_evidence')
+            self.model.assert_not_called()
+            (record,) = self.book().values()
+            self.assertEqual((record['state'], record['looks']), ('seen', 1))
+        self.assertEqual(len(list((self.c.base / 'jobs').glob('*/result.json'))), 2)
+        self.assertEqual(read_json(self.c.base / 'progress.json')['failures'], 0)
+        self.assertEqual([e['type'] for e in self.c.events()].count('selfiter_job_finished'), 1)
+        self.assertIn('insufficient: newline', (self.c.base / 'history.md').read_text(encoding='utf-8'))
+
+    def test_failed_second_look_reopens_an_item_but_an_unanswered_one_does_not(self):
+        bundle = {'evidence': [{'id': 'x', 'context': {}, 'scope': 'dev', 'text': 't'}]}
+        for problems, state in ((['operation_rejected'], 'open'), (['baseline_changed'], 'open'), (['not_answered'], 'seen')):
+            progress = {'evidence': {'x': {'state': 'seen', 'looks': 1, 'job_id': 'first', 'conclusions': [1]}}}
+            self.c.settle(progress, 'second', bundle, {'evidence': {'x': {
+                'concluded': False, 'conclusions': [], 'problems': problems}}})
+            self.assertEqual(progress['evidence']['x']['state'], state, problems)
+
+    def test_whole_package_of_the_previous_release_is_not_analysed_again(self):
+        from _selfiter_candidates import build_input
+        from selfiter_controller import write_json
+        bundle, _, _ = build_input(self.c.scan(), 80000)
+        write_json(self.c.base / 'progress.json', {'consumed_ids': [], 'fingerprints': [bundle['fingerprint']], 'failures': 0})
+        self.assertEqual(self.run_with(self.topic())['status'], 'already_processed')
+        self.model.assert_not_called()
 
     def test_saved_report_contains_frozen_identity_and_evidence_fingerprint(self):
         from selfiter_controller import read_json
@@ -277,23 +445,16 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(report['project'], self.c.identity)
 
     def test_old_event_log_does_not_hide_small_new_evidence_from_model(self):
-        rel = (self.c.state / 'events.jsonl').relative_to(self.root).as_posix()
-        bundle = dict(self.bundle, fingerprint='fixture', sources=dict(self.bundle['sources'], **{
-            rel: {'text': 'unrelated old activity\n' * 4000, 'sha256': 'whole-file-hash'}}))
-        with patch.object(self.c, 'source_ready', return_value=True), patch(
-                '_selfiter_evidence.collect_evidence', return_value=bundle), patch(
-                '_selfiter_runner.capability_status', return_value={'capability': 'verified'}), patch(
-                '_selfiter_runner.run_analysis', return_value={'success': True, 'usage': {},
-                    'output': {'summary': 'covered', 'operations': [self.operation(kind='no_change')]}}) as run:
-            result = self.c.run('cc')
-        self.assertEqual(result['status'], 'completed')
-        prompt = run.call_args.args[1]
-        self.assertIn('ev1', prompt)
-        self.assertIn('whole-file-hash', prompt)
-        self.assertNotIn('unrelated old activity', prompt)
         from selfiter_controller import read_json
-        self.assertEqual(read_json(self.c.job_dir(result['job_id']) / 'evidence.json')['sources'][rel]['text'],
-                         bundle['sources'][rel]['text'])
+        self.c.state.mkdir(parents=True, exist_ok=True)
+        (self.c.state / 'events.jsonl').write_text(
+            '{"type": "skill_used", "summary": "unrelated old activity"}\n' * 4000, encoding='utf-8', newline='')
+        result = self.run_with(self.topic())
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual([e['text'] for e in self.submitted()['evidence']], ['- 2026-05-10: Preserve newline explicitly.'])
+        self.assertNotIn('unrelated old activity', self.model.call_args.args[1])
+        saved = read_json(self.c.job_dir(result['job_id']) / 'evidence.json')
+        self.assertEqual(saved['sources'][self.rel]['text'], self.target.read_bytes().decode('utf-8'))
 
     def test_pending_notice_once_per_session_but_again_next_session(self):
         self.c.apply_result('job-a', self.bundle, {'summary': 'x', 'operations': [self.operation(
@@ -541,24 +702,14 @@ class ControllerTests(unittest.TestCase):
 
     def test_rate_limit_rejection_creates_no_job_directory(self):
         self.assertIsNone(self.c.reserve('earlier-job', 'cc', self.c.configuration()))
-        bundle = dict(self.bundle, fingerprint='rate-limit-evidence')
-        with patch.object(self.c, 'source_ready', return_value=True), patch(
-                '_selfiter_evidence.collect_evidence', return_value=bundle), patch(
-                '_selfiter_runner.capability_status', return_value={'capability': 'verified'}):
-            for _ in range(2):
-                result = self.c.run('cc')
-                self.assertEqual(result['status'], 'deferred')
+        for _ in range(2):
+            self.assertEqual(self.run_with()['status'], 'deferred')
         self.assertEqual(list((self.c.base / 'jobs').glob('*')), [])
 
     def test_completed_job_resolves_deferred_without_discarding_history(self):
         from selfiter_controller import read_json
         self.c.defer('cc', 'old_problem')
-        with patch.object(self.c, 'source_ready', return_value=True), patch(
-                '_selfiter_evidence.collect_evidence', return_value=dict(self.bundle, fingerprint='new')), patch(
-                '_selfiter_runner.capability_status', return_value={'capability': 'verified'}), patch(
-                '_selfiter_runner.run_analysis', return_value={'success': True, 'usage': {}, 'output': {
-                    'summary': 'covered', 'operations': [self.operation(kind='no_change')]}}):
-            self.assertEqual(self.c.run('cc')['status'], 'completed')
+        self.assertEqual(self.run_with(self.topic())['status'], 'completed')
         record = read_json(self.c.base / 'deferred.json')
         self.assertEqual(record['status'], 'resolved')
         self.assertEqual(record['reason'], 'old_problem')
@@ -578,30 +729,25 @@ class ControllerTests(unittest.TestCase):
                          [('first', 'deferred'), ('first', 'resolved'), ('second', 'deferred')])
 
     def test_concurrent_target_edit_reports_conflict_once_and_keeps_evidence(self):
-        from selfiter_controller import read_json
         foreground = b'- Foreground edit.\n'
 
         def analysis(*args, **kwargs):
             with self.target.open('ab') as stream:
                 stream.write(foreground)
-            return {'success': True, 'usage': {}, 'output': {
-                'summary': 'append', 'operations': [self.operation()]}}
-        with patch.object(self.c, 'source_ready', return_value=True), patch(
-                '_selfiter_evidence.collect_evidence', return_value=dict(self.bundle, fingerprint='race')), patch(
-                '_selfiter_runner.capability_status', return_value={'capability': 'verified'}), patch(
-                '_selfiter_runner.run_analysis', side_effect=analysis):
-            result = self.c.run('cc')
-        self.assertEqual(result['status'], 'conflict')
+            return {'success': True, 'usage': {}, 'output': {'summary': 'append', 'topics': [self.write_topic()]}}
+        result = self.run_with(side_effect=analysis)
         self.assertTrue(self.target.read_bytes().endswith(foreground))
         self.assertNotIn('Preserve newline explicitly.', self.target.read_text(encoding='utf-8'))
-        report = read_json(self.c.job_dir(result['job_id']) / 'result.json')
-        self.assertEqual(report['status'], 'conflict')
-        self.assertEqual(report['changed_targets'], [self.rel])
-        self.assertEqual(report['model_output']['operations'][0]['new_text'], '- Preserve newline explicitly.')
-        self.assertIn('retry_after', report)
-        self.assertNotIn('ev1', read_json(self.c.base / 'progress.json', {}).get('consumed_ids', []))
+        self.assertEqual(result['changed_sources'], [self.rel])
+        self.assertIn('baseline_changed', result['topics'][0]['operations'][0]['problems'])
+        self.assertEqual(result['not_concluded'], ['E01'])
+        self.assertTrue(result['retry_after'])
         self.assertIn('job reports: 1', self.c.summary('first-session'))
         self.assertIsNone(self.c.summary('next-session'))
+        (record,) = self.book().values()
+        self.assertEqual((record['state'], record['misses']), ('open', 1))
+        self.assertIn('baseline_changed', record['problems'])
+        self.assertTrue(self.c.scan()['trigger'], 'evidence without a conclusion stays waiting')
 
     def test_off_mode_hides_stale_deferral_but_keeps_pending_work(self):
         self.c.defer('cc', 'project_interval', retry_after='2026-11-20T00:00:00+00:00')
@@ -652,57 +798,41 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.target.read_bytes(), proposal['after'].encode('utf-8'))
 
     def test_oversized_required_context_becomes_durable_manual_review(self):
-        bundle = dict(self.bundle, fingerprint='oversized', targets={
-            self.rel: {'text': 'necessary context ' * 4000, 'sha256': 'frozen'}})
-        with patch.object(self.c, 'source_ready', return_value=True), patch(
-                '_selfiter_evidence.collect_evidence', return_value=bundle), patch(
-                '_selfiter_runner.run_analysis') as model:
-            result = self.c.run('cc')
-        self.assertEqual(result['status'], 'manual_review')
-        self.assertIn('required_context', result['reason'])
-        self.assertTrue(list((self.c.base / 'manual-review').glob('*.json')))
-        model.assert_not_called()
+        self.target.write_text('necessary context ' * 8000, encoding='utf-8', newline='')
+        for _ in range(2):  # one person-facing record, and it stops asking for runs
+            result = self.run_with()
+            self.assertIn(result['status'], ('manual_review', 'no_evidence'))
+            self.assertEqual(len(list((self.c.base / 'manual-review').glob('*.json'))), 1)
+        self.assertEqual(self.c.scan()['trigger'], [])
+        record, = self.c.manual_review_items()
+        self.assertIn('required_context', record['reason'])
+        self.assertEqual(record['evidence'][0]['text'], '- 2026-05-10: Preserve newline explicitly.')
+        self.assertTrue(record['context'][self.rel]['text'].startswith('necessary context'))
+        self.model.assert_not_called()
 
     def test_large_board_and_archive_are_audit_only_not_model_payload(self):
-        bundle = dict(self.bundle, fingerprint='large-board', sources=dict(self.bundle['sources'], **{
-            'projects/board.yaml': {'text': 'unrelated historical task\n' * 50000, 'sha256': 'board-hash'},
-            '.workframe/agent-memory/dev/notes-archive.md': {
-                'text': 'historical superseded context\n' * 5000, 'sha256': 'archive-hash'}}))
-        with patch.object(self.c, 'source_ready', return_value=True), patch(
-                '_selfiter_evidence.collect_evidence', return_value=bundle), patch(
-                '_selfiter_runner.capability_status', return_value={'capability': 'verified'}), patch(
-                '_selfiter_runner.run_analysis', return_value={'success': True, 'usage': {}, 'output': {
-                    'summary': 'covered', 'operations': [self.operation(kind='no_change')]}}) as run:
-            result = self.c.run('cc')
-        self.assertEqual(result['status'], 'completed')
-        self.assertNotIn('unrelated historical task', run.call_args.args[1])
-        self.assertNotIn('historical superseded context', run.call_args.args[1])
-        from selfiter_controller import read_json
-        self.assertEqual(read_json(self.c.job_dir(result['job_id']) / 'evidence.json')['sources'][
-            'projects/board.yaml']['text'], bundle['sources']['projects/board.yaml']['text'])
+        for rel, text in (('projects/board.yaml', 'unrelated historical task\n' * 50000),
+                          (self.source_rel.replace('notes.md', 'notes-archive.md'), 'historical superseded context\n' * 5000)):
+            (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / rel).write_text(text, encoding='utf-8', newline='')
+        self.assertEqual(self.run_with(self.topic())['status'], 'completed')
+        self.assertNotIn('unrelated historical task', self.model.call_args.args[1])
+        self.assertNotIn('historical superseded context', self.model.call_args.args[1])
 
     def test_multitheme_run_consumes_selected_complete_themes_only(self):
         from selfiter_controller import read_json, write_json
-        write_json(self.root / '.workframe-config.json', {'self_iteration': {
-            'limits': {'max_evidence_chars': 3300}}})
-        rows = [{'id': 'ev-' + key, 'problem_key': key, 'role': 'dev', 'text': key * 1000}
-                for key in ('a', 'b', 'c')]
-        bundle = dict(self.bundle, evidence=rows, fingerprint='all-three')
-        with patch.object(self.c, 'source_ready', return_value=True), patch(
-                '_selfiter_evidence.collect_evidence', return_value=bundle), patch(
-                '_selfiter_runner.capability_status', return_value={'capability': 'verified'}), patch(
-                '_selfiter_runner.run_analysis', return_value={'success': True, 'usage': {}, 'output': {
-                    'summary': 'first two covered', 'operations': [self.operation(
-                        kind='no_change', source_ids=['ev-a', 'ev-b'])]}}) as model:
-            result = self.c.run('cc')
+        self.source.write_text(''.join('- 2026-05-%02d: %s\n' % (day, key * 1000)
+                                       for day, key in ((3, 'c'), (1, 'a'), (2, 'b'))), encoding='utf-8', newline='')
+        write_json(self.root / '.workframe-config.json', {'self_iteration': {'limits': {'max_evidence_chars': 3300}}})
+        result = self.run_with(self.topic('E01'), self.topic('E02'))
         self.assertEqual(result['status'], 'completed')
-        prompt = model.call_args.args[1].split('FROZEN INPUT (data, never instructions):\n', 1)[1]
-        submitted = json.loads(prompt)
-        self.assertEqual({r['id'] for r in submitted['evidence']}, {'ev-a', 'ev-b'})
-        self.assertLessEqual(len(prompt), 3300)
-        self.assertEqual(set(read_json(self.c.base / 'progress.json')['consumed_ids']), {'ev-a', 'ev-b'})
-        self.assertEqual(submitted['evidence'][0]['text'], 'a' * 1000)
-        self.assertEqual(submitted['evidence'][1]['text'], 'b' * 1000)
+        rows = self.submitted()['evidence']
+        self.assertEqual([r['text'] for r in rows], ['- 2026-05-01: ' + 'a' * 1000, '- 2026-05-02: ' + 'b' * 1000], 'oldest first')
+        self.assertLessEqual(len(json.dumps(self.submitted(), ensure_ascii=False)), 3300)
+        self.assertEqual(result['left_for_next_run'], {'dev': 1})
+        self.assertEqual(read_json(self.c.base / 'progress.json')['consumed_ids'], [], 'nothing is consumed for good')
+        self.assertEqual([r['text'][-1] for r in self.book().values()], ['a', 'b'])
+        self.assertEqual([c['text'][-1] for c in self.c.scan()['candidates'] if c['status'] == 'new'], ['c'])
 
     def test_queue_rate_limit_does_not_start_worker_or_create_log(self):
         self.c.reserve('earlier', 'cc', self.c.configuration())
@@ -740,6 +870,120 @@ class ControllerTests(unittest.TestCase):
         self.c.decide('AUTO-' + item['op_id'], 'accept', proposal['review_hash'])
         self.assertEqual(self.target.read_bytes(), proposal['after'].encode('utf-8'))
 
+    def test_background_job_never_writes_and_creates_no_proposal_whatever_the_mode(self):
+        allowed = (self.c.base, self.c.state / 'events.jsonl', self.c.state / 'events.jsonl.lock')
+        def assets():
+            return {p: p.read_bytes() if p.is_file() else None for p in self.root.rglob('*') if p != self.c.state
+                    and not any(p == a or p.is_relative_to(a) for a in allowed)}
+        before = assets()
+        result = self.run_with(self.write_topic())
+        self.assertEqual(self.c.configuration()['mode'], 'apply')
+        self.assertEqual(result['topics'][0]['operations'][0]['status'], 'suggested')
+        self.assertEqual(assets(), before)
+        with self.assertRaises(TypeError):  # the old write path has no background caller
+            self.c.apply_result('job-x', self.bundle, {'summary': 'x', 'operations': []}, background=True)
+        self.assertNotIn('journal.json', [p.name for p in self.c.job_dir(result['job_id']).iterdir()])
+        from selfiter_controller import read_json
+        report = read_json(self.c.job_dir(result['job_id']) / 'result.json')
+        self.assertEqual(report['evidence_summary'][0]['text'], '- 2026-05-10: Preserve newline explicitly.')
+        self.assertIn('topics to look at: 1', self.c.summary('one'))
+        self.assertIsNone(self.c.summary('two'))
+
+    def test_empty_and_partial_answers_leave_evidence_waiting_then_paused(self):
+        from selfiter_controller import read_json
+        self.source.write_text('- 2026-05-10: one\n- 2026-05-11: two\n', encoding='utf-8', newline='')
+        self.run_with(self.topic('E01'))
+        self.assertEqual(sorted(r['state'] for r in self.book().values()), ['open', 'seen'])
+        self.assertEqual(read_json(self.c.base / 'progress.json')['failures'], 0)
+        for expected in ('open', 'paused'):
+            with patch('selfiter_controller.frequency_reason', return_value=None):
+                result = self.run_with()
+            self.assertEqual(result['status'], 'completed')
+            self.assertIn(expected, [r['state'] for r in self.book().values()])
+        self.assertEqual(read_json(self.c.base / 'progress.json')['failures'], 2, 'an answer about nothing is a failed job')
+        waiting = self.c.waiting_summary()
+        self.assertEqual((waiting['trigger'], [p['text'] for p in waiting['paused']]), ([], ['- 2026-05-11: two']))
+        self.target.write_text('# dev MEMORY\n\n## Work\n\n- Changed.\n', encoding='utf-8', newline='')
+        self.assertTrue(self.c.scan()['trigger'], 'changed material ends the pause')
+
+    def test_malformed_result_fails_without_touching_evidence(self):
+        for output in ({}, {'summary': 'x', 'topics': {}}, {'summary': 'x', 'topics': [], 'operations': []}, []):
+            with self.subTest(output=output), patch('selfiter_controller.frequency_reason', return_value=None):
+                self.assertEqual(self.run_with(output=output)['status'], 'failed')
+                self.assertEqual(self.book(), {})
+
+    def test_seen_item_rides_at_most_twice_and_never_starts_a_run(self):
+        from selfiter_controller import read_json
+        for n, look in enumerate((1, 2, 3, 3), 1):
+            def answer_all(door, prompt, *args, **kwargs):
+                rows = json.loads(prompt.split('FROZEN INPUT (data, never instructions):\n', 1)[1])['evidence']
+                return {'success': True, 'usage': {}, 'output': {
+                    'summary': 'x', 'topics': [self.topic(*[r['id'] for r in rows])]}}
+            with patch('selfiter_controller.frequency_reason', return_value=None):
+                self.run_with(side_effect=answer_all)
+            first = self.book()[next(k for k, r in self.book().items() if 'newline' in r['text'])]
+            self.assertEqual(first['looks'], look)
+            self.assertEqual(self.c.scan()['trigger'], [])
+            with self.source.open('a', encoding='utf-8', newline='') as stream:
+                stream.write('- 2026-05-2%d: fact %d\n' % (n, n))
+        self.assertEqual(read_json(self.c.base / 'progress.json')['consumed_ids'], [])
+
+    def test_undated_item_is_first_seen_when_scanned_even_if_nothing_is_queued(self):
+        from selfiter_controller import read_json, write_json
+        self.source.write_text('### undated\nfact\n', encoding='utf-8', newline='')
+        self.assertEqual(self.c.waiting_summary()['trigger'], [])
+        self.assertFalse((self.c.base / 'first-seen.json').exists(), 'read-only callers persist nothing')
+        self.assertEqual(self.c.scan()['trigger'], [])
+        seen = read_json(self.c.base / 'first-seen.json')
+        self.assertEqual(len(seen), 1)
+        self.c.scan()
+        self.assertEqual(read_json(self.c.base / 'first-seen.json'), seen)
+        write_json(self.c.base / 'first-seen.json', {k: '2026-05-01T00:00:00+00:00' for k in seen})
+        self.assertEqual(self.c.scan()['trigger'], ['oldest=2026-05-01'])
+
+    def test_old_decisions_suppress_exactly_their_own_evidence(self):
+        from selfiter_controller import write_json
+        self.source.write_text('- 2026-05-10: rejected\n- 2026-05-11: similar\n', encoding='utf-8', newline='')
+        first, second = sorted(self.c.scan()['candidates'], key=lambda c: c['when'])
+        write_json(self.root / 'projects/proposals/pending/AUTO-a.json', {
+            'status': 'rejected', 'source_ids': [first['id']], 'problem_keys': second['keys'], 'operation': {}})
+        selection = self.c.scan()
+        self.assertEqual([c['id'] for c in selection['candidates']], [second['id']])
+        self.assertEqual(selection['funnel']['notes']['previously_rejected'], 1)
+        result = self.run_with(self.write_topic())
+        self.assertEqual(self.submitted()['evidence'][0]['prior_decisions'][0]['status'], 'rejected')
+        self.assertIn('prior_decision', result['topics'][0]['operations'][0]['auto_write_blockers'])
+
+    def test_status_explains_an_empty_queue(self):
+        self.source.write_text('# notes\n\nloose text\n', encoding='utf-8', newline='')
+        waiting = self.c.waiting_summary()
+        self.assertEqual(waiting['trigger'], [])
+        self.assertEqual(waiting['funnel']['notes']['total'], 0)
+        self.assertEqual(waiting['funnel']['notes']['lines']['unrecognized_chars'], len('loose text'))
+        import workframe_doctor as doctor
+        with patch('selfiter_controller.Controller', return_value=self.c):
+            messages = doctor.check_self_iteration({'paths': SimpleNamespace(project=self.root)})
+        self.assertTrue(any('不成条目的文字 10 字' in m and '未到触发条件' in m for _, m in messages), messages)
+        self.assertIsNone(waiting['last_job'])
+        self.source.write_text('- 2026-05-10: a\n', encoding='utf-8', newline='')
+        self.run_with(self.topic())
+        from selfiter_controller import read_json, write_json
+        progress = read_json(self.c.base / 'progress.json')
+        progress['evidence']['broken'] = None
+        write_json(self.c.base / 'progress.json', progress)
+        with patch('selfiter_controller.Controller', return_value=self.c):
+            messages = doctor.check_self_iteration({'paths': SimpleNamespace(project=self.root)})
+        self.assertTrue(any('最近一次分析' in m and '（completed）' in m and '笔记 入包 1 条' in m for _, m in messages), messages)
+        self.source.write_text('- 2026-05-11: b\n- 2026-05-12: c\n', encoding='utf-8', newline='')
+        with patch('selfiter_controller.frequency_reason', return_value=None), patch('selfiter_controller._now', return_value=(
+                __import__('datetime').datetime(2099, 1, 1, tzinfo=__import__('datetime').timezone.utc))):
+            failed = self.run_with(success=False, error='timed out')
+        self.assertEqual(self.c.waiting_summary()['last_job'], {
+            'job_id': failed['job_id'], 'packing': {'notes': {'analysed': 2}}, 'status': 'failed'})
+        (self.c.job_dir(failed['job_id']) / 'result.json').write_text('{', encoding='utf-8', newline='')
+        self.assertEqual(self.c.waiting_summary()['last_job'], {
+            'job_id': failed['job_id'], 'packing': {'notes': {'analysed': 2}}, 'status': 'unreadable'})
+
     def test_forbidden_applied_proposal_target_rejects_entire_output(self):
         before = self.target.read_bytes()
         with self.assertRaises(ValueError):
@@ -754,15 +998,12 @@ class ControllerTests(unittest.TestCase):
             if kind == 'selfiter_job_started':
                 (self.root / '.workframe-config.json').write_text(
                     '{"self_iteration":{"mode":"off"}}', encoding='utf-8', newline='')
-        bundle = dict(self.bundle, fingerprint='new-evidence')
-        with patch.object(self.c, 'source_ready', return_value=True), patch('selfiter_controller.background_off', return_value=False), patch(
-                '_selfiter_evidence.collect_evidence', return_value=bundle), patch(
-                '_selfiter_runner.capability_status', return_value={'capability': 'verified'}), patch(
-                '_selfiter_runner.run_analysis', return_value={'success': True, 'output': {'summary': 'x', 'operations': []}}) as run, patch.object(
+        with patch('selfiter_controller.background_off', return_value=False), patch.object(
                 self.c, 'emit_once', side_effect=emit):
-            result = self.c.run('codex')
-        self.assertFalse(run.called)
+            result = self.run_with(self.topic(), door='codex')
+        self.assertFalse(self.model.called)
         self.assertEqual(result['status'], 'paused')
+        self.assertEqual(self.book(), {})
 
     def test_replay_repairs_result_log_and_finished_event_tail(self):
         import selfiter_controller as module
@@ -796,8 +1037,6 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(sum(e['type'] == 'selfiter_op_rolled_back' for e in self.c.events()), 1)
 
     def test_run_tail_error_preserves_first_result_bytes(self):
-        bundle = dict(self.bundle, fingerprint='tail-evidence')
-        transport = {'success': True, 'output': {'summary': 'x', 'operations': [self.operation()]}}
         real = self.c.emit_once
         snapshot = []
         def emit(kind, job_id, *args, **kw):
@@ -805,13 +1044,32 @@ class ControllerTests(unittest.TestCase):
                 snapshot.append((job_id, (self.c.job_dir(job_id) / 'result.json').read_bytes()))
                 raise OSError('injected finish event failure')
             return real(kind, job_id, *args, **kw)
-        with patch.object(self.c, 'source_ready', return_value=True), patch(
-                'selfiter_controller.background_off', return_value=False), patch(
-                '_selfiter_evidence.collect_evidence', return_value=bundle), patch(
-                '_selfiter_runner.capability_status', return_value={'capability': 'verified'}), patch(
-                '_selfiter_runner.run_analysis', return_value=transport), patch.object(self.c, 'emit_once', side_effect=emit):
-            self.c.run('codex')
-        self.assertEqual((self.c.job_dir(snapshot[0][0]) / 'result.json').read_bytes(), snapshot[0][1])
+        with patch.object(self.c, 'emit_once', side_effect=emit):
+            self.run_with(self.topic(), door='codex')
+        directory = self.c.job_dir(snapshot[0][0])
+        self.assertEqual((directory / 'result.json').read_bytes(), snapshot[0][1])
+        self.assertTrue((directory / 'failure.json').is_file())
+        self.assertEqual([r['state'] for r in self.book().values()], ['seen'], 'the delivered conclusion stands')
+        from selfiter_controller import read_json
+        self.assertEqual(read_json(self.c.base / 'progress.json')['failures'], 0, 'a finished job is no failure')
+        with patch('selfiter_controller.frequency_reason', return_value=None):
+            self.assertEqual(self.run_with(self.topic())['status'], 'no_evidence')
+        kinds = [e['type'] for e in self.c.events()]
+        self.assertEqual((kinds.count('selfiter_job_finished'), kinds.count('selfiter_job_failed')), (1, 0))
+
+    def test_report_that_could_not_be_saved_does_not_block_later_jobs(self):
+        import selfiter_controller as module
+        real, failed = module.write_json, []
+        def write(path, value):
+            if Path(path).name == 'result.json' and not failed:
+                failed.append(path)
+                raise PermissionError('injected')
+            return real(path, value)
+        with patch.object(module, 'write_json', side_effect=write):
+            self.assertEqual(self.run_with(self.topic())['status'], 'failed')
+        self.assertEqual(self.book(), {})
+        with patch('selfiter_controller.frequency_reason', return_value=None):
+            self.assertEqual(self.run_with(self.topic())['status'], 'completed')
 
     def test_rollback_tail_is_incomplete_until_recover_repairs_it(self):
         self.c.apply_result('job-a', self.bundle, {'summary': 'x', 'operations': [self.operation()]})

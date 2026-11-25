@@ -31,6 +31,7 @@ workframe-doctor — 消费项目运行态体检（v0.4 G1#4）
 
 import argparse
 import io
+from collections import Counter
 import json
 import os
 import re
@@ -45,14 +46,15 @@ from pathlib import Path
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
-from _harness import project_dir as _harness_project_dir  # noqa: E402
+from _harness import HARNESSES, project_dir as _harness_project_dir  # noqa: E402
 from _harness import SKILLS_DIR_CC, project_skills_conflict, project_skills_dir  # noqa: E402
 from _harness import (SKILLS_ABSENT, SKILLS_DIR_NEUTRAL, SKILLS_FILE, SKILLS_LINK_ELSEWHERE,  # noqa: E402
                       SKILLS_LINK_NEUTRAL_MISSING, SKILLS_LINK_OK, SKILLS_LINK_TARGET_MISSING,
                       SKILLS_REALDIR, skills_cc_form, skills_two_copies)
+from _notes_entries import BACKLOG_CHARS, open_entries  # noqa: E402
 import _settings_io  # noqa: E402
 from _state_io import legacy_present, legacy_rel, memory_dir_of, new_rel, state_dir_of  # noqa: E402
-from _state_io import SPILL_SUFFIX  # noqa: E402
+from _state_io import MERGED_SUFFIX, SPILL_SUFFIX, dormant_profile_of  # noqa: E402
 
 
 def _force_utf8_io():
@@ -76,7 +78,7 @@ NOTES_STALE_DAYS = 30         # 距上次 memory_promoted 超过此天数且 not
 # 陈化口径与 trigger **同阈值、不同取数**，这是有意的（勿"统一"）：
 #   doctor  = 按角色取该角色的最近提升时间，且「从未提升过」也算陈化 —— 诊断工具，人主动跑，
 #             宁可多报一条让人自己判断
-#   trigger = 全局取最近一次提升，且「从未提升过」不报 —— 它产生 pending_maintenance 会打扰
+#   trigger = 全局取最近一次提升，从未提升过就从最早一条条目算起 —— 它产生 pending_maintenance 会打扰
 #             用户，按角色分会因事件稀疏而失真（见该脚本内注释）
 # 同一份数据两处结论不同属正常，别把其中一个改成另一个。
 ROLE_MEMORY_MAX_CHARS = 8000     # 单角色 MEMORY.md 字符预算（≈5.6k tok；行数检查已退役——单行超长可钻空，字符才反映注入开销）
@@ -265,10 +267,10 @@ def check_events_parse(ctx):
             continue
         key = ev.get("role") if isinstance(ev.get("role"), str) and ev.get("role") else "unspecified"
         roles[key] = roles.get(key, 0) + 1
-    # skill_invoked 是 hook_deterministic 层的「被调起」计数（代码保证），与 skill_used
-    # 的「用了并产出了什么」（模型自评）**并存不相加**——同一次调用两条都会有。
-    # 两个数差得多说明其中一侧在漏：invoked 远大于 used → agent 收尾常漏写 skill_used；
-    # used 大于 invoked → 有不经 hook 的调用路径（或 hook 没装上）。
+    # skill_invoked 是 hook 记的「被调起」次数，与 skill_used 的「用了并产出了什么」（模型自报）
+    # **并存不相加**——同一次调用两条都可能有。两个数**不可直接对比出漏记**：计数单位不同
+    # （同一技能跨分钟多次调起、收尾只自报一次 → invoked 更大），覆盖的门也不同（Codex 门没有
+    # skill_invoked 的采集通路 → 那一门只有自报）。按技能分列见 skill-metrics.yaml 的 `invoked` 列。
     invoked = sum(1 for ev in events
                   if ev.get("type") == "skill_invoked"
                   and (_parse_ts(ev.get("ts")) or cutoff - timedelta(days=1)) >= cutoff)
@@ -280,7 +282,7 @@ def check_events_parse(ctx):
                  f"{roles.get('main', 0) * 100 // tot}%（{dist}，参考值不设阈值，"
                  f"直接 Read 不经 skill 的工作不在覆盖范围）")
     if invoked or roles:
-        trend += f"；skill_invoked（代码保证的调起数，不与上一项相加）{invoked} 次"
+        trend += f"；skill_invoked（hook 记的调起数，不与上一项相加，Codex 门不采集）{invoked} 次"
 
     if malformed:
         head = ", ".join(str(n) for n in malformed[:5])
@@ -400,7 +402,7 @@ def check_proposal_dates(ctx):
             total += 1
             text = f.read_text(encoding="utf-8", errors="replace")
             if not re.search(r"^\s*" + field + r"""\s*:\s*["']?\d{4}-\d{2}-\d{2}""", text, re.M):
-                out.append(("warn", f"{sub}/{f.name} 缺 {field}（派生将回退文件名日期，请补字段）"))
+                out.append(("warn", f"{sub}/{f.name} 缺 {field}（请补字段）"))
     if not out:
         out.append(("ok", f"applied/rejected 共 {total} 份提案日期字段齐全" if total else "尚无 applied/rejected 提案"))
     return out
@@ -517,7 +519,7 @@ def check_data_yaml_parse(ctx):
 
 
 def check_notes_backlog(ctx):
-    """notes 积压：内容行数 + 距**该角色**上次 memory_promoted 天数。
+    """notes 积压：内容行数 / 未处置条目字数 + 距**该角色**上次 memory_promoted 天数。
 
     与 check-iteration-trigger 同阈值但取数口径不同（按角色 vs 全局、从未提升算不算陈化），
     差异与理由见文件顶部 NOTES_STALE_DAYS 旁注释——那不是漂移，是诊断与触发的定位差别。
@@ -537,11 +539,14 @@ def check_notes_backlog(ctx):
         f = P.memory / scope / "notes.md"
         if not f.exists():
             continue
-        n = _count_content_lines(f.read_text(encoding="utf-8", errors="replace"))
+        text = f.read_text(encoding="utf-8", errors="replace")
+        n, chars = _count_content_lines(text), sum(len(e["text"]) for e in open_entries(text))
         days = ((datetime.now(timezone.utc) - last_promoted[scope]).days
                 if scope in last_promoted else None)
         if n > NOTES_BACKLOG_LINES:
             out.append(("warn", f"{scope}/notes.md 内容 {n} 行 > {NOTES_BACKLOG_LINES}（积压，建议跑 librarian）"))
+        elif chars >= BACKLOG_CHARS:
+            out.append(("warn", f"{scope}/notes.md 待处理 {chars} 字 ≥ {BACKLOG_CHARS}（积压，建议跑 librarian）"))
         elif n > 5 and (days is None or days > NOTES_STALE_DAYS):
             since = f"{days} 天前" if days is not None else "从未"
             out.append(("warn", f"{scope}/notes.md 内容 {n} 行且上次提升在 {since}（陈化 > {NOTES_STALE_DAYS} 天）"))
@@ -723,6 +728,8 @@ def check_promise_producer(ctx):
 
     注意扫描面是 **PLUGIN_ROOT**（插件自身的 skills / scripts），不是用户项目——
     「有没有人会产生这个事件」是插件的属性。所以本项对不同项目只有 counts 部分会变。
+
+    两门的 `availability` 都是 none 的事件（已停写、登记只供解释旧数据）没有承诺可对，不进三态。
     """
     if not EVENT_SCHEMA_FILE.exists():
         return [("error", f"event-schema.json 缺失: {EVENT_SCHEMA_FILE}")]
@@ -740,7 +747,8 @@ def check_promise_producer(ctx):
     out, starved, broken, normal, skipped = [], [], [], 0, 0
     for etype, spec in schema.get("events", {}).items():
         tier = spec.get("reliability")
-        if tier not in ACTIVE_TIERS:
+        availability = spec.get("availability") or {}
+        if tier not in ACTIVE_TIERS or all(availability.get(h) == "none" for h in HARNESSES):
             skipped += 1
             continue
         c = counts.get(etype, 0)
@@ -750,7 +758,7 @@ def check_promise_producer(ctx):
             starved.append(f"{etype}({tier})")
         else:
             broken.append(f"{etype}({tier})")
-    out.append(("ok", f"normal {normal} 类（历史有发生）；removed/非活跃层跳过 {skipped} 类"))
+    out.append(("ok", f"normal {normal} 类（历史有发生）；removed/已停写跳过 {skipped} 类"))
     if starved:
         out.append(("info", "never-triggered (starved) — 零发生但承诺存在（上游饥饿，非损坏；诊断见 event-schema caveats）: "
                     + "、".join(starved)))
@@ -843,13 +851,11 @@ _STATE_RUNTIME = ["activity-state.json", "events.jsonl",
 SCAFFOLD_OPTIONAL_FILES = [
     "projects/specs/overview.md", "projects/specs/_meta/taxonomy.md",
     "projects/issues/TEMPLATES.md",
-    "projects/changelog.md", "projects/evals/README.md",
+    "projects/changelog.md",
     # scaffold 建的治理空目录（.gitkeep 占位）。消费方写入前都会 mkdir 兜底，所以缺了
     # 不致命——但「scaffold 产出什么」与「doctor 查什么」是两处手写，不列进来就没人
     # 发现漂移（check_scaffold_gitkeep_dirs_covered 已对账两边）。
     # 与 logs/.gitkeep 的区别：这些在 projects/ 下、随 git 分发，clone 后本就该有。
-    "projects/evals/agents-md/.gitkeep", "projects/evals/skills/.gitkeep",
-    "projects/evals/agents/.gitkeep",
     "projects/proposals/pending/.gitkeep", "projects/proposals/applied/.gitkeep",
     "projects/proposals/rejected/.gitkeep",
     "projects/archive/.gitkeep",
@@ -860,6 +866,8 @@ SCAFFOLD_PARAM_FILES = [
     "company-context/README.md", "my-workspace/README.md",
 ]
 BASELINE_ROLES = ("pm", "dev", "qa", "prompt-eng")
+# 可选字段：缺了不报，有则校验、非法只 warn（与 `project_scaffold.CONFIG_OPTIONAL_FIELDS` 同一份口径）
+CONFIG_OPTIONAL_FIELDS = ("project_type",)
 CONFIG_FIELD_ENUM = {
     "project_type": ("product-work",),
     "dormant_profile": ("high-frequency", "normal", "low-frequency", "archive"),
@@ -1488,7 +1496,7 @@ def check_skills_link(ctx):
 
 
 def check_config(ctx):
-    """.workframe-config.json 三字段存在且取值合法。"""
+    """.workframe-config.json 的枚举字段：必填的存在且合法；可选的（`CONFIG_OPTIONAL_FIELDS`）有则校验。"""
     P = ctx["paths"]
     if not P.config.exists():
         return [("error", f"{P.config.name} 不存在——该目录尚未接入 Workframe")]
@@ -1500,17 +1508,35 @@ def check_config(ctx):
         return [("error", f"{P.config.name} 顶层不是 JSON 对象")]
     out = []
     for field, allowed in CONFIG_FIELD_ENUM.items():
+        optional = field in CONFIG_OPTIONAL_FIELDS
         if field not in cfg:
-            out.append(("error", f"缺字段 {field}（合法取值：{' / '.join(allowed)}）"))
+            if not optional:
+                out.append(("error", f"缺字段 {field}（合法取值：{' / '.join(allowed)}）"))
         elif cfg[field] not in allowed:
-            out.append(("error", f"{field}={cfg[field]!r} 非法（合法取值：{' / '.join(allowed)}）"))
+            # 可选字段读取方不据此分支，填错不影响任何行为：只提醒
+            out.append(("warn" if optional else "error",
+                        f"{field}={cfg[field]!r} 非法（合法取值：{' / '.join(allowed)}）"
+                        + ("——这是可缺的历史兼容字段，改成合法值或删掉这个键都行" if optional else "")))
     if not cfg.get("project_name"):
         out.append(("warn", "缺 project_name（启动横幅与报告的展示名）"))
     if cfg.get("framework_path"):
         out.append(("warn", "存在 framework_path——它是本机绝对路径，进 git 后协作者拿到的是无效路径；"
                             "marketplace 订阅场景不需要该字段，建议删除"))
+    # 活动档位只认配置。旧项目的运行态里可能还留着一份 dormant_profile（以前两处都写）——
+    # 只看磁盘上**真实存在**的键：读入时补默认值的那层（load_activity）会凭空造出 normal，拿它比会误报
+    try:
+        raw_state = json.loads((P.state / "activity-state.json").read_text(encoding="utf-8-sig"))
+    except Exception:
+        raw_state = None
+    if isinstance(raw_state, dict) and "dormant_profile" in raw_state \
+            and raw_state["dormant_profile"] != cfg.get("dormant_profile"):
+        effective = dormant_profile_of(P.project)
+        out.append(("warn", f"活动档位两处不一致：配置 dormant_profile={cfg.get('dormant_profile')!r}"
+                            f"（实际生效：{effective}），运行态 activity-state.json 里的旧值 "
+                            f"{raw_state['dormant_profile']!r} 已不再被读取。要哪一档改配置即可；"
+                            f"运行态那个键留着无害，不会自动改动"))
     if not out:
-        out.append(("ok", f"三字段齐全合法（{', '.join(f'{k}={cfg[k]}' for k in CONFIG_FIELD_ENUM)}）"))
+        out.append(("ok", "字段齐全合法（" + ", ".join(f"{k}={cfg[k]}" for k in CONFIG_FIELD_ENUM if k in cfg) + "）"))
     return out
 
 
@@ -1912,6 +1938,8 @@ SETUP_REQUIRED_STEPS = ("scaffold", "subscribe", "agents_md")
 # 就是本组、组里又查 acceptance——于是第一次跑必然缺它、必然报 error，模型补记后再跑才过。
 # 那条 error 是机制自造的，不是真问题。
 SETUP_SELF_RECORDED_STEPS = ("acceptance",)
+# 待接力批次的 `pace` 合法取值（缺省按 undecided）；结构判定在 `inspect_setup_state`，完整度检查按它分档
+SETUP_BATCH_PACES = ("relay", "paused", "undecided")
 
 # 由 **hook 每会话补记**、而非 launcher 走流程时落笔的步骤。与上面那组同属「这一步在文件里
 # 不证明 launcher 来过」，但成因不同，所以分成两组常量而不是合并：
@@ -1971,7 +1999,13 @@ def inspect_setup_state(P):
     invalid = (not isinstance(st.get("steps", {}), dict)
                or any(not isinstance(value, str) for value in steps.values())
                or not isinstance(raw_pending, dict) or not isinstance(raw_batches, list)
-               or any(not isinstance(batch, dict) for batch in batches))
+               or any(not isinstance(batch, dict) for batch in batches)
+               # 批次形状：`pace` 只认三种（缺省 = undecided），`files` 须是列表。否则完整度检查里未知 `pace`
+               # 落不进任何一档、整项返回空（体检对空结果默认算过），`files` 是字符串时按字符数报项数
+               or any(batch.get("pace", "undecided") not in SETUP_BATCH_PACES
+                      or not isinstance(batch.get("files", []), list)
+                      or any(not isinstance(name, str) for name in batch.get("files", []))
+                      for batch in batches if isinstance(batch, dict)))
     if invalid:
         data["state"] = "unknown"
         result["warnings"].append("Initialization record has an invalid structure")
@@ -2064,18 +2098,30 @@ def check_init_completeness(ctx):
     """初始化完整度：源资料是否全部落地（「第二幕」状态）。
 
     pending_work 是**流程状态不是故障**——待接力 / 挂起都是用户知情拍板的合法态，
-    一律 info。全部批次销账（键删除）才转 ok「完整落地」。
+    一律 info。
+
+    「完整落地」要两样都成立：初装步骤记录完整（`inspect_setup_state` 判 `complete`）**且**无待接力批次。
+    只看「无批次」会把没有初装记录、装到一半、某步失败的项目一并说成「已完整落地」——实见：一份只有会话启动
+    hook 补记的那一步的记录就被这样报过。判据与初始化断点、查询层的 project-status 共用同一个状态计算。
     """
     P = ctx["paths"]
-    if not P.setup_state.exists():
-        return [("info", "无 setup-state.json，无法判断（手工接入项目不影响使用）")]
-    try:
-        st = json.loads(P.setup_state.read_text(encoding="utf-8"))
-    except Exception:
-        return [("info", "setup-state.json 解析失败（断点检查项已报），跳过")]
+    snapshot = inspect_setup_state(P)
+    no_record = "未保留完整初装记录；当前无待接力批次"
+    if snapshot["kind"] == "absent":
+        return [("info", f"{no_record}（没有 setup-state.json：手工接入、克隆下来的项目或早于该机制的项目，不影响使用）")]
+    if snapshot["kind"] in ("parse", "root", "steps") or snapshot["data"]["state"] == "unknown":
+        return [("info", "setup-state.json 读不出或结构非法（初始化断点一项已报），无法判断完整度")]
+    st = snapshot["record"]
     batches = (st.get("pending_work") or {}).get("batches") or []
     if not batches:
-        return [("ok", "初始化已完整落地（无待接力批次）")]
+        if snapshot["kind"] == "unrecorded":
+            return [("info", f"{no_record}（setup-state.json 里没有任何装机步骤）")]
+        state = snapshot["data"]["state"]
+        if state == "complete":
+            return [("ok", "初始化已完整落地（初装步骤齐全，无待接力批次）")]
+        if state == "failed":
+            return [("info", "无待接力批次，但初装有步骤失败（见初始化断点一项）——不算完整落地")]
+        return [("info", "无待接力批次，但初装步骤没走完（见初始化断点一项）——不算完整落地")]
 
     def _fmt(bs):
         return "、".join(
@@ -2145,6 +2191,47 @@ def check_codex_trust(ctx):
     level = {ct.NOT_CONNECTED: "info", ct.DISABLED: "info", ct.TRUSTED: "ok",
              ct.NEEDS_TRUST: "error", ct.INSTALL_ERROR: "error", ct.UNVERIFIED: "warn"}[result.state]
     return [(level, result.message)]
+
+
+def check_codex_roles(ctx):
+    """Codex 角色与托管段比 Codex 门最近一次记录的插件根落后多少（`codex_roles.compare`，静态、不起 app-server）。
+
+    **比较源只认 `plugin-root.codex.txt`**：那是 Codex 门自己的 SessionStart 记下的根。读不到就报「未核实」，不拿
+    doctor 自己的根下健康结论——两门可能装在不同目录、版本不同，拿错一份比，旧角色可能被报成一致。这份指针是「最近
+    一次 Codex 会话启动时」的根，不是 Codex 此刻实际加载的那一份（那要 `hooks/list`，见 `workframe-door --check`），
+    文案如实写明拿哪份比的。"""
+    import codex_roles as cr
+    P = ctx["paths"]
+    project = P.project
+    if not cr.connected(project):
+        return [("info", "本项目未接 Codex 门，跳过")]
+    pointer = P.state / "plugin-root.codex.txt"
+    try:
+        root = pointer.read_text(encoding="utf-8", errors="replace").strip() if pointer.is_file() else ""
+    except OSError:
+        root = ""                              # 读不出 = 没有可用记录，报未核实，不当成检查自身异常
+    version = _plugin_version_at(root) if root else None
+    if not root or not version or not (Path(root) / "agents").is_dir():
+        return [("info", "Codex 角色新旧未核实：没有可用的 Codex 门插件根记录（plugin-root.codex.txt 缺失、为空或"
+                         "指向的安装已不在）——开一次 Codex 会话后复查，或跑 `workframe-door --check`")]
+    try:
+        items = cr.compare(project, root, version)
+    except Exception as e:
+        return [("warn", f"Codex 角色新旧未核实：按 {root} 渲染失败（{e}）")]
+    stale, conflict, other = cr.describe(items, version, with_diff=False)
+    out = []
+    base = f"与 Codex 门最近一次记录的插件根（v{version}）比"
+    if any(it["state"] == cr.STATE_USER_CLOSED for it in items):
+        stale = []                             # 已关门：不要求刷新（升级本来也会拒绝）；归属冲突照报
+    if stale:
+        out.append(("warn", f"Codex 角色落后——{base}：" + "；".join(stale)
+                            + "。跑 `workframe-door --upgrade` 刷新（定制在 roles/<role>.local.toml，不受影响）"))
+    if conflict:
+        out.append(("warn", "Codex 角色有归属冲突，升级会整批不写：" + "；".join(conflict)))
+    out += [("info", ln) for ln in other]
+    if not out:
+        out.append(("ok", f"Codex 角色与托管段{base}一致"))
+    return out
 
 
 def check_env(ctx):
@@ -2332,7 +2419,8 @@ def check_inject_shards(ctx):
     是否相等，不是「行数 == 设计片数」那种会被 compact 顶破的计数语义。
     **窗口**：组内**任一行**落在近 `INJECT_SHARD_WINDOW_DAYS` 天（或 ts 解析不了），就取该组
     **全部行**判定——按行截窗口会把一次投递劈成两半而假红。
-    **spill**：状态目录有 `inject-log.*.spill.jsonl` 时降为 info——缺的那片可能正躺在里面。
+    **spill**：未并回的 `inject-log.*.spill.jsonl` 与主文件合并后再判——补平的组不报，并入后仍不等的
+    照报 warn；读不了的文件单列 info，不压低其他组。主文件不在、只有 spill 时同样判。
     **只 warn 不 error**：doctor 有 error 就 exit 1，而收口要求 doctor 全绿；一条历史行不该
     卡住所有收口，且下面的第③种成因是已实见的假红来源。
 
@@ -2347,12 +2435,53 @@ def check_inject_shards(ctx):
     """
     P = ctx["paths"]
     f = P.state / "inject-log.jsonl"
-    if not f.is_file():
+    # 旁路文件两类，都并进同一份计数再判；读不了的单独点名，**不**拿它压低别的组：
+    #   - 未并回的 spill：行还不在主文件里，整份并入
+    #   - 并回时改名留下的副本（`*.spill.jsonl.merged.*`）：并回是「先改名、再逐行追加主文件」，中途断掉时副本里
+    #     可能有主文件没有的行。只并入主文件里**没有**的那几行（**只与主文件**按整行内容逐次抵扣），已追加过的不重复计
+    #   - 副本里的行若与某份未并回 spill 里的行逐字相同（不论主文件里有没有）：可能是同一行（并回追加失败又落进新
+    #     spill），也可能是两次独立投递恰好同秒同文——分不出来。这一组记为「来源无法判定」：**既不报到齐也不报缺片**，
+    #     单列 info。时间戳只到秒，整行相等证明不了是同一次投递
+    spills = sorted(P.state.glob(f"inject-log.*{SPILL_SUFFIX}"))
+    merged_copies = sorted(P.state.glob(f"inject-log.*{SPILL_SUFFIX}{MERGED_SUFFIX}*"))
+    if not f.is_file() and not spills and not merged_copies:
         return [("info", "inject-log.jsonl 尚未生成——没有投递记录可查")]
+    lines, unreadable, merged_in, spill_lines = [], [], 0, []
+    if f.is_file():
+        try:
+            lines.extend(f.read_text(encoding="utf-8", errors="replace").splitlines())
+        except OSError as e:
+            unreadable.append(f"{f.name}（{type(e).__name__}）")
+    on_main = Counter(lines)
+    for src in spills:
+        try:
+            spill_lines.extend(src.read_text(encoding="utf-8", errors="replace").splitlines())
+            merged_in += 1
+        except OSError as e:
+            unreadable.append(f"{src.name}（{type(e).__name__}）")
+    lines.extend(spill_lines)
+    in_spill = Counter(spill_lines)
+    ambiguous = []
+    for src in merged_copies:
+        try:
+            copy_lines = src.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError as e:
+            unreadable.append(f"{src.name}（{type(e).__name__}）")
+            continue
+        merged_in += 1
+        for line in copy_lines:
+            if in_spill[line] > 0:
+                ambiguous.append(line)
+            if on_main[line] > 0:
+                on_main[line] -= 1
+            elif in_spill[line] > 0:
+                in_spill[line] -= 1
+            else:
+                lines.append(line)
     cutoff = datetime.now(timezone.utc) - timedelta(days=INJECT_SHARD_WINDOW_DAYS)
     groups = {}
     legacy_in_window = bad_shape = 0
-    for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in lines:
         try:
             r = json.loads(line)
         except ValueError:
@@ -2373,36 +2502,51 @@ def check_inject_shards(ctx):
             continue
         key = (r.get("harness"), r.get("session_id"), r.get("thread_id"),
                r.get("event"), r.get("scope"), n)
-        g = groups.setdefault(key, {"counts": {}, "in_window": False})
+        g = groups.setdefault(key, {"counts": {}, "in_window": False, "ambiguous": False})
         g["counts"][i] = g["counts"].get(i, 0) + 1
         g["in_window"] = g["in_window"] or in_window
+    for line in ambiguous:
+        try:
+            r = json.loads(line)
+            idx = _shard_index(r.get("shard"))
+            key = (r.get("harness"), r.get("session_id"), r.get("thread_id"), r.get("event"), r.get("scope"),
+                   idx[1] if idx else None)
+        except Exception:
+            continue
+        if key in groups:
+            groups[key]["ambiguous"] = True
     judged = {k: g for k, g in groups.items() if g["in_window"]}
-    offenders = []
+    offenders, unsure = [], 0
     for k, g in judged.items():
         counts = [g["counts"].get(i, 0) for i in range(1, k[5] + 1)]
-        if min(counts) < max(counts):
+        if g["ambiguous"]:
+            unsure += 1          # 来源分不清：缺片与到齐都下不了结论
+        elif min(counts) < max(counts):
             offenders.append((k, counts))
     out = []
     if offenders:
         head = "；".join(f"{k[4]} n={k[5]}（{k[3]}，session {str(k[1])[:8]}，thread "
                         f"{str(k[2])[:8]}）各片次数 {counts}" for k, counts in offenders[:3])
         more = f" 等共 {len(offenders)} 组" if len(offenders) > 3 else ""
-        spills = sorted(P.state.glob(f"inject-log.*{SPILL_SUFFIX}"))
-        if spills:
-            out.append(("info", f"分片次数不等：{head}{more}——但状态目录有 {len(spills)} 份未并回的 "
-                                f"inject-log spill，缺的那片可能正躺在里面；下次会话启动并回后复查"))
-        else:
-            out.append(("warn", f"同一次投递里有片没记上：{head}{more}。三种成因：①该片的注入 hook "
-                                f"没跑到写记录那一步（崩溃 / 超时）——那一片纪律没到模型手里；②记录行丢了"
-                                f"（写记录失败被吞，片其实到了）；③有人手工运行过打包器（开发与探针环境里"
-                                f"实见的假红来源，会带着继承的会话号写单片行）。本项分不出 ①②"))
+        merged_note = f"（已并入 {merged_in} 份旁路记录一起判）" if merged_in else ""
+        out.append(("warn", f"同一次投递里有片没记上{merged_note}：{head}{more}。三种成因：①该片的注入 hook "
+                            f"没跑到写记录那一步（崩溃 / 超时）——那一片纪律没到模型手里；②记录行丢了"
+                            f"（写记录失败被吞，片其实到了）；③有人手工运行过打包器（开发与探针环境里"
+                            f"实见的假红来源，会带着继承的会话号写单片行）。本项分不出 ①②"))
+    if unreadable:
+        out.append(("info", f"{len(unreadable)} 份投递记录读不了、未参与判定：{'、'.join(unreadable)}"
+                            f"——缺的片可能在里面，修好读取权限后复查"))
+    if unsure:
+        out.append(("info", f"{unsure} 组下不了结论（不算到齐、也不算缺片）：有行同时出现在未并回的 spill 与并回副本里、"
+                            f"逐字相同，分不出是同一行还是两次投递。下次会话启动并回后复查"))
     if legacy_in_window:
         out.append(("info", f"近 {INJECT_SHARD_WINDOW_DAYS} 天有 {legacy_in_window} 行旧格式分片记录"
                             f"（没有 thread_id 字段）只计数不判——窗口过后自然消失"))
     if bad_shape:
         out.append(("info", f"{bad_shape} 行分片号越界（i 不在 1..n），未参与判定"))
-    if not offenders:
-        out.append(("ok", f"近 {INJECT_SHARD_WINDOW_DAYS} 天 {len(judged)} 组分片投递各片次数相等"
+    if not offenders and (not unsure or len(judged) > unsure):
+        # 来源无法判定的组不算进「相等」：它们单列在上面的 info 里
+        out.append(("ok", f"近 {INJECT_SHARD_WINDOW_DAYS} 天 {len(judged) - unsure} 组分片投递各片次数相等"
                           f"（窗口外 {len(groups) - len(judged)} 组未判；本项看不见整场 hook 没跑）"))
     return out
 
@@ -2410,12 +2554,13 @@ def check_inject_shards(ctx):
 INSTALL_CHECKS = [
     ("legacy_state_dir", "旧布局运行态目录", "`.claude/` 下的旧 state / 记忆 / 记忆归档目录不在（记忆按框架出厂形态判，只有 CC 原生 agent 记忆时报 info）；在即 error，按只有旧 / 新旧并存给出路。**必须排第一**：首会话验收里其余缺项多半是它的连带", check_legacy_state_dir),
     ("codex_trust", "Codex hook 信任", "已接门实时核信任；失信 error，未能核实 warn；未接或已关跳过", check_codex_trust),
+    ("codex_roles", "Codex 角色新旧", "角色与托管段按 Codex 门记录的插件根重新渲染比对：落后或归属冲突 warn，无可用根记录 info；未接门跳过", check_codex_roles),
     ("skeleton", "骨架完整性", "scaffold 基础骨架 + 渲染产物齐全；占位符零残留（兜底）", check_skeleton),
     ("claude_md", "CLAUDE.md 导入与旧副本", "有一处有效的 `@AGENTS.md` 导入（CC 侧读到 AGENTS.md 的唯一入口，缺即 error）；框架段落的旧副本报 warn（与注入片形成双份）", check_claude_md),
     ("agents_md", "AGENTS.md 契约段", "两扇门共用的项目自有判据落点：四段齐全、委派授权段在位、正文无 `@<file>` 导入；「这个项目是什么」只剩框架占位报 warn", check_agents_md),
     ("prd_framework", "项目 PRD 框架", "项目层 prd-style skill 在位性；缺失仅 info（prd-writer 走默认模板 fallback）", check_prd_framework),
     ("skills_link", "项目 skills 链接形态", "`.claude/skills` 是指向本项目 `.agents/skills` 的链接 / 真目录；普通文件与目标不存在的链接 error，两份各读各的 / 真实源不在 / 以符号链接对象被 git 跟踪 warn", check_skills_link),
-    ("config", "config 三字段", "project_type / dormant_profile / role_profile 存在且取值合法", check_config),
+    ("config", "config 字段", "dormant_profile / role_profile 存在且取值合法；project_type 可缺，有则校验（非法 warn）", check_config),
     ("subscription", "订阅接线", "core@<市场> 在项目级 / 用户级解析得到；本地目录源按相对·绝对路径分档 + 存在性", check_subscription),
     ("rules_mirror_residue", "旧镜像残留", "上一版留在项目里的纪律镜像目录必须已删除；只判在不在，不读内容也不同步", check_rules_mirror_residue),
     ("gitignore", ".gitignore 条目", "运行时状态 / 日志 / 临时区默认不进 git", check_gitignore),
@@ -2430,6 +2575,7 @@ def check_self_iteration(ctx):
     if sys.version_info < (3, 11):
         return [('info', '后台自迭代需要 Python 3.11；保留手动维护入口')]
     from selfiter_controller import Controller, read_json
+    from _selfiter_candidates import OUTCOME_LABELS
     controller = Controller(ctx['paths'].project)
     try:
         config = controller.configuration()
@@ -2446,7 +2592,7 @@ def check_self_iteration(ctx):
     if deferred.get('status') == 'deferred':
         out.append(('warn', '后台自迭代延期：' + str(deferred.get('reason'))))
     if progress.get('circuit_open') or progress.get('failures', 0) >= 3:
-        out.append(('warn', '连续作业失败，自动内容写入降为待批'))
+        out.append(('warn', '连续三次作业没有可用结果；查看日志处理原因后运行 workframe-selfiter resume'))
     for path in (controller.base / 'jobs').glob('*/journal.json'):
         try:
             record = read_json(path)
@@ -2454,7 +2600,27 @@ def check_self_iteration(ctx):
                 out.append(('warn', '作业待恢复：' + str(record.get('job_id'))))
         except (OSError, ValueError) as exc:
             out.append(('error', '作业日志损坏：' + str(exc)))
-    return out or [('info', '后台自迭代配置有效；此项不证明执行器或语义效果有效')]
+    try:
+        waiting = controller.waiting_summary()
+    except (OSError, ValueError) as exc:
+        return out + [('error', '后台自迭代采证失败：' + str(exc))]
+    names = {'correction': '纠正', 'notes': '笔记', 'repair': '复测失败'}
+    out.append(('info', '后台自迭代采证：' + '；'.join(
+        '%s %d 条（%s）' % (label, rows['total'], '、'.join(
+            '%s %d' % (OUTCOME_LABELS.get(k, k), v) for k, v in sorted(rows.items()) if k not in ('total', 'lines')) or '无')
+        for label, rows in ((names[k], v) for k, v in waiting['funnel'].items()))
+        + ('；有 %d 处读不出或归属对不上，统计不完整' % len(waiting['diagnostics']) if waiting['diagnostics'] else '')
+        + '；笔记里不成条目的文字 %d 字' % waiting['funnel']['notes']['lines'].get('unrecognized_chars', 0)
+        + '；' + ('触发：' + '、'.join(waiting['trigger']) if waiting['trigger'] else '未到触发条件')
+        + ('；最近一次分析 ' + waiting['last_job']['job_id'] + '（' + str(waiting['last_job']['status']) + '）：' + '、'.join(
+            '%s %s %d 条' % (names.get(k, k), {'analysed': '入包', 'left_for_next_run': '留下次', 'to_a_person': '转人工'}.get(o, o), n)
+            for k, group in sorted(waiting['last_job']['packing'].items()) for o, n in sorted(group.items()))
+           if waiting['last_job'] else '')
+        + '。此项不证明执行器或语义效果有效'))
+    if waiting['paused']:
+        out.append(('info', '%d 条证据连续三次没有结论，已暂停；材料变了或运行 workframe-selfiter resume 再试'
+                    % len(waiting['paused'])))
+    return out
 
 
 CHECKS = [
@@ -2463,7 +2629,7 @@ CHECKS = [
     ("sidecar_health", "sidecar 健康", "memory-index.json 字段 schema / scope 枚举 / key-scope 一致 / 疑似重复 key", check_sidecar_health),
     ("proposal_dates", "提案日期字段", "applied 须有 applied_at、rejected 须有 rejected_at（迭代日期派生的输入质量）", check_proposal_dates),
     ("yaml_parse", "数据文件 YAML 可解析性", "board.yaml / issues / proposals 过真 YAML 解析器；坏行=error（与 close-check `[yaml-parse]` 共用判定式、文件集不相交）", check_data_yaml_parse),
-    ("notes_backlog", "notes 积压", f"内容行 > {NOTES_BACKLOG_LINES} 或 内容行>5 且距上次提升 > {NOTES_STALE_DAYS} 天（体积口径；开场卡问询按条目数另计，见 memory-ask.py）", check_notes_backlog),
+    ("notes_backlog", "notes 积压", f"内容行 > {NOTES_BACKLOG_LINES} 或 内容行>5 且距上次提升 > {NOTES_STALE_DAYS} 天（体积口径；首问维护提醒的 memory_backlog 按条目数另计，见 maintenance_workorder.count_notes_entries）", check_notes_backlog),
     ("memory_capacity", "MEMORY 容量", f"字符预算 role ≤ {ROLE_MEMORY_MAX_CHARS} / shared ≤ {SHARED_MEMORY_MAX_CHARS} / module ≤ {MODULE_MEMORY_MAX_CHARS}；附 token 估算（×{TOKEN_PER_CHAR}）", check_memory_capacity),
     ("memory_header_stale", "MEMORY 文件头口径", "各域 MEMORY.md 文件头里已知的旧口径句（如「至多留指针」「≤ 100 行」）；装机不覆盖存量文件，命中只报 info", check_memory_header_stale),
     ("auto_memory", "auto-memory 体量", f"单条 ≤ {AUTO_MEMORY_ENTRY_MAX_CHARS} 字符；索引 ≤ {AUTO_MEMORY_INDEX_MAX_LINES} 行；只报警不动手", check_auto_memory),

@@ -75,7 +75,11 @@ class ModuleMemoryTests(unittest.TestCase):
 
     def test_same_thread_dedup_and_sibling_parent_once(self):
         self.mm.deliver(self.root, self.payload())
+        receipts = lambda: [e for e in self.events() if e.get('type') == 'module_memory_injected']
+        first = receipts()
+        self.assertTrue(first and all(e.get('outcome') == 'injected' for e in first), first)
         self.assertFalse(self.mm.deliver(self.root, self.payload()))
+        self.assertEqual(receipts(), first, '已投过、去重跳过不写回执')
         out = self.mm.deliver(self.root, self.payload(path='projects/modules/alpha/two/overview.md'))
         self.assertIn('TWO', out)
         self.assertNotIn('ALPHA', out)
@@ -188,9 +192,10 @@ class ModuleMemoryTests(unittest.TestCase):
 
     def test_shell_does_not_reverse_lookup_code_but_read_and_patch_do(self):
         self.put('src/app.py', '# code\n')
-        self.put('.workframe/state/code-paths-index.json', json.dumps({
-            '__schema__':'workframe.code-paths-index.v1','built_at':'2026-11-06T00:00:00+00:00',
-            'buckets':{'src':{'src/**':['alpha/one','beta/three']}}}))
+        # 映射写在声明里，不手填缓存：读者按声明的 stat 摘要判过期，手填的缓存没有 source_stamp、会被重建掉
+        for basic, sub in [('alpha', 'one'), ('beta', 'three')]:
+            self.put(f'projects/modules/{basic}/{sub}/submodule.yaml',
+                     f'parent_module: {basic}\nname: {sub}\ncode_paths:\n  - src/**\n')
         self.assertFalse(self.mm.deliver(self.root, self.payload('Bash', path='src/app.py')))
         out = self.mm.deliver(self.root, self.payload(path='src/app.py'))
         self.assertIn('ONE', out)

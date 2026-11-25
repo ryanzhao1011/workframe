@@ -14,8 +14,10 @@ projects/modules/graph-health.md(可 git diff、库内可读)。
             ③frontmatter updated 缺失/格式错(单列,不静默跳过)
   5. 概念热点 词表词在正文高频提及但所在文件无对应链接(缺口候选)
             词表来源: .workframe-config.json graph_health.hotspot_words(优先)
-            → projects/specs/_meta/taxonomy.md「## 能力域」表格
-            → 两者皆无则跳过本维度并给出启用指引
+            → projects/specs/_meta/taxonomy.md「## 能力域」表格(出厂示例词不算,取词见
+              插件 scripts/_taxonomy.py)
+            → 两者皆无(或能力域只剩示例词)则本维度「未启用」:报告总表、详细节与终端摘要
+              三处都写明,并给出启用指引
 
 项目级配置(.workframe-config.json, 均可缺省):
     "graph_health": {
@@ -35,6 +37,10 @@ import sys
 import io
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+
+# taxonomy 取词与归档检查共用一份(插件内 scripts/_taxonomy.py,import 零副作用)
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
+import _taxonomy  # noqa: E402
 
 # 中文 Windows 控制台是 cp936，本脚本报告与报错全是中文。**两条流都要包**：
 # 只包 stdout 时，未捕获异常的 traceback（走 stderr，且印着含中文的用户路径）
@@ -74,9 +80,10 @@ def load_config(proj: Path) -> dict:
 
 
 def load_taxonomy_words(proj: Path):
-    """解析 taxonomy.md「## 能力域」表格首列反引号 tag → 热点词表。
+    """taxonomy.md「## 能力域」节的真词 → 热点词表(取词规则见 `_taxonomy.parse`:只读节内第一张表、
+    滤掉出厂示例词)。
 
-    Returns: (words, taxonomy_updated_str) — 文件/段落不存在返回 ([], None)。
+    Returns: (words, taxonomy_updated_str) — 文件不存在返回 ([], None);节不存在或未配置返回 ([], updated)。
     """
     tax = proj / TAXONOMY_REL
     if not tax.exists():
@@ -86,11 +93,7 @@ def load_taxonomy_words(proj: Path):
     m = re.search(r"^updated:\s*(.+)$", text, re.M)
     if m:
         updated = m.group(1).strip().strip('"')
-    sec = re.search(rf"^{re.escape(TAXONOMY_SECTION)}.*?$(.*?)(?=^## |\Z)", text, re.S | re.M)
-    if not sec:
-        return [], updated
-    words = re.findall(r"^\|\s*`([^`]+)`\s*\|", sec.group(1), re.M)
-    return [w.strip() for w in words if w.strip()], updated
+    return _taxonomy.parse(text)["能力域"] or [], updated
 
 
 def frontmatter_block(text):
@@ -484,7 +487,7 @@ def main():
     L.append(f"| stale current-state(>{STALE_CS_DAYS}天) | {len(stale_cs)} |")
     L.append(f"| 姊妹时差可疑对(overview 落后 prd >{SIBLING_GAP_DAYS}天) | {len(siblings)} |")
     L.append(f"| updated 缺失/格式错 | {len(missing_updated)} |")
-    L.append(f"| 概念热点(未链接高频提及) | {len(hotspots)} |")
+    L.append(f"| 概念热点(未链接高频提及) | {len(hotspots) if hotspot_source else '未启用'} |")
     L.append("")
     L.append("## 1. 断链(含 frontmatter related)")
     L.append("")
@@ -588,7 +591,14 @@ def main():
         else:
             L.append("_无。_")
     else:
-        L.append(f"> 本维度已跳过:未找到词表。启用方式二选一:①建 `{TAXONOMY_REL}`(模板见 core 插件 templates/taxonomy-template.md),在「{TAXONOMY_SECTION}」表格维护业务概念词;②在 `.workframe-config.json` 配 `graph_health.hotspot_words`。")
+        tax_file = proj / TAXONOMY_REL
+        if not tax_file.exists():
+            why = "未找到词表"
+        elif _taxonomy.parse(tax_file.read_text(encoding="utf-8", errors="replace"))["能力域"] is None:
+            why = "词表里没有「能力域」节"
+        else:
+            why = "词表「能力域」节只有出厂示例词或为空"
+        L.append(f"> 本维度未启用:{why}。启用方式二选一:①建 `{TAXONOMY_REL}`(模板见 core 插件 templates/taxonomy-template.md),在「{TAXONOMY_SECTION}」表格维护业务概念词;②在 `.workframe-config.json` 配 `graph_health.hotspot_words`。")
     L.append("")
     L.append("## 处置指引")
     L.append("")
@@ -602,7 +612,7 @@ def main():
     report_text = "\n".join(L)
     out.write(f"扫描 {len(files)} 份 | 断链 {len(broken)} | 歧义 {len(ambiguous)} | 孤儿 {len(orphans)}"
               f" | staleCS {len(stale_cs)} | 时差对 {len(siblings)} | updated异常 {len(missing_updated)}"
-              f" | 热点 {len(hotspots)}{'' if hotspot_source else '(维度跳过:无词表)'}\n")
+              f" | 热点 {len(hotspots) if hotspot_source else '未启用(无可用词表)'}\n")
     if args.dry:
         out.write("(dry-run,未写报告)\n")
     else:

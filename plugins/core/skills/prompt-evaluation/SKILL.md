@@ -152,7 +152,7 @@ cost:
 
 - **prompt-design**：评估结果反馈到设计迭代
 - **self-iteration**：评估**结论**经 `@prompt-eng notes.md` 沉淀后参与自迭代模式识别；
-  自迭代不直接读 `projects/evals/`（其数据源清单见该 skill 阶段 (a)），别指望评估报告
+  自迭代不读评估报告（其数据源清单见该 skill 阶段 (a)），别指望评估报告
   自动被消费——要它进决策就写进 notes
 - **@qa**：评估样本可纳入回归测试
 

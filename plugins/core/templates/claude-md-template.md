@@ -1,7 +1,6 @@
 # {{PROJECT_NAME}}
 
 > 基于 Workframe {{FRAMEWORK_VERSION}} 搭建的多角色协作项目
-> 项目类型：{{PROJECT_TYPE}}
 > 创建日期：{{CREATED_DATE}}
 
 <!-- 项目自有的内容（这个项目是什么 / 项目自有判据 / 项目级角色 / 路由偏好 / 业务目录）与委派授权

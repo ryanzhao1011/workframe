@@ -1,6 +1,6 @@
 ---
 name: librarian
-description: '记忆整理员：评估 notes.md 条目并按 D/U/R/A 提升到合适落点（含同主题融合）、扫描模块记忆、管理 MEMORY.md 容量候选、维护整理日志与 memory-index sidecar。用于 SessionStart 询问式开场卡用户选「处理」后（主通道）、`workframe-maintenance` 批处理工单的 notes 积压项、会话中出现 `memory_backlog` 维护信号时、MEMORY.md 接近容量上限需要评估降级候选时、要核对 MEMORY 条目是否已被 skill / 文档承载时。典型触发：「整理一下记忆 / notes 太多了 / 记忆和 skill 有没有重复」。边界：只看记忆变动流水 → memory-log；纠正类条目由 correction-detection 按落点分流，不经本 skill。'
+description: '记忆整理员：评估 notes.md 条目并按 D/U/R/A 提升到合适落点（含同主题融合）、扫描模块记忆、管理 MEMORY.md 容量候选、维护整理日志与 memory-index sidecar。用于用户要求整理记忆时（主通道，含首问维护提醒出现 `memory_backlog` 后用户说「处理」）、`workframe-maintenance` 批处理工单的 notes 积压项、会话中出现 `memory_backlog` 维护信号时、MEMORY.md 接近容量上限需要评估降级候选时、要核对 MEMORY 条目是否已被 skill / 文档承载时。典型触发：「整理一下记忆 / notes 太多了 / 记忆和 skill 有没有重复」。边界：只看记忆变动流水 → memory-log；纠正类条目由 correction-detection 按落点分流，不经本 skill。'
 user-invocable: false
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
 ---
@@ -112,11 +112,11 @@ shared 层的整理规则与 role 层一致（D/U/R/A 评估、容量管理、�
 L2 落点的提升**不自动执行**：把候选清单写入 `.workframe/state/promotion-candidates.md`（覆盖式重写，头部带生成时间；每条一行，固定格式 `- [ ] <scope> | <YYYY-MM-DD> | <一句话摘要> | 出处: <notes 条目> | 建议落点: <文件+章节>（<操作>）`，操作按第 2.5 步第 3 条标——`- [ ]` 前缀是 maintenance_workorder.py 计数依赖，勿改），然后按调用场景分流：
 
 - **常规调用 / `/core:maintenance-review`**：用 AskUserQuestion 当场请用户确认；用户跳过时清单保留在该文件，下次运行时先读它恢复候选再继续。用户确认后执行写入并把对应行改为 `- [x]`。
-- **询问式触发（SessionStart 开场卡）/ `--maintenance` 批处理**：**不当场出卡**——只写入候选文件攒卡，在结果摘要里提示用户「有 N 条 L2 候选待拍板」。开场卡场景保持轻量（用户是来干正事的），批处理场景是 print 模式（没有交互卡可用）。
+- **`--maintenance` 批处理**：**不当场出卡**——只写入候选文件攒卡，在结果摘要里提示用户「有 N 条 L2 候选待拍板」。批处理场景是 print 模式（没有交互卡可用）。
 
 ### 第 2.5 步：融合整理 SOP（写入前必须执行）
 
-后台自动作业沿用本节的读全文、同主题融合、冲突停止、边界保留与写后整章检查；执行权限见 self-iteration 的后台作业段。后台只做局部并进或新增，不自动迁移、删除或重整章节；notes 保留原文，控制器按来源内容指纹记录已处理状态，不执行本节第 9 条的人工整理归档动作。容量不够只出待批整理建议，不挤掉旧条目。
+后台自动作业沿用本节的读全文、同主题融合、冲突停止、边界保留与写后整章检查；执行权限见 self-iteration 的后台作业段。后台只出建议、不写记忆；notes 保留原文，控制器按来源内容指纹记录每条证据有没有结论，不执行本节第 9 条的人工整理归档动作。容量不够也只在建议里标明，不挤掉旧条目。
 
 > **禁止无脑 append。**往任何目标文档写入前，按顺序执行以下检查。这是本 skill 最容易被跳过、也最影响质量的一步——直接追加会让目标文档不断膨胀、同义内容重复、口径互相矛盾。
 > 写入侧已前置：correction-detection / auto-update 的写入路径（工序在 skill `signal-intake` §1 A.U.N.）复用第 3 条的操作标签做**写时**同主题检查；本步在批处理/提升场景兜底复查漏网。
@@ -148,7 +148,7 @@ L2 落点的提升**不自动执行**：把候选清单写入 `.workframe/state/
    - 写入了目标（并进 / 归纳 / 迁移 / 新增）→ `→ 已提升至 <目标文件+章节>（<操作>，YYYY-MM-DD）`
    - 不变 → `→ 不变：已由 <文件+章节> 覆盖（YYYY-MM-DD）`
    - 拒绝 → `→ 拒绝：<理由>；当时条件：<这个判断依赖的现状，如「X 尚未退役」「用户以 Y 为由不提升」>（YYYY-MM-DD）`。条件写不出来就写 `当时条件：未记录`，不要空着——以后查到它的人据此知道不能直接沿用
-   - **为什么移动而不是原地标注**：notes.md 的语义是「待处理缓冲区」，`memory_backlog` 积压信号按它的内容量判定——已处理条目留在原地会让缓冲区只增不减、信号永不消解（与 M6 修复的 cadence 堆积同构）。archive 保留完整论证作为出处，不参与积压统计与后续评估
+   - **为什么移动而不是原地标注**：notes.md 的语义是「待处理缓冲区」，`memory_backlog` 积压信号按它的内容量判定——已处理条目留在原地会让缓冲区只增不减、信号永不消解。archive 保留完整论证作为出处，不参与积压统计与后续评估
    - **混合段允许条目级拆分**：一个日期段里部分子条目已处理、部分未处理时，只移已处理的子条目，段内留一行注记 `（本段部分条目已处理，见 notes-archive.md 同日条目）`
    - `notes-archive.md` 首次创建时写文件头：`# <role> notes 归档区（已处理条目）` + 一行说明
    - 移动 = 删除 + 写入，但内容零删减，归类为 **L1**（不需要 L2 审批）
@@ -273,7 +273,7 @@ Key 规则：`{scope}:{YYYY-MM-DD}:{条目前 20 字规范化}`。规范化三�
 
    事件在**改 MEMORY 与 sidecar 之前**写——它是可恢复证据，先于被它记录的改动落盘；同一次迁出中途失败要重试时，先查本次那条是否已经写下——同 `scope`、同 `entry_key`、同 `archive_path` 与 `target_path`，且晚于该 key 最近一次写入事件（提升 / 纠正 / 搬迁）；已有就不再追加。更早的同 key 迁出（例如条目回滚恢复后再次迁出）不算本次证据，照常追加。下例 `dev` 替换为源条目的实际域，原 `entry_key` 照抄，不重新归一：
    ```bash
-   python "$(cat .workframe/state/plugin-root.txt)/bin/workframe-event" memory-moved-out \
+   python "$WF_PLUGIN_ROOT/bin/workframe-event" memory-moved-out \
        --scope dev --entry-key "<原 entry_key>" \
        --archive-path "<原文归档路径>" --target-path "<完整目标文档路径>" \
        --summary "<迁出事实的完整快照>"
@@ -321,20 +321,20 @@ Key 规则：`{scope}:{YYYY-MM-DD}:{条目前 20 字规范化}`。规范化三�
 
 ### 第 5 步：刷新 `skill-metrics.yaml`（调用 deterministic 脚本）
 
-**默认路径**：SessionEnd hook 会调用 `recompute_skill_metrics.py` 自动重算 `.workframe/state/skill-metrics.yaml`。如果本次 Librarian 需要立即刷新，调用插件内兜底命令（插件根路径从 `plugin-root.txt` 取，不依赖 PATH）：
+**默认路径**：SessionEnd hook 会调用 `recompute_skill_metrics.py` 自动重算 `.workframe/state/skill-metrics.yaml`。如果本次 Librarian 需要立即刷新，调用插件内兜底命令（插件根取 `$WF_PLUGIN_ROOT`，即会话开场注入的「本会话插件根」，不依赖 PATH）：
 
 ```bash
-python "$(cat .workframe/state/plugin-root.txt)/bin/workframe-recompute-skill-metrics"
+python "$WF_PLUGIN_ROOT/bin/workframe-recompute-skill-metrics"
 ```
 
-`plugin-root.txt` 由 SessionStart hook 每次会话刷新为当前插件根。若环境里 `workframe-recompute-skill-metrics` 恰好已在 PATH（CC plugin `bin/` 注入生效的环境），裸调等价。
+`$WF_PLUGIN_ROOT` 是会话开场注入的「本会话插件根」，执行前换成那个路径。若环境里 `workframe-recompute-skill-metrics` 恰好已在 PATH（CC plugin `bin/` 注入生效的环境），裸调等价。
 
 **脚本职责**：
 
 1. 读取 `.workframe/state/events.jsonl`（逐行 JSON 解析；跳过 `__schema__` 描述行和 malformed 行）
 2. 按默认窗口 30 天过滤（`generated_at - ts ≤ 30d`），也可由调用方指定
 3. 分类聚合：
-   - `skills[<name>]`: 按 `type=skill_used` 汇总 `invocations`（计数）、`successes`（`success=true` 计数）、`last_used`（最新 ts 的日期）
+   - `skills[<name>]`: 键是规范技能身份（裸名与 `core:` 名归一，判定见脚本目录 `_skill_identity.py`）；按 `type=skill_used`（模型自报）汇总 `invocations`（计数）、`successes`（`success=true` 计数）、`last_used`（最新 ts 的日期），另按 `type=skill_invoked`（hook 记的调起）汇总 `invoked`——两列**不相加**，只有调起没有自报的技能 `invocations: 0`
    - `rules`: **整段空对象**——`recompute_skill_metrics.py` 直接写 `rules: {}`（`rule_triggered` 无 deterministic producer，不生成占位 entry；保留 `rules` 顶层 key 仅为 schema 结构兼容）。下游（check-iteration-trigger.py）不再消费此字段；见 `.workframe-meta/event-schema.json` 中 `reliability: removed_v0_2_1`
    - `corrections_count`: `type=user_correction` 事件总数
    - `blocks_count`: `type=task_blocked` 事件总数
@@ -345,7 +345,7 @@ python "$(cat .workframe/state/plugin-root.txt)/bin/workframe-recompute-skill-me
 > 为什么 L1：脚本重算是 deterministic 的派生文件操作，不改动用户可读资产（MEMORY.md / notes.md / rules / skills 本体），失败影响面仅限 skill-metrics.yaml 自身，旧版本可随时从 events.jsonl 重新生成。
 
 **下游消费者**：
-- `self-iteration` 日常决策读 `skill-metrics.yaml`（无需解析全量 events）
+- `self-iteration` 读 `skill-metrics.yaml` 作人工判读线索（无需解析全量 events；成功率不作自动触发信号）
 - 审计/追因需要时读 `events.jsonl`
 - `/core:audit` 等维护命令汇总展示
 
@@ -358,7 +358,7 @@ python "$(cat .workframe/state/plugin-root.txt)/bin/workframe-recompute-skill-me
 2. 用代码通道关闭（**不要自己改这个文件**）——它一并写 `pending_maintenance_dismissed` 事件：
 
    ```bash
-   python "$(cat .workframe/state/plugin-root.txt)/scripts/maintenance_workorder.py" \
+   python "$WF_PLUGIN_ROOT/scripts/maintenance_workorder.py" \
        --close-pm <PM-ID> [<PM-ID> ...]
    ```
 

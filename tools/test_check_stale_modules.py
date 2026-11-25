@@ -7,6 +7,8 @@
   - first_static_segment：bucket key 提取
   - parse_code_paths：submodule.yaml code_paths 解析
   - lookup_submodules：反向 lookup 命中正确子模块
+  - 索引新鲜度：显式传入索引不重建 / 入口按声明重建再判新鲜 / project_dir 落点 / 两进程并发只保存一次 /
+    声明读不了时 CLI exit 1、缓存不覆盖、hook 不报段已重建（对账矩阵在 test_module_close_check）
   - main 子命令分派回归（防 v0.3.x M3 fix-1 倒退）：
     * scan-git-diff 子命令在 stdin 含 SessionStart JSON 时仍能跑
     * 无 argv 时走 PostToolUse 路径
@@ -653,6 +655,349 @@ def test_state_dir_placement(tmpdir):
     return failures
 
 
+# ---------- 反向索引新鲜度：入口、并发、读不了 ----------
+
+
+def _fresh_project(base):
+    project = Path(base)
+    for sub, pat in (("a/x", "src/a/**"), ("b/y", "src/b/**")):
+        d = project / "projects" / "modules" / sub
+        d.mkdir(parents=True)
+        (d / "submodule.yaml").write_text(f"name: {sub}\ncode_paths:\n  - {pat}\n", encoding="utf-8", newline="")
+    return project
+
+
+def test_explicit_index_and_entry(mod, tmpdir):
+    """显式传入的合法空索引照用、不触发重建；不传时经入口按声明重建，第二次判新鲜。"""
+    project = _repoint(mod, _fresh_project(tmpdir))
+    failures = []
+    if mod.lookup_submodules("src/a/f.py", index={"buckets": {}}) != []:
+        failures.append("显式空索引应照用（命中应为空）")
+    if mod.INDEX_FILE.exists():
+        failures.append("显式传入索引时不应触发重建写盘")
+    _index, status = mod.ensure_fresh_index()
+    if status != "rebuilt":
+        failures.append(f"首次入口应重建，实际 {status}")
+    _index, status = mod.ensure_fresh_index()
+    if status != "fresh":
+        failures.append(f"声明未变时应判新鲜，实际 {status}")
+    if mod.lookup_submodules("src/b/f.py") != ["b/y"]:
+        failures.append("入口重建后 lookup 应命中 b/y")
+    # project_dir 显式给出：锁、缓存、事件都落在该项目
+    other = _fresh_project(Path(tmpdir) / "other")
+    if mod.lookup_submodules("src/a/f.py", project_dir=other) != ["a/x"]:
+        failures.append("project_dir 显式给出时应按该项目的声明回答")
+    if not (state_dir_of(other) / "code-paths-index.json").exists():
+        failures.append("project_dir 显式给出时缓存应落在该项目")
+    return failures
+
+
+_RACE_CHILD = r'''
+import importlib.util, json, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("csm_child", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+counter = Path(sys.argv[2])
+real = mod.save_index
+def counted(index, index_file=None):
+    with open(counter, "a", encoding="utf-8", newline="") as fh:
+        fh.write("save\n")
+    return real(index, index_file)
+mod.save_index = counted
+ready = Path(sys.argv[3])
+ready.write_text("1", encoding="utf-8", newline="")
+_i, status = mod.ensure_fresh_index()
+print(status)
+'''
+
+
+def test_concurrent_rebuild_once(mod, tmpdir):
+    """两个进程都先读到旧缓存、再排队进锁：缓存**实际保存次数**为 1（锁内复判），最终内容正确。"""
+    import time as _time
+    base = Path(tmpdir)
+    project = _repoint(mod, _fresh_project(base / "p"))
+    child = base / "child.py"
+    child.write_text(_RACE_CHILD, encoding="utf-8", newline="")
+    counter = base / "saves.txt"
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=str(project), PYTHONUTF8="1")
+    failures = []
+    holder = mod.FileLock(mod.LOCK_FILE)
+    holder.__enter__()
+    procs = []
+    try:
+        for i in range(2):
+            procs.append(subprocess.Popen([sys.executable, str(child), str(SCRIPT_PATH), str(counter),
+                                           str(base / f"ready{i}")], env=env, stdout=subprocess.PIPE,
+                                          stderr=subprocess.PIPE, text=True, encoding="utf-8"))
+        deadline = _time.monotonic() + 20
+        while not all((base / f"ready{i}").exists() for i in range(2)) and _time.monotonic() < deadline:
+            _time.sleep(0.05)
+        _time.sleep(0.8)  # 就绪后各自做完锁外判过期、停在锁上
+    finally:
+        holder.__exit__(None, None, None)
+    outs = [p.communicate(timeout=60) for p in procs]
+    statuses = sorted(o[0].strip() for o in outs)
+    if statuses != ["fresh", "rebuilt"]:
+        failures.append(f"两进程应一重建一判新鲜，实际 {statuses} / stderr {[o[1][-200:] for o in outs]}")
+    saves = counter.read_text(encoding="utf-8").splitlines() if counter.exists() else []
+    if len(saves) != 1:
+        failures.append(f"缓存应只保存 1 次，实际 {len(saves)} 次")
+    if mod.lookup_submodules("src/a/f.py", index=mod.load_index()) != ["a/x"]:
+        failures.append("并发重建后缓存内容不对")
+    return failures
+
+
+def test_unreadable_cli_and_hook(tmpdir):
+    """有声明读不了：`rebuild-index` / `init-submodule` exit 1 且点名文件、缓存字节不变；
+    PostToolUse 改 submodule.yaml 时不写「段已重建」。"""
+    project = _fresh_project(tmpdir)
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=str(project), PYTHONUTF8="1")
+    failures = []
+
+    def cli(*args, stdin=None):
+        return subprocess.run([sys.executable, str(SCRIPT_PATH), *args], input=stdin, env=env,
+                              capture_output=True, text=True, encoding="utf-8", timeout=60)
+
+    r = cli("rebuild-index")
+    if r.returncode != 0:
+        failures.append(f"声明正常时 rebuild-index 应 exit 0: {r.returncode} {r.stderr[-200:]}")
+    index_file = state_dir_of(project) / "code-paths-index.json"
+    if not index_file.exists():
+        failures.append("声明正常时 rebuild-index 应写出索引")
+    if any(e.get("type") in ("modules_index_rebuilt", "modules_index_segment_rebuilt")
+           for e in _read_events(state_dir_of(project) / "events.jsonl")):
+        failures.append("重建成功不应再写成功流水事件")
+    cache = index_file.read_bytes()
+    # PostToolUse 改一份**正常**的 submodule.yaml：分段路径真的重建了（索引里出现新声明），但不写成功流水
+    good = project / "projects" / "modules" / "b" / "y" / "submodule.yaml"
+    good_saved = good.read_bytes()
+    good.write_bytes(good_saved.rstrip(b"\n") + b"\n  - src/segment-probe/**\n")
+    r = cli(stdin=json.dumps({"hook_event_name": "PostToolUse", "tool_name": "Edit",
+                              "tool_input": {"file_path": str(good)}}))
+    if r.returncode != 0:
+        failures.append(f"PostToolUse 改正常 submodule.yaml 应 exit 0: {r.returncode} {r.stderr[-200:]}")
+    if b"segment-probe" not in index_file.read_bytes():
+        failures.append("PostToolUse 改正常 submodule.yaml 后索引没重建（新声明不在索引里）——下面「不写成功事件」无对象")
+    if any(e.get("type") in ("modules_index_rebuilt", "modules_index_segment_rebuilt")
+           for e in _read_events(state_dir_of(project) / "events.jsonl")):
+        failures.append("分段重建成功不应再写成功流水事件")
+    good.write_bytes(good_saved)
+    cli("rebuild-index")
+    cache = index_file.read_bytes()
+    bad = project / "projects" / "modules" / "b" / "y" / "submodule.yaml"
+    bad.write_bytes(b"name: y\ncode_paths:\n  - src/\xff/**\n")
+    for args in (("rebuild-index",), ("init-submodule", "b/y")):
+        r = cli(*args)
+        if r.returncode != 1 or "b/y/submodule.yaml" not in r.stderr:
+            failures.append(f"{args[0]}: 读不了时应 exit 1 并点名文件，实际 rc={r.returncode} {r.stderr[-200:]}")
+    if index_file.read_bytes() != cache:
+        failures.append("读不了时缓存被覆盖")
+    payload = json.dumps({"hook_event_name": "PostToolUse", "tool_name": "Edit",
+                          "tool_input": {"file_path": str(bad)}})
+    r = cli(stdin=payload)
+    events = _read_events(state_dir_of(project) / "events.jsonl")
+    if any(e.get("type") == "modules_index_segment_rebuilt" for e in events):
+        failures.append("读不了时 PostToolUse 不应写 modules_index_segment_rebuilt")
+    if r.returncode != 0:
+        failures.append(f"PostToolUse 不应因读不了而非零退出: {r.returncode}")
+    return failures
+
+
+def test_unlistable_dir(mod, tmpdir):
+    """某个模块目录列不了（权限）：不当成「这片为空」——快照记错、入口返回 unreadable、缓存字节不变。
+
+    修复前用 `Path.glob` 枚举，列不了的目录被静默跳过：快照 errors 为空、入口把完整缓存覆盖成残缺的。"""
+    from unittest import mock
+    project = _repoint(mod, _fresh_project(tmpdir))
+    failures = []
+    _i, status = mod.ensure_fresh_index()
+    cache = mod.INDEX_FILE.read_bytes()
+    good_stamp = mod.declared_stamp(mod.MODULES_DIR)
+    blocked = (mod.MODULES_DIR / "b").resolve()
+    real = os.scandir
+
+    def scandir(path="."):
+        if Path(path).resolve() == blocked:
+            raise PermissionError(13, "denied", str(path))
+        return real(path)
+
+    with mock.patch.object(mod.os, "scandir", scandir):
+        _stamp, pairs, errors = mod.declared_snapshot(mod.MODULES_DIR)
+        if errors != [("b/", "PermissionError")]:
+            failures.append(f"列不了的目录应记进 errors: {errors}")
+        if pairs != [("src/a/**", "a/x")]:
+            failures.append(f"列得了的那片照常读出: {pairs}")
+        if mod.declared_stamp(mod.MODULES_DIR) == good_stamp:
+            failures.append("列不了时戳应与正常时不同（否则读者判新鲜、看不见这个故障）")
+        _i, status = mod.ensure_fresh_index()
+        if status != "unreadable":
+            failures.append(f"入口应返回 unreadable，实际 {status}")
+    if mod.INDEX_FILE.read_bytes() != cache:
+        failures.append("列不了时完整缓存被覆盖")
+    if mod.lookup_submodules("src/b/f.py") != ["b/y"]:
+        failures.append("故障解除后 b/y 的命中应还在")
+    # 缓存建好之后新加的模块目录恰好列不了：已知声明一条不少，戳只能靠「列不了」那几行变——
+    # 不把它们算进戳，入口判新鲜、新声明静默缺席，且不留任何事件
+    new = mod.MODULES_DIR / "c" / "z"
+    new.mkdir(parents=True)
+    (new / "submodule.yaml").write_text("name: c/z\ncode_paths:\n  - src/c/**\n", encoding="utf-8", newline="")
+    blocked = (mod.MODULES_DIR / "c").resolve()
+    with mock.patch.object(mod.os, "scandir", scandir):
+        _i, status = mod.ensure_fresh_index()
+    if status != "unreadable":
+        failures.append(f"新加的目录列不了时入口应返回 unreadable（不是判新鲜），实际 {status}")
+    del project
+    return failures
+
+
+def test_read_once(mod, tmpdir):
+    """每份声明只读一次：第一次读成功后文件再被打开就失败，映射照样完整、不记错。
+
+    反例：把路径（而不是已读文本）交给 parse_code_paths 时，它第二次读失败、吞异常返回 []，
+    得到 pairs 缺一片而 errors 为空——被当成「成功读到空声明」。"""
+    from unittest import mock
+    _repoint(mod, _fresh_project(tmpdir))
+
+    def gone(self, *a, **k):
+        raise FileNotFoundError(2, "gone", str(self))
+
+    opened = []
+    real_rb = Path.read_bytes
+
+    def counted(self):
+        opened.append(self.name if self.name != "submodule.yaml" else "/".join(self.parts[-3:-1]))
+        return real_rb(self)
+
+    with mock.patch.object(Path, "read_text", gone), mock.patch.object(Path, "read_bytes", counted):
+        _stamp, pairs, errors = mod.declared_snapshot(mod.MODULES_DIR)
+    want = [("src/a/**", "a/x"), ("src/b/**", "b/y")]
+    if pairs != want or errors != []:
+        return [f"第二次打开失败不应影响结果: pairs={pairs} errors={errors}"]
+    # 逐文件计数：成功路径连读两次 read_bytes 也能骗过上面那条（它只禁 read_text）
+    if sorted(opened) != ["a/x", "b/y"]:
+        return [f"每份声明应恰读一次: {sorted(opened)}"]
+    return []
+
+
+def test_locked_recheck(mod, tmpdir):
+    """确定性屏障：本进程锁外判旧之后、进锁之前，「另一个进程」已完成重建——锁内复判应看到新鲜、不再保存。
+
+    子进程版（`concurrent_rebuild_once`）靠 sleep 让两进程停在锁上，第二个晚到时删掉锁内复判也可能绿；
+    这里把「另一个进程」塞进进锁那一刻，两者首读都旧是构造出来的，不靠时序。"""
+    _repoint(mod, _fresh_project(tmpdir))
+    failures = []
+    mod.ensure_fresh_index()
+    y = mod.MODULES_DIR / "b" / "y" / "submodule.yaml"
+    y.write_text("name: b/y\ncode_paths:\n  - src/b/**\n  - src/c/**\n", encoding="utf-8", newline="")
+    real_lock, real_save = mod.FileLock, mod.save_index
+    saves, fired = [], []
+
+    def counted(index, index_file=None):
+        saves.append(1)
+        return real_save(index, index_file)
+
+    class Racing:
+        def __init__(self, lock_file):
+            self._lock_file, self._inner = lock_file, real_lock(lock_file)
+
+        def __enter__(self):
+            if not fired:
+                fired.append(1)
+                with real_lock(self._lock_file):
+                    mod._rebuild_unlocked(None, "drift")   # 另一个进程：判旧 → 进锁 → 重建 → 出锁
+            return self._inner.__enter__()
+
+        def __exit__(self, *exc):
+            return self._inner.__exit__(*exc)
+
+    mod.FileLock, mod.save_index = Racing, counted
+    try:
+        _i, status = mod.ensure_fresh_index()
+    finally:
+        mod.FileLock, mod.save_index = real_lock, real_save
+    if not fired:
+        failures.append("屏障没触发：本进程锁外判成了新鲜（夹具没把缓存弄旧）")
+    if status != "fresh":
+        failures.append(f"锁内复判应看到另一进程的重建、返回 fresh，实际 {status}")
+    if len(saves) != 1:
+        failures.append(f"缓存应只保存 1 次（另一进程那次），实际 {len(saves)} 次")
+    if mod.lookup_submodules("src/c/f.py", index=mod.load_index()) != ["b/y"]:
+        failures.append("最终缓存应含新声明的 src/c/**")
+    return failures
+
+
+def test_stamp_saved(mod, tmpdir):
+    """只改 mtime（内容不变）：入口重建一次并**保存新戳**，下一次判新鲜——不保存的话每次都重建。"""
+    _repoint(mod, _fresh_project(tmpdir))
+    failures = []
+    mod.ensure_fresh_index()
+    y = mod.MODULES_DIR / "a" / "x" / "submodule.yaml"
+    st = y.stat()
+    os.utime(y, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+    _i, status = mod.ensure_fresh_index()
+    if status != "rebuilt":
+        failures.append(f"mtime 变了应重建，实际 {status}")
+    if mod.load_index().get("source_stamp") != mod.declared_stamp(mod.MODULES_DIR):
+        failures.append("重建后缓存里的 source_stamp 应等于当前戳")
+    _i, status = mod.ensure_fresh_index()
+    if status != "fresh":
+        failures.append(f"保存新戳后应判新鲜，实际 {status}")
+    return failures
+
+
+def test_cli_project_flag(tmpdir):
+    """`--project <目录>`：rebuild-index / init-submodule 重建的是该项目，不是环境解析出的项目。"""
+    base = Path(tmpdir)
+    here, there = _fresh_project(base / "here"), _fresh_project(base / "there")
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=str(here), PYTHONUTF8="1")
+    failures = []
+
+    def cli(*args):
+        return subprocess.run([sys.executable, str(SCRIPT_PATH), *args], env=env,
+                              capture_output=True, text=True, encoding="utf-8", timeout=60)
+
+    for args in (("rebuild-index",), ("init-submodule", "a/x")):
+        idx = state_dir_of(there) / "code-paths-index.json"
+        if idx.exists():
+            idx.unlink()
+        r = cli(*args, "--project", str(there))
+        if r.returncode != 0 or not idx.exists():
+            failures.append(f"{args[0]} --project 应重建目标项目: rc={r.returncode} {r.stderr[-200:]}")
+        if (state_dir_of(here) / "code-paths-index.json").exists():
+            failures.append(f"{args[0]} --project 不应碰环境解析出的项目")
+    r = cli("rebuild-index", "--project")
+    if r.returncode != 2:
+        failures.append(f"--project 缺参数应 exit 2: {r.returncode}")
+    # 不认 --project 的子命令、等号写法、多余参数：一律写前 exit 2，默认项目（here）的状态一个字节不动
+    stale = state_dir_of(here) / "stale-modules.yaml"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("submodules:\n  a/x:\n    reasons:\n      - code_changed:src/a/f.py\n",
+                     encoding="utf-8", newline="")
+    snap = stale.read_bytes()
+    there_idx = state_dir_of(there) / "code-paths-index.json"
+    there_snap = there_idx.read_bytes()
+    for args in (("clear-stale", "a/x", "--project", str(there)), ("scan-git-diff", "--project", str(there)),
+                 ("rebuild-index", f"--project={there}"), ("rebuild-index", "--project", str(there), "extra"),
+                 ("rebuild-index", "--project", str(there), "--project", str(there)),
+                 ("rebuild-index", "--project", ""), ("rebuild-index", "--projec", str(there)),
+                 ("rebuild-index", str(there)), ("init-submodule", "--project", str(there)),
+                 ("init-submodule", "a/x", "b/y"), ("init-submodule", "--verbose"), ("init-submodule", "")):
+        r = cli(*args)
+        if r.returncode != 2:
+            failures.append(f"{args} 应在写前 exit 2，实际 {r.returncode}")
+    if stale.read_bytes() != snap or (state_dir_of(here) / "code-paths-index.json").exists():
+        failures.append("被拒的调用不应改动默认项目的 stale 清单或缓存")
+    if there_idx.read_bytes() != there_snap:
+        failures.append("被拒的调用也不应改动 --project 指向的项目")
+    plain = base / "plain"
+    plain.mkdir()
+    r = cli("rebuild-index", "--project", str(plain))
+    if r.returncode != 1 or (state_dir_of(plain) / "code-paths-index.json").exists():
+        failures.append(f"--project 指向非 modules 项目应 exit 1 且零写入: {r.returncode}")
+    return failures
+
+
 def main():
     mod = _load_module()
     all_failures = []
@@ -681,6 +1026,18 @@ def main():
         all_failures += [("scan_lock_timeout", f) for f in test_scan_lock_timeout_events(mod, tmp)]
     with tempfile.TemporaryDirectory() as tmp:
         all_failures += [("state_dir_placement", f) for f in test_state_dir_placement(tmp)]
+    with tempfile.TemporaryDirectory() as tmp:
+        all_failures += [("explicit_index_and_entry", f) for f in test_explicit_index_and_entry(mod, tmp)]
+    with tempfile.TemporaryDirectory() as tmp:
+        all_failures += [("concurrent_rebuild_once", f) for f in test_concurrent_rebuild_once(mod, tmp)]
+    with tempfile.TemporaryDirectory() as tmp:
+        all_failures += [("unreadable_cli_and_hook", f) for f in test_unreadable_cli_and_hook(tmp)]
+    for name, fn in (("unlistable_dir", test_unlistable_dir), ("read_once", test_read_once),
+                     ("locked_recheck", test_locked_recheck), ("stamp_saved", test_stamp_saved)):
+        with tempfile.TemporaryDirectory() as tmp:
+            all_failures += [(name, f) for f in fn(mod, tmp)]
+    with tempfile.TemporaryDirectory() as tmp:
+        all_failures += [("cli_project_flag", f) for f in test_cli_project_flag(tmp)]
 
     if not all_failures:
         print("✓ All check-stale-modules.py tests passed")

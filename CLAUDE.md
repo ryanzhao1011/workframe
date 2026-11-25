@@ -45,7 +45,7 @@ docs/                         用户文档
 - **改了必载纪律的源，下一次会话才生效**——`plugins/core/context/` 下的源由启动时的 hook 打包投递，项目里没有副本。改完当轮不生效，别在同一个会话里验它。
 - **Windows 上写文件一律钉 `newline=""`**。Python 文本模式默认把 LF 转成 CRLF，一次写入就让整个文件产生 diff，真实改动被淹没。`check_text_writes_pin_newline` 扫 `plugins/` 与 `tools/` 下所有写入点。
 - **hooks 保持 shell-form**，不要迁 exec form——双包装器设计依赖 shell 的扩展名解析，exec form 无法用一份跨平台 `hooks.json` 表达。
-- **`${CLAUDE_PLUGIN_ROOT}` 只注入 hook / MCP / LSP 子进程**，Bash 工具子进程不在官方承诺内。skill 里定位插件根一律用 `plugin-root.txt` 配方（`check_no_plugin_root_env_in_skills` 强制）。
+- **`${CLAUDE_PLUGIN_ROOT}` 只注入 hook / MCP / LSP 子进程**，Bash 工具子进程不在官方承诺内。skill 里定位插件根一律写 `$WF_PLUGIN_ROOT`（会话开场与子 agent 启动时注入「本会话插件根」一行；`check_no_plugin_root_env_in_skills` 禁 `${CLAUDE_PLUGIN_ROOT}`，`check_skill_recipes_use_session_root` 禁旧接口 `plugin-root.txt` 的配方）。
 
 ## 改动前先查
 

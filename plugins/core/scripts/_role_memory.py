@@ -79,6 +79,7 @@ TRIGGER_CODE_PATH = "code_path"
 TRIGGER_SESSION_START = "session_start"
 TRIGGER_COMPACT = "compact"
 
+# `skipped_dedup` 只出现在旧数据里（去重跳过不再写回执）；其余是当前会写的结果
 OUTCOMES = ("injected", "skipped_dedup", "skipped_subthread", "unmapped", "read_failed", "over_budget")
 
 ROLE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -508,7 +509,7 @@ def deliver(project_dir, payload, role, trigger, skill=None, file=None, budget=N
             return rec["cycle"], seen
         cycle, dup = _txn(project_dir, _mark)
     if dup:
-        _event(project_dir, sid, role, "skipped_dedup", trigger, cycle, skill=skill, file=file)
+        # 已投过、去重跳过：不写回执（这类回执只记「没发生什么」，没有读者）；其余结果照记
         return None
     desc = _TRIGGER_DESC.get(trigger, trigger).format(skill=skill or "", file=file or "")
     if text is None:

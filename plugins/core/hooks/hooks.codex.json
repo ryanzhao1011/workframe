@@ -27,12 +27,6 @@
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-stale-modules.py\" scan-git-diff --harness codex",
             "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/check-stale-modules.py\" scan-git-diff --harness codex",
             "additionalContextLimit": 0
-          },
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/memory-ask.py\" --harness codex",
-            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/memory-ask.py\" --harness codex",
-            "additionalContextLimit": 0
           }
         ]
       },
@@ -162,18 +156,6 @@
         ]
       }
     ],
-    "SubagentStop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-subagent-activity.py\" --harness codex",
-            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/log-subagent-activity.py\" --harness codex"
-          }
-        ]
-      }
-    ],
     "SessionEnd": [
       {
         "matcher": "",
@@ -181,7 +163,8 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end-flush.py\" --harness codex",
-            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end-flush.py\" --harness codex"
+            "commandWindows": "& \"${CLAUDE_PLUGIN_ROOT}/bin/workframe-python.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end-flush.py\" --harness codex",
+            "timeout": 3
           }
         ]
       }

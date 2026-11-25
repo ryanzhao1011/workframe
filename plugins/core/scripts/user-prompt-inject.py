@@ -2,6 +2,8 @@
 """
 UserPromptSubmit Hook — 每会话首次 prompt 注入维护上下文（v0.2.1）
 
+提醒一次的口径：维护项按「工单 ID ＋ 内容版本」去重，同一版本只播一次（见 `compose_reminder`）。
+
 v0.2.1 变更：
   - pending_maintenance 改为对象列表读取（按 §17.8 schema），展示 item["details"] 而非字符串 slice
   - wake_up_pending=true 时与 dormant=true 并列静默（首次唤醒会话用户只看 wake-up 摘要，不叠加维护提示）
@@ -14,6 +16,7 @@ v0.2.1 变更：
   {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "<text>"}}
 """
 
+import hashlib
 import io
 import json
 import os
@@ -34,7 +37,7 @@ if _SCRIPTS_DIR not in sys.path:
 import _harness  # noqa: E402
 from _harness import project_dir as _project_dir  # noqa: E402
 from _state_io import (  # noqa: E402
-    load_activity, save_activity as _save_activity, state_dir_of,
+    is_retired_pm, load_activity, save_activity as _save_activity, state_dir_of, update_activity,
 )
 
 
@@ -113,42 +116,97 @@ def read_payload():
         return {}
 
 
-def maintenance_text(state):
-    """每会话首次 prompt 的维护提醒正文，或 None（dormant / 唤醒 / 本会话已提醒 / 无待处理项）。会改 state。"""
+SHOW_MAX = 5
+# 「本会话首问已过」记最近多少个会话：保证的上限，不是无条件——一个会话之后又来了这么多个别的会话，它的下一问
+# 会再被当成首问（最多多播一次维护提醒）
+PROMPTED_KEEP = 200
+
+
+def item_version(item):
+    """维护项的版本键：工单 ID ＋ 内容摘要（kind / severity / details）。内容变了即视为新版本，会再提醒一次。"""
+    digest = hashlib.sha256(json.dumps([item.get("kind"), item.get("severity"), item.get("details")],
+                                       ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+    return f"{item.get('id', '?')}#{digest}"
+
+
+def _item_line(item):
+    return (f"  - [{item.get('severity', 'info')}] {item.get('id', '?')} ({item.get('kind', '?')})"
+            f" — {item.get('details', '')}")
+
+
+def compose_reminder(state, session_marker):
+    """锁内调用：判定、拼正文、**认领已显示的版本**，返回正文或 None。会改 state。
+
+    只播版本键不在 `maintenance_notified` 里的 open 项；**只把真正显示出来的项记为已提醒**——
+    被条数上限或长度上限挡住的不记，不再产出的种类不显示也不记，下一个会话首问再播。已关闭的项随之出列。
+    """
     # dormant 或 wake_up_pending 都不注入（首次唤醒会话用户只看 wake-up 摘要）
     if state.get("dormant") or state.get("wake_up_pending"):
         return None
+    # 「本会话首问已过」按会话逐个记（最近 PROMPTED_KEEP 个）：只记最后一个的话，A、B 两个会话交替提问时
+    # B 的首问会把 A 挤掉，A 的第二问又被当成首问
+    prompted = state.get("prompt_reminded_sessions")
+    prompted = [m for m in prompted if isinstance(m, str)] if isinstance(prompted, list) else []
+    legacy = state.get("last_prompt_injected_session_id")
+    if not prompted and isinstance(legacy, str) and legacy:
+        prompted = [legacy]          # 升级前只记了最后一个会话：先把它并进列表，别让它的第二问被当成首问
+    if session_marker in prompted:
+        state["prompt_reminded_sessions"] = prompted
+        return None
+    state["prompt_reminded_sessions"] = (prompted + [session_marker])[-PROMPTED_KEEP:]
+    state["last_prompt_injected_session_id"] = session_marker
 
-    session_marker = str(state.get("session_counter", 0))
-    last_injected = state.get("last_prompt_injected_session_id")
-    if last_injected == session_marker:
+    open_items = [item for item in format_pending_items(state.get("pending_maintenance") or [])
+                  if not is_retired_pm(item)]
+    notified = state.get("maintenance_notified")
+    notified = set(notified) if isinstance(notified, list) else set()
+    versions = {id(item): item_version(item) for item in open_items}
+    fresh = [item for item in open_items if versions[id(item)] not in notified]
+    # 已关闭 / 已改版的旧版本出列；没变的照旧记着
+    kept = {v for v in versions.values() if v in notified}
+    if not fresh:
+        state["maintenance_notified"] = sorted(kept)
         return None
 
-    items = state.get("pending_maintenance") or []
-    open_items = format_pending_items(items)
-    from _selfiter_hooks import suppress_cadence
-    if suppress_cadence(PROJECT_DIR):
-        open_items = [item for item in open_items if item.get('kind') not in (
-            'cadence_timeout', 'activity_threshold', 'completed_delta')]
-    text = None
-    if open_items:
-        lines = [f"[workframe] 待处理维护项 {len(open_items)} 条（按 severity 排序）："]
-        for item in open_items[:5]:
-            sev = item.get("severity", "info")
-            pid = item.get("id", "?")
-            kind = item.get("kind", "?")
-            details = item.get("details", "")
-            lines.append(f"  - [{sev}] {pid} ({kind}) — {details}")
-        if len(open_items) > 5:
-            lines.append(f"  - …另 {len(open_items) - 5} 条，/core:audit 查看全部")
-        text = "\n".join(lines)
+    lines = [f"[workframe] 待处理维护项 {len(fresh)} 条新增或有变化（按 severity 排序）："]
+    used = len(lines[0])
+    shown = []
+    for item in fresh[:SHOW_MAX]:
+        line = _item_line(item)
+        if shown and used + len(line) + 1 > REMINDER_MAX - 120:
+            break
+        if not shown and len(line) > REMINDER_MAX - 120:
+            line = line[:REMINDER_MAX - 140].rstrip() + "…（已截断，/core:audit 查看全文）"
+        lines.append(line)
+        used += len(line) + 1
+        shown.append(item)
+    rest_new = len(fresh) - len(shown)
+    if rest_new:
+        lines.append(f"  - …另 {rest_new} 条新的下次再提醒，/core:audit 查看全部")
+    unchanged = len(open_items) - len(fresh)
+    if unchanged:
+        lines.append(f"  - 另有 {unchanged} 条未变的维护项（之前提醒过），/core:audit 查看")
+    state["maintenance_notified"] = sorted(kept | {versions[id(item)] for item in shown})
+    return "\n".join(lines)
 
-    state["last_prompt_injected_session_id"] = session_marker
-    try:
-        save_state(state)
-    except Exception as e:
-        print(f"[warn] failed to save activity-state: {e}", file=sys.stderr)
-    return text
+
+def maintenance_text(payload):
+    """每会话首次 prompt 的维护提醒正文，或 None（dormant / 唤醒 / 本会话已提醒 / 无新的待处理项）。
+
+    「本会话」按载荷里的真实会话号判（取不到才退回项目共享的 session_counter——那时两个并开的会话
+    会互相吞掉首问提醒）。读、判、认领在同一次锁内完成：两个会话同时首问，只有一个会播同一版本。
+    锁超时 / 状态读不出时不提醒（下一条 prompt 再试），不在锁外拿旧状态凑一份。
+    """
+    sid = _harness.session_id(payload)
+    box = {}
+
+    def _mutate(state):
+        marker = f"sid:{sid}" if sid else str(state.get("session_counter", 0))
+        box["text"] = compose_reminder(state, marker)
+
+    if update_activity(STATE_DIR, _mutate) is None:
+        return None
+    return box.get("text")
 
 
 def main():
@@ -159,7 +217,7 @@ def main():
     if in_job():
         return 0
     payload = read_payload()
-    reminder = maintenance_text(load_state())
+    reminder = maintenance_text(payload)
     if reminder and len(reminder) > REMINDER_MAX:
         reminder = reminder[:REMINDER_MAX].rstrip() + "…（已截断，/core:audit 查看全部）"
     used = len(reminder.encode("utf-16-le")) // 2 + 2 if reminder else 0   # UTF-16 码元 ＋ 两段之间的空行

@@ -1,6 +1,6 @@
 # 核心概念
 
-后台自迭代把“模型建议”和“实际写入”分开：模型只分析冻结证据，控制器负责权限、数量/容量、基线一致性、持久化操作记录和恢复。记忆优先融合现有同主题条目，已有覆盖不写；冲突、结构调整和受保护内容交用户确认。每项目滚动七天、全机 UTC 每日的次数限制跨两门共享，不设费用限额。待批、日志、复测与关闭方式见 [后台自迭代](./setup-guide.md#后台自迭代)。
+后台自迭代把“模型建议”和“实际写入”分开：模型只分析冻结证据、按主题给结论，控制器核对引文、来源与目标并逐条记账。后台作业只出建议，不改项目文件；没有结论的证据留到下次，没有任何结论会永久丢掉一条证据。每项目滚动七天、全机 UTC 每日的次数限制跨两门共享，不设费用限额。待批、日志、复测与关闭方式见 [后台自迭代](./setup-guide.md#后台自迭代)。
 
 本文档解释 Workframe 依赖的几个关键 Claude Code 机制，以及本框架如何与它们协作。框架是一份源、两扇门——Codex 侧的对应物（插件缓存、hook 信任门、项目层 `.codex/config.toml`）见 [setup-guide.md](./setup-guide.md) §Codex 门；下文按 Claude Code 讲。
 
@@ -26,13 +26,13 @@ Claude Code 在启动会话时会从三个层级加载 agents / skills / hooks /
 
 ### Plugin 级（本框架管理）
 - 4 通用角色：`pm`, `dev`, `qa`, `prompt-eng`
-- 37 skills，分四类（完整名单）：
+- 35 skills，分四类（完整名单）：
   - **13 domain skills**：`task-management`；产品 6 个 `requirement-analysis` / `feature-breakdown` / `acceptance-criteria` / `competitive-analysis` / `product-metrics-design` / `user-feedback-analysis`；研发 2 个 `technical-design` / `systematic-debugging`；qa 2 个 `test-case-design` / `code-review`；prompt 2 个 `prompt-design` / `prompt-evaluation`
-  - **9 system/maintenance skills**：`librarian` / `self-iteration` / `session-digest` / `signal-intake` / `audit` / `rollback` / `memory-log` / `onboard` / `maintenance-review`。hooks 只写运行状态和维护信号；`librarian` 的两条触发通道是 SessionStart 询问式开场卡与 `workframe-maintenance` 批处理命令（后者是 CLI 入口，**不是 skill**，不计入这 9 个），`self-iteration` / `session-digest` 由 Claude best-effort 调用，三者均可经 `/core:maintenance-review` 进入流程；`signal-intake` 是信号入账的落盘工序（判定要写之后怎么写），由主会话调用；用户可直接调用 `/core:audit` / `/core:rollback` / `/core:memory-log` / `/core:onboard`
+  - **7 system/maintenance skills**：`librarian` / `self-iteration` / `signal-intake` / `audit` / `rollback` / `memory-log` / `maintenance-review`。hooks 只写运行状态和维护信号；`librarian` 的两条触发通道是用户要求整理记忆（首问维护提醒里的 `memory_backlog` 是提示）与 `workframe-maintenance` 批处理命令（后者是 CLI 入口，**不是 skill**，不计入这 7 个），`self-iteration` 由 Claude best-effort 调用，`librarian` 还可经 `/core:maintenance-review` 进入；`signal-intake` 是信号入账的落盘工序（判定要写之后怎么写），由主会话调用；用户可直接调用 `/core:audit` / `/core:rollback` / `/core:memory-log`
   - **8 docs/publishing skills**：`prd-writer` / `html-demo` / `screenshot` / 4 个 `obsidian-*`（`obsidian-doc-structure` / `obsidian-link-audit` / `obsidian-safe-write` / `obsidian-history-check`）/ `document-norms`，与平台无关；外部发布器 `feishu-publish` / `notion-publish` 等保持项目级
   - **7 modules-system skills**：`module-init` / `code-to-doc` / `module-index-refresh` / `migrate-to-modules` / `doc-graph-health` / `requirement-archiving` / `material-intake`
 - 必载纪律：由 SessionStart / SubagentStart 直接注入上下文，源在 `plugins/core/context/{both,main,sub}/`（领域无关；项目目录里不落文件）
-- hook 链路（挂载关系以 `hooks.json` 为准）：SessionStart（含 memory-ask 询问式记忆整理触发）/ **PostCompact**（轮换模块提醒的主线程去重周期，零输出，下次触碰再投）/ **Setup**（--maintenance 维护批处理工单聚合）/ UserPromptSubmit / **PreToolUse**（on Agent：主会话派发 `core:*` 角色带 `name` 即拦，只挂 Claude Code 门）/ **PostToolUse**（Edit/Write/NotebookEdit 命中代码或 submodule.yaml → 反向索引 + stale 标记；文件工具、shell 碰到有模块记忆的模块 → 投递作业提醒，识别边界见下文）/ Stop / **SubagentStart**（角色记忆注入：shared 全量 + role 按目录映射；fork 不注入，它继承主会话上下文）/ SubagentStop / **StopFailure**（turn 级 API 失败审计）/ **ConfigChange**（配置变更审计）/ SessionEnd / **UserPromptExpansion**（用户直敲 `/skill-name` 时记 `skill_invoked`）
+- hook 链路（挂载关系以 `hooks.json` 为准）：SessionStart（启动横幅与逾期提醒、注入纪律、记忆投递）/ **PostCompact**（轮换模块提醒的主线程去重周期，零输出，下次触碰再投）/ **Setup**（--maintenance 维护批处理工单聚合）/ UserPromptSubmit / **PreToolUse**（on Agent：主会话派发 `core:*` 角色带 `name` 即拦，只挂 Claude Code 门）/ **PostToolUse**（Edit/Write/NotebookEdit 命中代码或 submodule.yaml → 反向索引 + stale 标记；文件工具、shell 碰到有模块记忆的模块 → 投递作业提醒，识别边界见下文）/ Stop / **SubagentStart**（角色记忆注入：shared + role 按目录映射，单份超预算时只给目录与路径；fork 不注入，它继承主会话上下文）/ **StopFailure**（turn 级 API 失败审计）/ **ConfigChange**（配置变更审计）/ SessionEnd / **UserPromptExpansion**（用户直敲 `/skill-name` 时记 `skill_invoked`）
 
 ### modules/ 体系
 
@@ -53,7 +53,7 @@ modules/ 体系把"功能模块"作为产品研发的一等公民：`projects/mo
 - Claude Code 的市场注册表 `~/.claude/plugins/known_marketplaces.json`——装机时补登 workframe 市场（已登记同一个源时一个字节不动）
 - 这台机器装了 `codex` 时，Codex 的用户级 `config.toml`——装机时写本插件 hook 的信任、本项目的 trust，并把本插件的 `enabled` 改为 `false`（插件从此只在跑过 Codex 门的项目里加载）。**这一步代你信任本插件的全部 hook，而受信 hook 脱离沙盒执行**。门同时经 `codex plugin` 命令登记市场、装插件——市场登记与启用位写在同一份 `config.toml` 里，插件文件落在 `<CODEX_HOME>/plugins/cache/`——并在 `<CODEX_HOME>/.workframe/` 下写一份种信任记录（审计用）
 - **升级之后**：Codex 门升级请运行 `workframe-door --upgrade`，成功后重开这个项目的 Codex 会话。Windows、codex-cli 0.166.0 实测：插件内容变化可使本插件全部 hook 失信；仅重开会话不能恢复信任。裸跑 `codex plugin marketplace upgrade` 不包含恢复信任，已裸升级的也请运行 door 完成恢复。信任记录按 `CODEX_HOME` 共用；一次 door 写入可影响同一 home 下使用同一插件的其他项目。项目启用、项目 trust 与角色文件仍分别检查。
-- `/core:onboard` 只有在你选「当前用户全局」并二次确认后，才写 `~/.claude/settings.json`（见 [onboarding.md](./onboarding.md)）
+- 可选配置（如 Agent Teams）框架不代你写：要开就按 [onboarding.md](./onboarding.md) 自己改 `~/.claude/settings.json` 或项目的 settings
 
 前两处：经 launcher 装机时都在确认页的动作清单里逐项点名、确认前不写；直接在命令行跑 `workframe-door --codex` / `--backfill` / `--upgrade`（后者不是装机，但同样重写上面那份 `config.toml` 里的 hook 信任）时没有确认页——授权就是你亲手敲了这条命令（`--codex` 在写入之前会先打印要信任哪几条 hook、要改你用户配置里的哪一键，见 [setup-guide.md](./setup-guide.md) §Codex 门）。
 
@@ -129,7 +129,7 @@ modules/ 体系把"功能模块"作为产品研发的一等公民：`projects/mo
 |---|---|---|---|
 | **auto-memory**（Claude Code 官方记忆目录） | 主 Claude | 用户偏好、协作习惯、项目状态**指针** | 主会话启动，官方注入 |
 | `.workframe/agent-memory/<role>/` | 单个角色 | 该角色的执行经验 | 该 subagent 被调度时，SubagentStart hook 注入；主会话进入该域 skill（dev 另含首次改模块代码路径）时由 hook 投递——Claude Code 门是调用 Skill 工具或用户输入 `/skill`，Codex 门是读该 skill 的 `SKILL.md` 或用户在提示里写 `$skill`；fork 只有派生前父会话投过的那些，此后首次进入某域只给一行路径指针 |
-| `.workframe/agent-memory/shared/` | ≥2 个角色 | 跨角色权威事实（写入条件更严） | 每个 subagent 启动时全量注入（fork 除外，开场投递的那份已在它继承的上下文里）；主会话开场全量投递 |
+| `.workframe/agent-memory/shared/` | ≥2 个角色 | 跨角色权威事实（写入条件更严） | 每个 subagent 启动时注入全文，单份超预算时只给目录与路径（fork 除外，开场投递的那份已在它继承的上下文里）；主会话开场全量投递 |
 | `projects/modules/<basic>/<sub>/module-memory.md`（跨子模块放基础模块级） | 在该模块动手的人 | 作业提醒与必读入口，不写产品结论 | 文件存在且该线程碰到模块时由 hook 投递；主线程每压缩周期一次，压缩后再次碰到才重投；子线程压缩后暂不恢复 |
 
 **落点判据是「未来谁要读它」，不是「这次谁做的」**——主 Claude 做 dev 域的活，跨模块执行经验该落 dev 域给未来的 @dev 读。产品或系统的定义与规格进需求 PRD，跨需求进模块 `shared/`；技术设计理由仍进 ADR。只在该模块动手时要用的提醒进 `module-memory.md`，不新增 role/shared 指针；既有指针继续有效，是否已被权威资产承载由 `librarian` 的反向对账核对，迁出仍需用户确认。完整判据在每会话注入的必载纪律里（§Step 2 — 经验沉淀，源文件 [`20-protocol-common.md`](../plugins/core/context/both/20-protocol-common.md)；记忆分工表在同一批注入片的「记忆分工」一节，源文件 [`50-roles-and-flow.md`](../plugins/core/context/both/50-roles-and-flow.md)）。
@@ -193,7 +193,7 @@ tasks:
 1. **「这份文档基于哪个 commit」有三个落点**——`current-state/*.md` 的 `source_ref`、`submodule.yaml` 的 `last_synced_ref`、子模块 `overview.md` 的「基准 commit」括注。三处必须同值，漏一处就是同一事实有了第二个来源，检查 3 当场比对报红。**另有两处随基准一起刷新、但检查 3 不看**：`submodule.yaml` 的 `last_synced_at`，以及 `current-state/*.md` 的 `verifier`（这次核对了哪几项、**不含**哪几项）。它们各自只有一个落点，没有第二处装同一个值可比，漏刷不会报红——靠纪律，代价是文档声称的核对范围停留在上一份代码上。
 2. **「改动命中的模块是否已刷新」**——只要改的文件落在某个子模块的 `code_paths` 里就得刷，哪怕只改了注释（命中即刷）。改动不在任何模块清单内时不必刷。检查 4 按此判定。
 
-账本检查（`[ledger]` 项）**默认开启**：装机时 `.workframe-config.json` 里就写好了 `close_check.ledger` 与 `required_fields`，账本文件 `projects/dev-log.md` 也一并生成，带一条以装机日为期的首条——所以新项目第一次跑它是绿的。不想记账就把那个键改成空壳 `"close_check": {}`（**改成空壳，不是删键**——删了下次重跑脚手架会写回来），该项随即整项跳过，不影响其余八项。
+账本检查（`[ledger]` 项）**默认开启**：装机时 `.workframe-config.json` 里就写好了 `close_check.ledger` 与 `required_fields`，账本文件 `projects/dev-log.md` 也一并生成，带一条以装机日为期的首条——所以新项目第一次跑它是绿的。不想记账就把那个键改成空壳 `"close_check": {}`（**改成空壳，不是删键**——删了下次重跑脚手架会写回来），该项随即整项跳过，不影响其余九项。
 
 完整操作顺序见 [一轮活怎么干](./one-round.md)。
 
